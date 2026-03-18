@@ -3,7 +3,6 @@ package mailbox
 import (
 	"bytes"
 	"context"
-	"database/sql"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -230,12 +229,53 @@ func TestSendAndListHappyPath(t *testing.T) {
 	}
 }
 
-func mustCountRows(t *testing.T, db *sql.DB, table string) int {
+func TestInvalidCLIPathsDoNotCreateRuntimeState(t *testing.T) {
+	t.Parallel()
+
+	testCases := []struct {
+		name string
+		args []string
+	}{
+		{
+			name: "unknown command",
+			args: []string{"unknown"},
+		},
+		{
+			name: "unknown endpoint subcommand",
+			args: []string{"endpoint", "unknown"},
+		},
+		{
+			name: "send missing body file",
+			args: []string{"send", "--to", "workflow/reviewer/task-123"},
+		},
+		{
+			name: "send invalid flag",
+			args: []string{"send", "--bogus"},
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			stateDir := filepath.Join(t.TempDir(), "mailbox-state")
+			app := NewApp(strings.NewReader(""), &bytes.Buffer{}, &bytes.Buffer{})
+			err := app.Run(context.Background(), append([]string{"--state-dir", stateDir}, tc.args...))
+			if err == nil {
+				t.Fatal("Run() error = nil, want non-nil")
+			}
+
+			assertPathMissing(t, stateDir)
+			assertPathMissing(t, filepath.Join(stateDir, databaseFilename))
+			assertPathMissing(t, filepath.Join(stateDir, blobsDirName))
+		})
+	}
+}
+
+func assertPathMissing(t *testing.T, path string) {
 	t.Helper()
 
-	var count int
-	if err := db.QueryRow(`SELECT COUNT(*) FROM ` + table).Scan(&count); err != nil {
-		t.Fatalf("count %s error = %v", table, err)
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatalf("path %q exists or returned unexpected error: %v", path, err)
 	}
-	return count
 }

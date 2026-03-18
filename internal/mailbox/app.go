@@ -25,6 +25,8 @@ func NewApp(stdin io.Reader, stdout, stderr io.Writer) *App {
 	}
 }
 
+type preparedCommand func(context.Context, *Store) error
+
 func (a *App) Run(ctx context.Context, args []string) error {
 	stateDir, rest, err := parseGlobalArgs(args)
 	if err != nil {
@@ -34,21 +36,34 @@ func (a *App) Run(ctx context.Context, args []string) error {
 		return errors.New("expected a command: endpoint, send, or list")
 	}
 
+	command, err := a.prepareCommand(rest)
+	if err != nil {
+		return err
+	}
+
 	runtime, err := OpenRuntime(ctx, stateDir)
 	if err != nil {
 		return err
 	}
 	defer runtime.Close()
 
-	switch rest[0] {
+	return command(ctx, runtime.Store())
+}
+
+func (a *App) prepareCommand(args []string) (preparedCommand, error) {
+	if len(args) == 0 {
+		return nil, errors.New("expected a command: endpoint, send, or list")
+	}
+
+	switch args[0] {
 	case "endpoint":
-		return a.runEndpoint(ctx, runtime.Store(), rest[1:])
+		return a.prepareEndpointCommand(args[1:])
 	case "send":
-		return a.runSend(ctx, runtime.Store(), rest[1:])
+		return a.prepareSendCommand(args[1:])
 	case "list":
-		return a.runList(ctx, runtime.Store(), rest[1:])
+		return a.prepareListCommand(args[1:])
 	default:
-		return fmt.Errorf("unknown command %q", rest[0])
+		return nil, fmt.Errorf("unknown command %q", args[0])
 	}
 }
 
@@ -65,19 +80,19 @@ func parseGlobalArgs(args []string) (string, []string, error) {
 	return stateDir, fs.Args(), nil
 }
 
-func (a *App) runEndpoint(ctx context.Context, store *Store, args []string) error {
+func (a *App) prepareEndpointCommand(args []string) (preparedCommand, error) {
 	if len(args) == 0 {
-		return errors.New("expected endpoint subcommand")
+		return nil, errors.New("expected endpoint subcommand")
 	}
 	switch args[0] {
 	case "register":
-		return a.runEndpointRegister(ctx, store, args[1:])
+		return a.prepareEndpointRegister(args[1:])
 	default:
-		return fmt.Errorf("unknown endpoint subcommand %q", args[0])
+		return nil, fmt.Errorf("unknown endpoint subcommand %q", args[0])
 	}
 }
 
-func (a *App) runEndpointRegister(ctx context.Context, store *Store, args []string) error {
+func (a *App) prepareEndpointRegister(args []string) (preparedCommand, error) {
 	fs := flag.NewFlagSet("mailbox endpoint register", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 
@@ -87,19 +102,21 @@ func (a *App) runEndpointRegister(ctx context.Context, store *Store, args []stri
 	fs.StringVar(&kind, "kind", "", "endpoint kind")
 
 	if err := fs.Parse(args); err != nil {
-		return err
+		return nil, err
 	}
 
-	result, err := store.RegisterEndpoint(ctx, alias, kind)
-	if err != nil {
-		return err
-	}
+	return func(ctx context.Context, store *Store) error {
+		result, err := store.RegisterEndpoint(ctx, alias, kind)
+		if err != nil {
+			return err
+		}
 
-	fmt.Fprintf(a.stdout, "endpoint_id=%s alias=%s kind=%s created=%t\n", result.EndpointID, result.Alias, result.Kind, result.Created)
-	return nil
+		fmt.Fprintf(a.stdout, "endpoint_id=%s alias=%s kind=%s created=%t\n", result.EndpointID, result.Alias, result.Kind, result.Created)
+		return nil
+	}, nil
 }
 
-func (a *App) runSend(ctx context.Context, store *Store, args []string) error {
+func (a *App) prepareSendCommand(args []string) (preparedCommand, error) {
 	fs := flag.NewFlagSet("mailbox send", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 
@@ -118,28 +135,32 @@ func (a *App) runSend(ctx context.Context, store *Store, args []string) error {
 	fs.StringVar(&bodyFile, "body-file", "", "path to message body, or - for stdin")
 
 	if err := fs.Parse(args); err != nil {
-		return err
+		return nil, err
 	}
 
 	body, err := a.readBody(bodyFile)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
-	result, err := store.Send(ctx, SendParams{
+	params := SendParams{
 		ToAlias:       toAlias,
 		FromAlias:     fromAlias,
 		Subject:       subject,
 		ContentType:   contentType,
 		SchemaVersion: schemaVersion,
 		Body:          body,
-	})
-	if err != nil {
-		return err
 	}
 
-	fmt.Fprintf(a.stdout, "message_id=%s delivery_id=%s blob_id=%s\n", result.MessageID, result.DeliveryID, result.BodyBlobRef)
-	return nil
+	return func(ctx context.Context, store *Store) error {
+		result, err := store.Send(ctx, params)
+		if err != nil {
+			return err
+		}
+
+		fmt.Fprintf(a.stdout, "message_id=%s delivery_id=%s blob_id=%s\n", result.MessageID, result.DeliveryID, result.BodyBlobRef)
+		return nil
+	}, nil
 }
 
 func (a *App) readBody(bodyFile string) ([]byte, error) {
@@ -161,7 +182,7 @@ func (a *App) readBody(bodyFile string) ([]byte, error) {
 	}
 }
 
-func (a *App) runList(ctx context.Context, store *Store, args []string) error {
+func (a *App) prepareListCommand(args []string) (preparedCommand, error) {
 	fs := flag.NewFlagSet("mailbox list", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 
@@ -173,25 +194,29 @@ func (a *App) runList(ctx context.Context, store *Store, args []string) error {
 	fs.StringVar(&state, "state", "", "filter by delivery state")
 
 	if err := fs.Parse(args); err != nil {
-		return err
+		return nil, err
 	}
 
-	deliveries, err := store.List(ctx, ListParams{
+	params := ListParams{
 		Alias: alias,
 		State: state,
-	})
-	if err != nil {
-		return err
 	}
 
-	if jsonOutput {
-		encoder := json.NewEncoder(a.stdout)
-		encoder.SetIndent("", "  ")
-		return encoder.Encode(deliveries)
-	}
+	return func(ctx context.Context, store *Store) error {
+		deliveries, err := store.List(ctx, params)
+		if err != nil {
+			return err
+		}
 
-	for _, delivery := range deliveries {
-		fmt.Fprintf(a.stdout, "%s %s %s %s\n", delivery.DeliveryID, delivery.State, delivery.VisibleAt, delivery.Subject)
-	}
-	return nil
+		if jsonOutput {
+			encoder := json.NewEncoder(a.stdout)
+			encoder.SetIndent("", "  ")
+			return encoder.Encode(deliveries)
+		}
+
+		for _, delivery := range deliveries {
+			fmt.Fprintf(a.stdout, "%s %s %s %s\n", delivery.DeliveryID, delivery.State, delivery.VisibleAt, delivery.Subject)
+		}
+		return nil
+	}, nil
 }
