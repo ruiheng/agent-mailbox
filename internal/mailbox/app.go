@@ -264,6 +264,12 @@ func (a *App) prepareRecvCommand(args []string) (preparedCommand, error) {
 	if err := requireFlag(alias, "--for"); err != nil {
 		return nil, err
 	}
+	if timeout < 0 {
+		return nil, errors.New("--timeout must be greater than or equal to 0")
+	}
+	if flagWasProvided(fs, "timeout") && !wait {
+		return nil, errors.New("--timeout requires --wait")
+	}
 
 	params := ReceiveParams{
 		Alias:   alias,
@@ -428,4 +434,14 @@ func requireFlag(value, name string) error {
 		return fmt.Errorf("%s is required", name)
 	}
 	return nil
+}
+
+func flagWasProvided(fs *flag.FlagSet, name string) bool {
+	provided := false
+	fs.Visit(func(current *flag.Flag) {
+		if current.Name == name {
+			provided = true
+		}
+	})
+	return provided
 }

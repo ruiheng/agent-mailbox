@@ -273,6 +273,14 @@ func TestInvalidCLIPathsDoNotCreateRuntimeState(t *testing.T) {
 			args: []string{"recv", "--wait"},
 		},
 		{
+			name: "recv timeout without wait",
+			args: []string{"recv", "--for", "workflow/reviewer/task-123", "--timeout", "1s"},
+		},
+		{
+			name: "recv negative timeout",
+			args: []string{"recv", "--for", "workflow/reviewer/task-123", "--wait", "--timeout", "-1s"},
+		},
+		{
 			name: "ack missing delivery",
 			args: []string{"ack", "--lease-token", "lease_token"},
 		},

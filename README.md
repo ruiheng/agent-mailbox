@@ -1,76 +1,124 @@
 # agent-mailbox
 
-`agent-mailbox` is a local-first messaging system for AI agents.
+`agent-mailbox` is a local-first mailbox for AI agents and workflows. It keeps
+message durability, delivery state, and audit history in one mailbox store so a
+sender can persist work immediately and a receiver can claim it later.
 
-It is intentionally separate from any single workflow or transport.
-`agent-deck` may be one adapter, but it is not the protocol, the source of truth,
-or the message store.
+The current MVP is intentionally narrow:
+
+- one local Unix user on one machine
+- direct mailbox delivery by endpoint alias
+- SQLite metadata plus blob-backed message bodies
+- explicit `send`, `recv`, `ack`, `release`, `defer`, `fail`, and `list`
+- no daemon, no network transport, no adapter-specific correctness dependency
 
 ## Status
 
-This repository starts as a docs-first project.
-The initial commit captures the first-pass architecture and operating model
-before any implementation code is added.
+The Go CLI now implements the MVP described in
+[`docs/initial-design.md`](docs/initial-design.md). The focus is correctness and
+operational clarity, not transport integrations or extra routing models.
 
-## Problem
+## Build And Verify
 
-Existing workflow messaging mixes four concerns:
+Run the full test suite:
 
-- message persistence
-- delivery mechanics
-- transport-specific behavior
-- workflow protocol semantics
+```bash
+go test ./...
+```
 
-That coupling creates avoidable problems:
+The default state directory is:
 
-- sender latency depends on receiver readiness
-- message state is tied to one project working directory
-- transport details leak into workflow logic
-- receivers have little control over when they consume work
+- `$MAILBOX_STATE_DIR` when set
+- otherwise `$XDG_STATE_HOME/ai-agent/mailbox`
+- otherwise `~/.local/state/ai-agent/mailbox`
 
-## Scope
+For ad hoc testing, use `--state-dir` to keep state isolated in a temp
+directory.
 
-`agent-mailbox` is responsible for:
+## Basic Workflow
 
-- durable local message storage
-- endpoint identity and alias resolution
-- direct mailbox delivery semantics
-- lease / ack / release / defer lifecycle
-- a CLI for send / wait / recv / ack / release / defer / list
-- optional transport adapters
+Register the recipient and optional sender aliases before sending:
 
-`agent-mailbox` is not responsible for:
+```bash
+go run ./cmd/mailbox --state-dir /tmp/mailbox-demo \
+  endpoint register --alias workflow/reviewer/task-123 --kind workflow
 
-- workflow-specific task semantics
-- project-local artifact authoring
-- forcing one transport model on all agents
+go run ./cmd/mailbox --state-dir /tmp/mailbox-demo \
+  endpoint register --alias agent/sender --kind agent
+```
 
-## Design Direction
+Send a message from stdin:
 
-The system is pull-first and adapter-friendly:
+```bash
+printf 'review request body\n' | \
+go run ./cmd/mailbox --state-dir /tmp/mailbox-demo \
+  send --to workflow/reviewer/task-123 --from agent/sender \
+  --subject "review request" --body-file -
+```
 
-- the authoritative source of truth is a centralized mailbox store
-- receivers may block waiting for new mail without changing message state
-- receivers may explicitly claim a message when ready to process it
-- transports such as `agent-deck` are optional adapters, ideally defaulting to
-  notification rather than forced full-body delivery
+Receive the next claimable message:
 
-The current recommendation is:
+```bash
+go run ./cmd/mailbox --state-dir /tmp/mailbox-demo \
+  recv --for workflow/reviewer/task-123 --json
+```
 
-- centralized runtime state under `$XDG_STATE_HOME/ai-agent/mailbox`
-- SQLite for metadata and concurrency control
-- a blob store for large bodies or attachments
-- endpoint aliases mapped to stable internal endpoint ids
-- direct mailbox as the first supported routing primitive
+Ack the leased delivery using the returned `delivery_id` and `lease_token`:
 
-## Repository Layout
+```bash
+go run ./cmd/mailbox --state-dir /tmp/mailbox-demo \
+  ack --delivery <delivery_id> --lease-token <lease_token>
+```
 
-- `README.md`: project boundary and intent
-- `docs/initial-design.md`: first-pass architecture
+Inspect queued or terminal deliveries:
 
-## Next Steps
+```bash
+go run ./cmd/mailbox --state-dir /tmp/mailbox-demo \
+  list --for workflow/reviewer/task-123 --json
 
-- freeze the initial identity model
-- freeze the mailbox state machine
-- define the first CLI contract
-- decide which adapter, if any, should be implemented first
+go run ./cmd/mailbox --state-dir /tmp/mailbox-demo \
+  list --for workflow/reviewer/task-123 --state dead_letter --json
+```
+
+## CLI Notes
+
+- `recv` exits `0` on success.
+- `recv` exits `2` when no message is available or a `--wait --timeout` call
+  times out.
+- `recv --timeout` requires `--wait`.
+- `recv --json` and `list --json` are the stable machine-readable paths.
+- `send --body-file -` reads the message body from stdin.
+- `--from` on `send` is optional; when omitted, the sender endpoint id is stored
+  as `NULL`.
+
+## Local State Layout
+
+The mailbox state directory contains:
+
+- `mailbox.db`: authoritative SQLite state for endpoints, messages, deliveries,
+  and events
+- `blobs/`: immutable message body files referenced by `messages.body_blob_ref`
+
+The event log is append-only audit history. Current-state tables remain the
+source of truth for delivery behavior.
+
+## MVP Boundaries
+
+What this repository does today:
+
+- durable direct mailbox delivery
+- lazy recovery of expired leases without a daemon
+- fixed retry behavior for `fail`
+- local auditability through the `events` table
+
+What it does not do yet:
+
+- topic routing or consumer groups
+- remote networking
+- transport adapters such as `agent-deck`
+- background garbage collection
+
+One v1 trade-off is explicit: a crash after the blob write but before the SQLite
+transaction commit can leave an orphaned blob. That is acceptable for the MVP
+and should be handled by a later GC command rather than hidden behind implicit
+cleanup.
