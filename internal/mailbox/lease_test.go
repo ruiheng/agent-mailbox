@@ -1,0 +1,279 @@
+package mailbox
+
+import (
+	"context"
+	"errors"
+	"path/filepath"
+	"testing"
+	"time"
+)
+
+func TestReceiveReclaimsExpiredLeaseAndRejectsStaleToken(t *testing.T) {
+	t.Parallel()
+
+	runtime, store := newLeaseTestStore(t)
+	defer runtime.Close()
+
+	current := time.Date(2026, 3, 18, 12, 0, 0, 0, time.UTC)
+	store.now = func() time.Time {
+		return current
+	}
+
+	mustRegisterEndpoint(t, store, "workflow/reviewer/task-123", "workflow")
+	mustRegisterEndpoint(t, store, "agent/sender", "agent")
+
+	sent := mustSendMessage(t, store, "workflow/reviewer/task-123", "agent/sender", "review request", "hello reviewer")
+
+	first, err := store.Receive(context.Background(), ReceiveParams{Alias: "workflow/reviewer/task-123"})
+	if err != nil {
+		t.Fatalf("Receive(first) error = %v", err)
+	}
+	if first.DeliveryID != sent.DeliveryID {
+		t.Fatalf("Receive(first) delivery id = %q, want %q", first.DeliveryID, sent.DeliveryID)
+	}
+	if first.LeaseExpiresAt != formatTimestamp(current.Add(defaultLeaseTimeout)) {
+		t.Fatalf("Receive(first) lease expiry = %q", first.LeaseExpiresAt)
+	}
+
+	current = current.Add(defaultLeaseTimeout + time.Second)
+
+	second, err := store.Receive(context.Background(), ReceiveParams{Alias: "workflow/reviewer/task-123"})
+	if err != nil {
+		t.Fatalf("Receive(second) error = %v", err)
+	}
+	if second.DeliveryID != first.DeliveryID {
+		t.Fatalf("Receive(second) delivery id = %q, want %q", second.DeliveryID, first.DeliveryID)
+	}
+	if second.LeaseToken == first.LeaseToken {
+		t.Fatal("Receive(second) reused the old lease token")
+	}
+
+	if _, err := store.Ack(context.Background(), first.DeliveryID, first.LeaseToken); !errors.Is(err, ErrLeaseTokenMismatch) {
+		t.Fatalf("Ack(stale token) error = %v, want ErrLeaseTokenMismatch", err)
+	}
+
+	acked, err := store.Ack(context.Background(), second.DeliveryID, second.LeaseToken)
+	if err != nil {
+		t.Fatalf("Ack(current token) error = %v", err)
+	}
+	if acked.State != "acked" {
+		t.Fatalf("Ack(current token) state = %q, want acked", acked.State)
+	}
+
+	eventTypes := readDeliveryEventTypes(t, runtime, sent.DeliveryID)
+	want := []string{"delivery_queued", "delivery_leased", "delivery_leased", "delivery_acked"}
+	assertStringSlicesEqual(t, eventTypes, want)
+}
+
+func TestReleaseDeferAndReceiveTimeout(t *testing.T) {
+	t.Parallel()
+
+	runtime, store := newLeaseTestStore(t)
+	defer runtime.Close()
+
+	current := time.Date(2026, 3, 18, 13, 0, 0, 0, time.UTC)
+	store.now = func() time.Time {
+		return current
+	}
+
+	mustRegisterEndpoint(t, store, "workflow/reviewer/task-123", "workflow")
+	mustRegisterEndpoint(t, store, "workflow/empty", "workflow")
+	mustRegisterEndpoint(t, store, "agent/sender", "agent")
+	mustSendMessage(t, store, "workflow/reviewer/task-123", "agent/sender", "review request", "hello reviewer")
+
+	first, err := store.Receive(context.Background(), ReceiveParams{Alias: "workflow/reviewer/task-123"})
+	if err != nil {
+		t.Fatalf("Receive(first) error = %v", err)
+	}
+
+	released, err := store.Release(context.Background(), first.DeliveryID, first.LeaseToken)
+	if err != nil {
+		t.Fatalf("Release() error = %v", err)
+	}
+	if released.State != "queued" {
+		t.Fatalf("Release() state = %q, want queued", released.State)
+	}
+
+	second, err := store.Receive(context.Background(), ReceiveParams{Alias: "workflow/reviewer/task-123"})
+	if err != nil {
+		t.Fatalf("Receive(second) error = %v", err)
+	}
+
+	until := current.Add(10 * time.Minute)
+	deferred, err := store.Defer(context.Background(), second.DeliveryID, second.LeaseToken, until)
+	if err != nil {
+		t.Fatalf("Defer() error = %v", err)
+	}
+	if deferred.VisibleAt != formatTimestamp(until) {
+		t.Fatalf("Defer() visible_at = %q, want %q", deferred.VisibleAt, formatTimestamp(until))
+	}
+
+	visible, err := store.List(context.Background(), ListParams{Alias: "workflow/reviewer/task-123"})
+	if err != nil {
+		t.Fatalf("List(visible queued) error = %v", err)
+	}
+	if len(visible) != 0 {
+		t.Fatalf("len(visible queued) = %d, want 0", len(visible))
+	}
+
+	queued, err := store.List(context.Background(), ListParams{Alias: "workflow/reviewer/task-123", State: "queued"})
+	if err != nil {
+		t.Fatalf("List(all queued) error = %v", err)
+	}
+	if len(queued) != 1 {
+		t.Fatalf("len(all queued) = %d, want 1", len(queued))
+	}
+	if queued[0].VisibleAt != formatTimestamp(until) {
+		t.Fatalf("queued visible_at = %q, want %q", queued[0].VisibleAt, formatTimestamp(until))
+	}
+
+	if _, err := store.Receive(context.Background(), ReceiveParams{
+		Alias:   "workflow/empty",
+		Wait:    true,
+		Timeout: 30 * time.Millisecond,
+	}); !errors.Is(err, ErrNoMessage) {
+		t.Fatalf("Receive(timeout) error = %v, want ErrNoMessage", err)
+	}
+}
+
+func TestFailRetryPolicyDeadLettersAfterThirdFailure(t *testing.T) {
+	t.Parallel()
+
+	runtime, store := newLeaseTestStore(t)
+	defer runtime.Close()
+
+	current := time.Date(2026, 3, 18, 14, 0, 0, 0, time.UTC)
+	store.now = func() time.Time {
+		return current
+	}
+
+	mustRegisterEndpoint(t, store, "workflow/reviewer/task-123", "workflow")
+	mustRegisterEndpoint(t, store, "agent/sender", "agent")
+
+	sent := mustSendMessage(t, store, "workflow/reviewer/task-123", "agent/sender", "review request", "hello reviewer")
+
+	for attempt := 1; attempt <= 3; attempt++ {
+		message, err := store.Receive(context.Background(), ReceiveParams{Alias: "workflow/reviewer/task-123"})
+		if err != nil {
+			t.Fatalf("Receive(attempt %d) error = %v", attempt, err)
+		}
+
+		failed, err := store.Fail(context.Background(), message.DeliveryID, message.LeaseToken, "tool crashed")
+		if err != nil {
+			t.Fatalf("Fail(attempt %d) error = %v", attempt, err)
+		}
+
+		wantState := "queued"
+		if attempt == 3 {
+			wantState = "dead_letter"
+		}
+		if failed.State != wantState {
+			t.Fatalf("Fail(attempt %d) state = %q, want %q", attempt, failed.State, wantState)
+		}
+		if failed.AttemptCount != attempt {
+			t.Fatalf("Fail(attempt %d) attempt_count = %d, want %d", attempt, failed.AttemptCount, attempt)
+		}
+
+		current = current.Add(time.Second)
+	}
+
+	deadLetters, err := store.List(context.Background(), ListParams{Alias: "workflow/reviewer/task-123", State: "dead_letter"})
+	if err != nil {
+		t.Fatalf("List(dead_letter) error = %v", err)
+	}
+	if len(deadLetters) != 1 {
+		t.Fatalf("len(dead_letter) = %d, want 1", len(deadLetters))
+	}
+	if deadLetters[0].DeliveryID != sent.DeliveryID {
+		t.Fatalf("dead-letter delivery id = %q, want %q", deadLetters[0].DeliveryID, sent.DeliveryID)
+	}
+
+	eventTypes := readDeliveryEventTypes(t, runtime, sent.DeliveryID)
+	want := []string{
+		"delivery_queued",
+		"delivery_leased",
+		"delivery_failed",
+		"delivery_leased",
+		"delivery_failed",
+		"delivery_leased",
+		"delivery_failed",
+		"delivery_dead_letter",
+	}
+	assertStringSlicesEqual(t, eventTypes, want)
+}
+
+func newLeaseTestStore(t *testing.T) (*Runtime, *Store) {
+	t.Helper()
+
+	runtime, err := OpenRuntime(context.Background(), filepath.Join(t.TempDir(), "mailbox-state"))
+	if err != nil {
+		t.Fatalf("OpenRuntime() error = %v", err)
+	}
+	return runtime, runtime.Store()
+}
+
+func mustRegisterEndpoint(t *testing.T, store *Store, alias, kind string) {
+	t.Helper()
+
+	if _, err := store.RegisterEndpoint(context.Background(), alias, kind); err != nil {
+		t.Fatalf("RegisterEndpoint(%q, %q) error = %v", alias, kind, err)
+	}
+}
+
+func mustSendMessage(t *testing.T, store *Store, toAlias, fromAlias, subject, body string) SendResult {
+	t.Helper()
+
+	result, err := store.Send(context.Background(), SendParams{
+		ToAlias:       toAlias,
+		FromAlias:     fromAlias,
+		Subject:       subject,
+		ContentType:   "text/plain",
+		SchemaVersion: "v1",
+		Body:          []byte(body),
+	})
+	if err != nil {
+		t.Fatalf("Send() error = %v", err)
+	}
+	return result
+}
+
+func readDeliveryEventTypes(t *testing.T, runtime *Runtime, deliveryID string) []string {
+	t.Helper()
+
+	rows, err := runtime.DB().Query(`
+SELECT event_type
+FROM events
+WHERE delivery_id = ?
+ORDER BY rowid
+`, deliveryID)
+	if err != nil {
+		t.Fatalf("Query(events) error = %v", err)
+	}
+	defer rows.Close()
+
+	var eventTypes []string
+	for rows.Next() {
+		var eventType string
+		if err := rows.Scan(&eventType); err != nil {
+			t.Fatalf("Scan(event_type) error = %v", err)
+		}
+		eventTypes = append(eventTypes, eventType)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("rows.Err() = %v", err)
+	}
+	return eventTypes
+}
+
+func assertStringSlicesEqual(t *testing.T, got, want []string) {
+	t.Helper()
+
+	if len(got) != len(want) {
+		t.Fatalf("len(got) = %d, want %d (got=%v want=%v)", len(got), len(want), got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("got[%d] = %q, want %q (got=%v want=%v)", i, got[i], want[i], got, want)
+		}
+	}
+}
