@@ -252,6 +252,62 @@ func TestInvalidCLIPathsDoNotCreateRuntimeState(t *testing.T) {
 			name: "send invalid flag",
 			args: []string{"send", "--bogus"},
 		},
+		{
+			name: "endpoint register missing alias",
+			args: []string{"endpoint", "register", "--kind", "workflow"},
+		},
+		{
+			name: "endpoint register missing kind",
+			args: []string{"endpoint", "register", "--alias", "workflow/reviewer/task-123"},
+		},
+		{
+			name: "send missing to",
+			args: []string{"send", "--body-file", "-"},
+		},
+		{
+			name: "list missing for",
+			args: []string{"list", "--json"},
+		},
+		{
+			name: "recv missing for",
+			args: []string{"recv", "--wait"},
+		},
+		{
+			name: "ack missing delivery",
+			args: []string{"ack", "--lease-token", "lease_token"},
+		},
+		{
+			name: "ack missing lease token",
+			args: []string{"ack", "--delivery", "dlv_123"},
+		},
+		{
+			name: "release missing delivery",
+			args: []string{"release", "--lease-token", "lease_token"},
+		},
+		{
+			name: "release missing lease token",
+			args: []string{"release", "--delivery", "dlv_123"},
+		},
+		{
+			name: "defer missing delivery",
+			args: []string{"defer", "--lease-token", "lease_token", "--until", "2026-03-18T12:00:00Z"},
+		},
+		{
+			name: "defer missing lease token",
+			args: []string{"defer", "--delivery", "dlv_123", "--until", "2026-03-18T12:00:00Z"},
+		},
+		{
+			name: "fail missing delivery",
+			args: []string{"fail", "--lease-token", "lease_token", "--reason", "tool crashed"},
+		},
+		{
+			name: "fail missing lease token",
+			args: []string{"fail", "--delivery", "dlv_123", "--reason", "tool crashed"},
+		},
+		{
+			name: "fail missing reason",
+			args: []string{"fail", "--delivery", "dlv_123", "--lease-token", "lease_token"},
+		},
 	}
 
 	for _, tc := range testCases {

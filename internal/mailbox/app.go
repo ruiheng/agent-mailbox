@@ -115,6 +115,12 @@ func (a *App) prepareEndpointRegister(args []string) (preparedCommand, error) {
 	if err := fs.Parse(args); err != nil {
 		return nil, err
 	}
+	if err := requireFlag(alias, "--alias"); err != nil {
+		return nil, err
+	}
+	if err := requireFlag(kind, "--kind"); err != nil {
+		return nil, err
+	}
 
 	return func(ctx context.Context, store *Store) error {
 		result, err := store.RegisterEndpoint(ctx, alias, kind)
@@ -146,6 +152,9 @@ func (a *App) prepareSendCommand(args []string) (preparedCommand, error) {
 	fs.StringVar(&bodyFile, "body-file", "", "path to message body, or - for stdin")
 
 	if err := fs.Parse(args); err != nil {
+		return nil, err
+	}
+	if err := requireFlag(toAlias, "--to"); err != nil {
 		return nil, err
 	}
 
@@ -207,6 +216,9 @@ func (a *App) prepareListCommand(args []string) (preparedCommand, error) {
 	if err := fs.Parse(args); err != nil {
 		return nil, err
 	}
+	if err := requireFlag(alias, "--for"); err != nil {
+		return nil, err
+	}
 
 	params := ListParams{
 		Alias: alias,
@@ -249,6 +261,9 @@ func (a *App) prepareRecvCommand(args []string) (preparedCommand, error) {
 	if err := fs.Parse(args); err != nil {
 		return nil, err
 	}
+	if err := requireFlag(alias, "--for"); err != nil {
+		return nil, err
+	}
 
 	params := ReceiveParams{
 		Alias:   alias,
@@ -289,6 +304,12 @@ func (a *App) prepareAckCommand(args []string) (preparedCommand, error) {
 	if err := fs.Parse(args); err != nil {
 		return nil, err
 	}
+	if err := requireFlag(deliveryID, "--delivery"); err != nil {
+		return nil, err
+	}
+	if err := requireFlag(leaseToken, "--lease-token"); err != nil {
+		return nil, err
+	}
 
 	return func(ctx context.Context, store *Store) error {
 		result, err := store.Ack(ctx, deliveryID, leaseToken)
@@ -310,6 +331,12 @@ func (a *App) prepareReleaseCommand(args []string) (preparedCommand, error) {
 	fs.StringVar(&leaseToken, "lease-token", "", "lease token")
 
 	if err := fs.Parse(args); err != nil {
+		return nil, err
+	}
+	if err := requireFlag(deliveryID, "--delivery"); err != nil {
+		return nil, err
+	}
+	if err := requireFlag(leaseToken, "--lease-token"); err != nil {
 		return nil, err
 	}
 
@@ -335,6 +362,12 @@ func (a *App) prepareDeferCommand(args []string) (preparedCommand, error) {
 	fs.StringVar(&untilText, "until", "", "future RFC3339 timestamp")
 
 	if err := fs.Parse(args); err != nil {
+		return nil, err
+	}
+	if err := requireFlag(deliveryID, "--delivery"); err != nil {
+		return nil, err
+	}
+	if err := requireFlag(leaseToken, "--lease-token"); err != nil {
 		return nil, err
 	}
 	if strings.TrimSpace(untilText) == "" {
@@ -370,6 +403,15 @@ func (a *App) prepareFailCommand(args []string) (preparedCommand, error) {
 	if err := fs.Parse(args); err != nil {
 		return nil, err
 	}
+	if err := requireFlag(deliveryID, "--delivery"); err != nil {
+		return nil, err
+	}
+	if err := requireFlag(leaseToken, "--lease-token"); err != nil {
+		return nil, err
+	}
+	if err := requireFlag(reason, "--reason"); err != nil {
+		return nil, err
+	}
 
 	return func(ctx context.Context, store *Store) error {
 		result, err := store.Fail(ctx, deliveryID, leaseToken, reason)
@@ -379,4 +421,11 @@ func (a *App) prepareFailCommand(args []string) (preparedCommand, error) {
 		fmt.Fprintf(a.stdout, "delivery_id=%s state=%s visible_at=%s attempt_count=%d\n", result.DeliveryID, result.State, result.VisibleAt, result.AttemptCount)
 		return nil
 	}, nil
+}
+
+func requireFlag(value, name string) error {
+	if strings.TrimSpace(value) == "" {
+		return fmt.Errorf("%s is required", name)
+	}
+	return nil
 }
