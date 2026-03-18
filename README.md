@@ -68,6 +68,11 @@ make install PREFIX="$HOME/.local"
 If you use a user-local prefix, make sure `"$HOME/.local/bin"` is in your
 `PATH`.
 
+## User Guide
+
+For day-to-day CLI usage, examples, blocking receive, exit codes, and command
+reference, see [`docs/cli.md`](docs/cli.md).
+
 ## Quick Start
 
 Use `--state-dir` for demos and tests so mailbox state stays isolated:
@@ -88,9 +93,7 @@ The default state directory is:
 
 You can set `MAILBOX_STATE_DIR` once, or pass `--state-dir` per command.
 
-## Basic Usage
-
-Register the recipient and optional sender aliases before sending:
+## Minimal Example
 
 Send a message from stdin:
 
@@ -115,51 +118,7 @@ Ack the leased delivery using the returned `delivery_id` and `lease_token`:
   ack --delivery <delivery_id> --lease-token <lease_token>
 ```
 
-Release a delivery back to the queue:
-
-```bash
-./bin/mailbox --state-dir /tmp/mailbox-demo \
-  release --delivery <delivery_id> --lease-token <lease_token>
-```
-
-Defer a delivery until a future time:
-
-```bash
-./bin/mailbox --state-dir /tmp/mailbox-demo \
-  defer --delivery <delivery_id> --lease-token <lease_token> \
-  --until 2026-03-18T12:00:00Z
-```
-
-Record a processing failure:
-
-```bash
-./bin/mailbox --state-dir /tmp/mailbox-demo \
-  fail --delivery <delivery_id> --lease-token <lease_token> \
-  --reason "tool crashed"
-```
-
-Inspect queued or terminal deliveries:
-
-```bash
-./bin/mailbox --state-dir /tmp/mailbox-demo \
-  list --for workflow/reviewer/task-123 --json
-
-./bin/mailbox --state-dir /tmp/mailbox-demo \
-  list --for workflow/reviewer/task-123 --state dead_letter --json
-```
-
-## CLI Notes
-
-- most commands exit `0` on success
-- `recv` exits `2` when no message is available or a `--wait --timeout` call
-  times out
-- `recv --timeout` requires `--wait`.
-- `recv --json` and `list --json` are the stable machine-readable paths.
-- `send --body-file -` reads the message body from stdin.
-- `--from` on `send` is optional; when omitted, the sender endpoint id is stored
-  as `NULL`.
-- `fail` requeues on attempts 1 and 2, and moves the delivery to `dead_letter`
-  on attempt 3.
+For the full command reference, see [`docs/cli.md`](docs/cli.md).
 
 ## Local State Layout
 
