@@ -79,11 +79,15 @@ Use `--state-dir` for demos and tests so mailbox state stays isolated:
 
 ```bash
 MAILBOX_STATE_DIR=/tmp/mailbox-demo agent-mailbox endpoint register \
-  --alias workflow/reviewer/task-123 --kind workflow
+  --alias workflow/reviewer/task-123
 
 MAILBOX_STATE_DIR=/tmp/mailbox-demo agent-mailbox endpoint register \
-  --alias agent/sender --kind agent
+  --alias agent/sender
 ```
+
+Alias prefixes such as `workflow/...` or `agent/...` are naming conventions for
+humans and tooling. The mailbox stores the alias mapping, not a separate
+endpoint kind field.
 
 The default state directory is:
 

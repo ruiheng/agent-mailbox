@@ -19,7 +19,6 @@ func TestCLIRegisterSendRecvAckFlow(t *testing.T) {
 	registerRecipient := runCLI(t, "", "--state-dir", stateDir,
 		"endpoint", "register",
 		"--alias", "workflow/reviewer/task-123",
-		"--kind", "workflow",
 	)
 	if registerRecipient.exitCode != 0 {
 		t.Fatalf("register recipient exit code = %d, stderr = %q", registerRecipient.exitCode, registerRecipient.stderr)
@@ -27,11 +26,13 @@ func TestCLIRegisterSendRecvAckFlow(t *testing.T) {
 	if !strings.Contains(registerRecipient.stdout, "endpoint_id=") {
 		t.Fatalf("register recipient stdout = %q, want endpoint_id", registerRecipient.stdout)
 	}
+	if strings.Contains(registerRecipient.stdout, "kind=") {
+		t.Fatalf("register recipient stdout = %q, should not include kind", registerRecipient.stdout)
+	}
 
 	registerSender := runCLI(t, "", "--state-dir", stateDir,
 		"endpoint", "register",
 		"--alias", "agent/sender",
-		"--kind", "agent",
 	)
 	if registerSender.exitCode != 0 {
 		t.Fatalf("register sender exit code = %d, stderr = %q", registerSender.exitCode, registerSender.stderr)
@@ -93,7 +94,6 @@ func TestCLIRecvNoMessageExitCodeAndSilence(t *testing.T) {
 	register := runCLI(t, "", "--state-dir", stateDir,
 		"endpoint", "register",
 		"--alias", "workflow/empty",
-		"--kind", "workflow",
 	)
 	if register.exitCode != 0 {
 		t.Fatalf("register exit code = %d, stderr = %q", register.exitCode, register.stderr)
@@ -101,7 +101,6 @@ func TestCLIRecvNoMessageExitCodeAndSilence(t *testing.T) {
 	registerSecond := runCLI(t, "", "--state-dir", stateDir,
 		"endpoint", "register",
 		"--alias", "workflow/empty-2",
-		"--kind", "workflow",
 	)
 	if registerSecond.exitCode != 0 {
 		t.Fatalf("register second exit code = %d, stderr = %q", registerSecond.exitCode, registerSecond.stderr)
@@ -162,7 +161,6 @@ func TestCLIRecvMultipleAliasesPlainTextIncludesRecipientAlias(t *testing.T) {
 		register := runCLI(t, "", "--state-dir", stateDir,
 			"endpoint", "register",
 			"--alias", alias,
-			"--kind", "workflow",
 		)
 		if register.exitCode != 0 {
 			t.Fatalf("register %s exit code = %d, stderr = %q", alias, register.exitCode, register.stderr)
@@ -171,7 +169,6 @@ func TestCLIRecvMultipleAliasesPlainTextIncludesRecipientAlias(t *testing.T) {
 	registerSender := runCLI(t, "", "--state-dir", stateDir,
 		"endpoint", "register",
 		"--alias", "agent/sender",
-		"--kind", "agent",
 	)
 	if registerSender.exitCode != 0 {
 		t.Fatalf("register sender exit code = %d, stderr = %q", registerSender.exitCode, registerSender.stderr)
@@ -220,7 +217,6 @@ func TestCLIRecvMultipleAliasesUnknownAliasFails(t *testing.T) {
 	register := runCLI(t, "", "--state-dir", stateDir,
 		"endpoint", "register",
 		"--alias", "workflow/known",
-		"--kind", "workflow",
 	)
 	if register.exitCode != 0 {
 		t.Fatalf("register exit code = %d, stderr = %q", register.exitCode, register.stderr)

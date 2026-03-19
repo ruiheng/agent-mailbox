@@ -12,7 +12,6 @@ PRAGMA foreign_keys = ON;
 
 CREATE TABLE IF NOT EXISTS endpoints (
   endpoint_id TEXT PRIMARY KEY,
-  kind TEXT NOT NULL,
   created_at TEXT NOT NULL,
   metadata_json TEXT NOT NULL DEFAULT '{}'
 );

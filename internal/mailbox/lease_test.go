@@ -19,8 +19,8 @@ func TestReceiveReclaimsExpiredLeaseAndRejectsStaleToken(t *testing.T) {
 		return current
 	}
 
-	mustRegisterEndpoint(t, store, "workflow/reviewer/task-123", "workflow")
-	mustRegisterEndpoint(t, store, "agent/sender", "agent")
+	mustRegisterEndpoint(t, store, "workflow/reviewer/task-123")
+	mustRegisterEndpoint(t, store, "agent/sender")
 
 	sent := mustSendMessage(t, store, "workflow/reviewer/task-123", "agent/sender", "review request", "hello reviewer")
 
@@ -76,9 +76,9 @@ func TestReleaseDeferAndReceiveTimeout(t *testing.T) {
 		return current
 	}
 
-	mustRegisterEndpoint(t, store, "workflow/reviewer/task-123", "workflow")
-	mustRegisterEndpoint(t, store, "workflow/empty", "workflow")
-	mustRegisterEndpoint(t, store, "agent/sender", "agent")
+	mustRegisterEndpoint(t, store, "workflow/reviewer/task-123")
+	mustRegisterEndpoint(t, store, "workflow/empty")
+	mustRegisterEndpoint(t, store, "agent/sender")
 	mustSendMessage(t, store, "workflow/reviewer/task-123", "agent/sender", "review request", "hello reviewer")
 
 	first, err := store.Receive(context.Background(), ReceiveParams{Alias: "workflow/reviewer/task-123"})
@@ -147,9 +147,9 @@ func TestReceiveMultipleAliasesOrdersUnionOldestFirst(t *testing.T) {
 		return current
 	}
 
-	mustRegisterEndpoint(t, store, "workflow/older", "workflow")
-	mustRegisterEndpoint(t, store, "workflow/newer", "workflow")
-	mustRegisterEndpoint(t, store, "agent/sender", "agent")
+	mustRegisterEndpoint(t, store, "workflow/older")
+	mustRegisterEndpoint(t, store, "workflow/newer")
+	mustRegisterEndpoint(t, store, "agent/sender")
 
 	older := mustSendMessage(t, store, "workflow/older", "agent/sender", "older", "older body")
 	current = current.Add(time.Second)
@@ -197,9 +197,9 @@ func TestReceiveMultipleAliasesUsesDeliveryIDTiebreak(t *testing.T) {
 		return current
 	}
 
-	mustRegisterEndpoint(t, store, "workflow/alpha", "workflow")
-	mustRegisterEndpoint(t, store, "workflow/beta", "workflow")
-	mustRegisterEndpoint(t, store, "agent/sender", "agent")
+	mustRegisterEndpoint(t, store, "workflow/alpha")
+	mustRegisterEndpoint(t, store, "workflow/beta")
+	mustRegisterEndpoint(t, store, "agent/sender")
 
 	alpha := mustSendMessage(t, store, "workflow/alpha", "agent/sender", "alpha", "alpha body")
 	beta := mustSendMessage(t, store, "workflow/beta", "agent/sender", "beta", "beta body")
@@ -236,9 +236,9 @@ func TestReceiveMultipleAliasesReclaimsExpiredLeaseAcrossUnion(t *testing.T) {
 		return current
 	}
 
-	mustRegisterEndpoint(t, store, "workflow/reclaim", "workflow")
-	mustRegisterEndpoint(t, store, "workflow/fresh", "workflow")
-	mustRegisterEndpoint(t, store, "agent/sender", "agent")
+	mustRegisterEndpoint(t, store, "workflow/reclaim")
+	mustRegisterEndpoint(t, store, "workflow/fresh")
+	mustRegisterEndpoint(t, store, "agent/sender")
 
 	reclaimed := mustSendMessage(t, store, "workflow/reclaim", "agent/sender", "reclaim me", "reclaim body")
 	first, err := store.Receive(context.Background(), ReceiveParams{Alias: "workflow/reclaim"})
@@ -291,8 +291,8 @@ func TestFailRetryPolicyDeadLettersAfterThirdFailure(t *testing.T) {
 		return current
 	}
 
-	mustRegisterEndpoint(t, store, "workflow/reviewer/task-123", "workflow")
-	mustRegisterEndpoint(t, store, "agent/sender", "agent")
+	mustRegisterEndpoint(t, store, "workflow/reviewer/task-123")
+	mustRegisterEndpoint(t, store, "agent/sender")
 
 	sent := mustSendMessage(t, store, "workflow/reviewer/task-123", "agent/sender", "review request", "hello reviewer")
 
@@ -356,11 +356,11 @@ func newLeaseTestStore(t *testing.T) (*Runtime, *Store) {
 	return runtime, runtime.Store()
 }
 
-func mustRegisterEndpoint(t *testing.T, store *Store, alias, kind string) {
+func mustRegisterEndpoint(t *testing.T, store *Store, alias string) {
 	t.Helper()
 
-	if _, err := store.RegisterEndpoint(context.Background(), alias, kind); err != nil {
-		t.Fatalf("RegisterEndpoint(%q, %q) error = %v", alias, kind, err)
+	if _, err := store.RegisterEndpoint(context.Background(), alias); err != nil {
+		t.Fatalf("RegisterEndpoint(%q) error = %v", alias, err)
 	}
 }
 

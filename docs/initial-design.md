@@ -120,7 +120,6 @@ the v1 routing model.
 Suggested fields:
 
 - `endpoint_id`
-- `kind`
 - `created_at`
 - `metadata_json`
 
@@ -280,16 +279,18 @@ SQLite transaction.
 ### Endpoint Registration
 
 ```text
-agent-mailbox endpoint register --alias workflow/reviewer/task-123 --kind workflow
+agent-mailbox endpoint register --alias workflow/reviewer/task-123
 ```
 
 Behavior:
 
 - create a new endpoint and bind the alias if the alias does not exist
-- if the alias already exists with the same `kind`, return the existing endpoint
-  id and exit success
-- if the alias already exists with a different `kind`, return an error
+- if the alias already exists, return the existing endpoint id and exit success
 - make alias creation explicit before first receive
+
+Alias prefixes such as `workflow/...` and `agent/...` remain useful naming
+conventions for humans and tooling, but they are not stored as a separate
+endpoint type field in the mailbox state.
 
 ### Receive
 

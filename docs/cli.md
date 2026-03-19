@@ -37,16 +37,14 @@ Register the recipient:
 
 ```bash
 agent-mailbox endpoint register \
-  --alias workflow/reviewer/task-123 \
-  --kind workflow
+  --alias workflow/reviewer/task-123
 ```
 
 Optionally register the sender:
 
 ```bash
 agent-mailbox endpoint register \
-  --alias agent/sender \
-  --kind agent
+  --alias agent/sender
 ```
 
 Send a message:
@@ -128,13 +126,15 @@ Rules:
 Create an endpoint alias.
 
 ```bash
-agent-mailbox endpoint register --alias <alias> --kind <kind>
+agent-mailbox endpoint register --alias <alias>
 ```
 
 Notes:
 
-- same alias + same kind is a safe retry
-- same alias + different kind is an error
+- the alias is the full registration contract
+- registering the same alias again is a safe retry
+- alias prefixes such as `workflow/...` or `agent/...` are conventions, not a
+  stored type field
 
 ### `send`
 

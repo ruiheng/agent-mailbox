@@ -24,7 +24,6 @@ type Store struct {
 type EndpointRegistration struct {
 	EndpointID string
 	Alias      string
-	Kind       string
 	Created    bool
 }
 
@@ -80,14 +79,10 @@ func NewStore(db *sql.DB, blobDir string) *Store {
 	}
 }
 
-func (s *Store) RegisterEndpoint(ctx context.Context, alias, kind string) (EndpointRegistration, error) {
+func (s *Store) RegisterEndpoint(ctx context.Context, alias string) (EndpointRegistration, error) {
 	alias = strings.TrimSpace(alias)
-	kind = strings.TrimSpace(kind)
 	if alias == "" {
 		return EndpointRegistration{}, errors.New("endpoint alias is required")
-	}
-	if kind == "" {
-		return EndpointRegistration{}, errors.New("endpoint kind is required")
 	}
 
 	tx, err := s.db.BeginTx(ctx, nil)
@@ -97,15 +92,13 @@ func (s *Store) RegisterEndpoint(ctx context.Context, alias, kind string) (Endpo
 	defer tx.Rollback()
 
 	var endpointID string
-	var existingKind string
 	row := tx.QueryRowContext(ctx, `
-SELECT e.endpoint_id, e.kind
-FROM endpoint_aliases AS a
-JOIN endpoints AS e ON e.endpoint_id = a.endpoint_id
-WHERE a.alias = ?
+SELECT endpoint_id
+FROM endpoint_aliases
+WHERE alias = ?
 `, alias)
 
-	switch err := row.Scan(&endpointID, &existingKind); {
+	switch err := row.Scan(&endpointID); {
 	case errors.Is(err, sql.ErrNoRows):
 		timestamp := formatTimestamp(s.now())
 		endpointID, err = newPrefixedID("ep")
@@ -118,9 +111,9 @@ WHERE a.alias = ?
 		}
 
 		if _, err := tx.ExecContext(ctx, `
-INSERT INTO endpoints (endpoint_id, kind, created_at, metadata_json)
-VALUES (?, ?, ?, '{}')
-`, endpointID, kind, timestamp); err != nil {
+INSERT INTO endpoints (endpoint_id, created_at, metadata_json)
+VALUES (?, ?, '{}')
+`, endpointID, timestamp); err != nil {
 			return EndpointRegistration{}, fmt.Errorf("insert endpoint: %w", err)
 		}
 
@@ -133,7 +126,6 @@ VALUES (?, ?, ?)
 
 		detailJSON, err := marshalDetail(map[string]string{
 			"alias": alias,
-			"kind":  kind,
 		})
 		if err != nil {
 			return EndpointRegistration{}, err
@@ -152,22 +144,17 @@ VALUES (?, ?, ?, ?, ?)
 		return EndpointRegistration{
 			EndpointID: endpointID,
 			Alias:      alias,
-			Kind:       kind,
 			Created:    true,
 		}, nil
 	case err != nil:
 		return EndpointRegistration{}, fmt.Errorf("read existing endpoint alias: %w", err)
 	default:
-		if existingKind != kind {
-			return EndpointRegistration{}, fmt.Errorf("alias %q already exists with kind %q", alias, existingKind)
-		}
 		if err := tx.Commit(); err != nil {
 			return EndpointRegistration{}, fmt.Errorf("commit endpoint lookup transaction: %w", err)
 		}
 		return EndpointRegistration{
 			EndpointID: endpointID,
 			Alias:      alias,
-			Kind:       kind,
 			Created:    false,
 		}, nil
 	}

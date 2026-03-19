@@ -51,9 +51,31 @@ WHERE type = 'table' AND name = ?
 			t.Fatalf("table %s missing: %v", table, err)
 		}
 	}
+
+	rows, err := runtime.DB().Query(`PRAGMA table_info(endpoints)`)
+	if err != nil {
+		t.Fatalf("PRAGMA table_info(endpoints) error = %v", err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var cid int
+		var name, columnType string
+		var notNull, pk int
+		var defaultValue any
+		if err := rows.Scan(&cid, &name, &columnType, &notNull, &defaultValue, &pk); err != nil {
+			t.Fatalf("scan endpoints table info error = %v", err)
+		}
+		if name == "kind" {
+			t.Fatal("endpoints schema still contains kind column")
+		}
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("iterate endpoints table info error = %v", err)
+	}
 }
 
-func TestRegisterEndpointIdempotencyAndKindConflict(t *testing.T) {
+func TestRegisterEndpointAliasOnlyIdempotency(t *testing.T) {
 	t.Parallel()
 
 	runtime, err := OpenRuntime(context.Background(), filepath.Join(t.TempDir(), "mailbox-state"))
@@ -63,7 +85,7 @@ func TestRegisterEndpointIdempotencyAndKindConflict(t *testing.T) {
 	defer runtime.Close()
 
 	store := runtime.Store()
-	first, err := store.RegisterEndpoint(context.Background(), "workflow/reviewer/task-123", "workflow")
+	first, err := store.RegisterEndpoint(context.Background(), "workflow/reviewer/task-123")
 	if err != nil {
 		t.Fatalf("RegisterEndpoint(first) error = %v", err)
 	}
@@ -71,7 +93,7 @@ func TestRegisterEndpointIdempotencyAndKindConflict(t *testing.T) {
 		t.Fatalf("first registration Created = false, want true")
 	}
 
-	second, err := store.RegisterEndpoint(context.Background(), "workflow/reviewer/task-123", "workflow")
+	second, err := store.RegisterEndpoint(context.Background(), "workflow/reviewer/task-123")
 	if err != nil {
 		t.Fatalf("RegisterEndpoint(second) error = %v", err)
 	}
@@ -82,10 +104,25 @@ func TestRegisterEndpointIdempotencyAndKindConflict(t *testing.T) {
 		t.Fatalf("endpoint id changed on idempotent registration: got %q want %q", second.EndpointID, first.EndpointID)
 	}
 
-	if _, err := store.RegisterEndpoint(context.Background(), "workflow/reviewer/task-123", "agent"); err == nil {
-		t.Fatal("RegisterEndpoint(kind conflict) error = nil, want non-nil")
-	} else if !strings.Contains(err.Error(), `already exists with kind "workflow"`) {
-		t.Fatalf("RegisterEndpoint(kind conflict) error = %v, want kind mismatch", err)
+	var detailJSON string
+	if err := runtime.DB().QueryRow(`
+SELECT detail_json
+FROM events
+WHERE event_type = 'endpoint_registered'
+LIMIT 1
+`).Scan(&detailJSON); err != nil {
+		t.Fatalf("select endpoint_registered detail_json error = %v", err)
+	}
+
+	var detail map[string]string
+	if err := json.Unmarshal([]byte(detailJSON), &detail); err != nil {
+		t.Fatalf("json.Unmarshal(detail_json) error = %v", err)
+	}
+	if detail["alias"] != "workflow/reviewer/task-123" {
+		t.Fatalf("detail alias = %q, want workflow/reviewer/task-123", detail["alias"])
+	}
+	if _, ok := detail["kind"]; ok {
+		t.Fatalf("detail_json unexpectedly contains kind: %v", detail)
 	}
 }
 
@@ -118,7 +155,6 @@ func TestSendAndListHappyPath(t *testing.T) {
 				"--state-dir", stateDir,
 				"endpoint", "register",
 				"--alias", "workflow/reviewer/task-123",
-				"--kind", "workflow",
 			}); err != nil {
 				t.Fatalf("register recipient error = %v", err)
 			}
@@ -126,7 +162,6 @@ func TestSendAndListHappyPath(t *testing.T) {
 				"--state-dir", stateDir,
 				"endpoint", "register",
 				"--alias", "agent/sender",
-				"--kind", "agent",
 			}); err != nil {
 				t.Fatalf("register sender error = %v", err)
 			}
@@ -254,11 +289,7 @@ func TestInvalidCLIPathsDoNotCreateRuntimeState(t *testing.T) {
 		},
 		{
 			name: "endpoint register missing alias",
-			args: []string{"endpoint", "register", "--kind", "workflow"},
-		},
-		{
-			name: "endpoint register missing kind",
-			args: []string{"endpoint", "register", "--alias", "workflow/reviewer/task-123"},
+			args: []string{"endpoint", "register"},
 		},
 		{
 			name: "send missing to",

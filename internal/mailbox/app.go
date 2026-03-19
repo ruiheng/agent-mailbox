@@ -119,9 +119,7 @@ func (a *App) prepareEndpointRegister(args []string) (preparedCommand, error) {
 	fs.SetOutput(io.Discard)
 
 	var alias string
-	var kind string
 	fs.StringVar(&alias, "alias", "", "endpoint alias")
-	fs.StringVar(&kind, "kind", "", "endpoint kind")
 
 	if err := fs.Parse(args); err != nil {
 		return nil, err
@@ -129,17 +127,14 @@ func (a *App) prepareEndpointRegister(args []string) (preparedCommand, error) {
 	if err := requireFlag(alias, "--alias"); err != nil {
 		return nil, err
 	}
-	if err := requireFlag(kind, "--kind"); err != nil {
-		return nil, err
-	}
 
 	return func(ctx context.Context, store *Store) error {
-		result, err := store.RegisterEndpoint(ctx, alias, kind)
+		result, err := store.RegisterEndpoint(ctx, alias)
 		if err != nil {
 			return err
 		}
 
-		fmt.Fprintf(a.stdout, "endpoint_id=%s alias=%s kind=%s created=%t\n", result.EndpointID, result.Alias, result.Kind, result.Created)
+		fmt.Fprintf(a.stdout, "endpoint_id=%s alias=%s created=%t\n", result.EndpointID, result.Alias, result.Created)
 		return nil
 	}, nil
 }
