@@ -86,8 +86,7 @@ MAILBOX_STATE_DIR=/tmp/mailbox-demo agent-mailbox endpoint register \
 ```
 
 Alias prefixes such as `workflow/...` or `agent/...` are naming conventions for
-humans and tooling. The mailbox stores the alias mapping, not a separate
-endpoint kind field.
+humans and tooling.
 
 The default state directory is:
 
