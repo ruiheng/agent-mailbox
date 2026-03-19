@@ -37,14 +37,14 @@ Register the recipient:
 
 ```bash
 agent-mailbox endpoint register \
-  --alias workflow/reviewer/task-123
+  --address workflow/reviewer/task-123
 ```
 
 Optionally register the sender:
 
 ```bash
 agent-mailbox endpoint register \
-  --alias agent/sender
+  --address agent/sender
 ```
 
 Send a message:
@@ -127,8 +127,8 @@ Rules:
 - repeated `--for` flags search the union of the requested inboxes
 - selection is global oldest-first by `visible_at`, then `message_created_at`,
   then `delivery_id`
-- v1 does not guarantee fairness or alias rotation while waiting
-- if any requested alias is unknown, `recv` fails instead of partially
+- v1 does not guarantee fairness or address rotation while waiting
+- if any requested address is unknown, `recv` fails instead of partially
   succeeding
 
 ## Watch
@@ -136,7 +136,7 @@ Rules:
 `watch` is the observe-only companion to `recv`.
 
 ```bash
-agent-mailbox watch --for <alias> [--for <alias> ...] [--state dead_letter] [--timeout 30s] [--json]
+agent-mailbox watch --for <address> [--for <address> ...] [--state dead_letter] [--timeout 30s] [--json]
 ```
 
 Rules:
@@ -157,30 +157,30 @@ Rules:
 
 ### `endpoint register`
 
-Create an endpoint alias.
+Create an endpoint address.
 
 ```bash
-agent-mailbox endpoint register --alias <alias>
+agent-mailbox endpoint register --address <address>
 ```
 
 Notes:
 
-- the alias is the full registration contract
-- registering the same alias again is a safe retry
-- alias prefixes such as `workflow/...` or `agent/...` are conventions, not a
+- the address is the full registration contract
+- registering the same address again is a safe retry
+- address prefixes such as `workflow/...` or `agent/...` are conventions, not a
   stored type field
 
 ### `send`
 
-Queue one message for a recipient alias.
+Queue one message for a recipient address.
 
 ```bash
-agent-mailbox send --to <alias> --body-file <path-or->
+agent-mailbox send --to <address> --body-file <path-or->
 ```
 
 Common options:
 
-- `--from <alias>`
+- `--from <address>`
 - `--subject <text>`
 - `--content-type <mime-type>`
 - `--schema-version <version>`
@@ -188,15 +188,15 @@ Common options:
 Notes:
 
 - `--body-file -` reads from stdin
-- sending to an unknown alias fails
+- sending to an unknown address fails
 - `--from` is optional
 
 ### `recv`
 
-Claim the next delivery for one or more recipient aliases.
+Claim the next delivery for one or more recipient addresses.
 
 ```bash
-agent-mailbox recv --for <alias> [--for <alias> ...] [--wait] [--timeout 30s] [--json]
+agent-mailbox recv --for <address> [--for <address> ...] [--wait] [--timeout 30s] [--json]
 ```
 
 Use `--json` for scripts and agents.
@@ -205,15 +205,15 @@ Notes:
 
 - repeat `--for` to search multiple inboxes with one claim attempt
 - duplicate `--for` values are ignored after the first occurrence
-- plain-text output includes `recipient_alias=...` so the matched inbox is clear
-- `--json` keeps the existing schema and still includes `recipient_alias`
+- plain-text output includes `recipient_address=...` so the matched inbox is clear
+- `--json` keeps the existing schema and still includes `recipient_address`
 
 ### `watch`
 
 Observe matching deliveries without claiming them.
 
 ```bash
-agent-mailbox watch --for <alias> [--for <alias> ...] [--state dead_letter] [--timeout 30s] [--json]
+agent-mailbox watch --for <address> [--for <address> ...] [--state dead_letter] [--timeout 30s] [--json]
 ```
 
 Use `--json` for streaming consumers. Each output line is one delivery metadata
@@ -223,7 +223,7 @@ Notes:
 
 - default watch scope is visible queued deliveries
 - `--state` lets you watch another delivery state with the same metadata schema
-- plain-text output includes `recipient_alias=...`
+- plain-text output includes `recipient_address=...`
 - `watch` is for observation only; use `recv` to claim work
 
 ### `ack`
@@ -271,10 +271,10 @@ Retry behavior in v1:
 
 ### `list`
 
-Inspect deliveries for one recipient alias.
+Inspect deliveries for one recipient address.
 
 ```bash
-agent-mailbox list --for <alias> [--state dead_letter] [--json]
+agent-mailbox list --for <address> [--state dead_letter] [--json]
 ```
 
 Notes:

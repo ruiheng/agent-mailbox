@@ -25,16 +25,16 @@ var (
 )
 
 type ReceiveParams struct {
-	Alias   string
-	Aliases []string
-	Wait    bool
-	Timeout time.Duration
+	Address   string
+	Addresses []string
+	Wait      bool
+	Timeout   time.Duration
 }
 
 type ReceivedMessage struct {
 	DeliveryID          string  `json:"delivery_id"`
 	MessageID           string  `json:"message_id"`
-	RecipientAlias      string  `json:"recipient_alias"`
+	RecipientAddress    string  `json:"recipient_address"`
 	RecipientEndpointID string  `json:"recipient_endpoint_id"`
 	SenderEndpointID    *string `json:"sender_endpoint_id,omitempty"`
 	State               string  `json:"state"`
@@ -101,12 +101,12 @@ type deliveryTransitionSpec struct {
 }
 
 type resolvedRecipient struct {
-	Alias      string
+	Address    string
 	EndpointID string
 }
 
 func (s *Store) Receive(ctx context.Context, params ReceiveParams) (ReceivedMessage, error) {
-	recipients, err := s.resolveRecipients(ctx, params.Alias, params.Aliases, "--for")
+	recipients, err := s.resolveRecipients(ctx, params.Address, params.Addresses, "--for")
 	if err != nil {
 		return ReceivedMessage{}, err
 	}
@@ -158,26 +158,26 @@ func (s *Store) Receive(ctx context.Context, params ReceiveParams) (ReceivedMess
 	}
 }
 
-func (s *Store) resolveRecipients(ctx context.Context, alias string, aliases []string, flagName string) ([]resolvedRecipient, error) {
-	normalizedAliases, err := normalizeAliases(alias, aliases, flagName)
+func (s *Store) resolveRecipients(ctx context.Context, address string, addresses []string, flagName string) ([]resolvedRecipient, error) {
+	normalizedAddresses, err := normalizeAddresses(address, addresses, flagName)
 	if err != nil {
 		return nil, err
 	}
 
-	recipients := make([]resolvedRecipient, 0, len(normalizedAliases))
-	seenEndpointIDs := make(map[string]struct{}, len(normalizedAliases))
-	for _, alias := range normalizedAliases {
-		endpointID, err := s.lookupEndpointID(ctx, s.db, alias)
+	recipients := make([]resolvedRecipient, 0, len(normalizedAddresses))
+	seenEndpointIDs := make(map[string]struct{}, len(normalizedAddresses))
+	for _, address := range normalizedAddresses {
+		endpointID, err := s.lookupEndpointID(ctx, s.db, address)
 		if err != nil {
-			return nil, fmt.Errorf("resolve recipient alias: %w", err)
+			return nil, fmt.Errorf("resolve recipient address: %w", err)
 		}
-		// Multiple aliases may resolve to one endpoint. Claim against the union once.
+		// Multiple addresses may resolve to one endpoint. Claim against the union once.
 		if _, exists := seenEndpointIDs[endpointID]; exists {
 			continue
 		}
 		seenEndpointIDs[endpointID] = struct{}{}
 		recipients = append(recipients, resolvedRecipient{
-			Alias:      alias,
+			Address:    address,
 			EndpointID: endpointID,
 		})
 	}
@@ -282,10 +282,10 @@ func (s *Store) Fail(ctx context.Context, deliveryID, leaseToken, reason string)
 
 func (s *Store) receiveOnce(ctx context.Context, recipients []resolvedRecipient) (ReceivedMessage, error) {
 	nowText := formatTimestamp(s.now())
-	aliasByEndpointID := make(map[string]string, len(recipients))
+	addressByEndpointID := make(map[string]string, len(recipients))
 	recipientEndpointIDs := make([]string, 0, len(recipients))
 	for _, recipient := range recipients {
-		aliasByEndpointID[recipient.EndpointID] = recipient.Alias
+		addressByEndpointID[recipient.EndpointID] = recipient.Address
 		recipientEndpointIDs = append(recipientEndpointIDs, recipient.EndpointID)
 	}
 
@@ -341,12 +341,12 @@ WHERE delivery_id = ?
 			continue
 		}
 
-		alias := aliasByEndpointID[candidate.RecipientEndpointID]
+		address := addressByEndpointID[candidate.RecipientEndpointID]
 		if err := insertDeliveryEvent(ctx, tx, "delivery_leased", candidate.RecipientEndpointID, candidate.MessageID, candidate.DeliveryID, map[string]any{
-			"previous_state":   candidate.State,
-			"recipient_alias":  alias,
-			"lease_expires_at": leaseExpiresAt,
-			"reclaimed":        candidate.State == "leased",
+			"previous_state":    candidate.State,
+			"recipient_address": address,
+			"lease_expires_at":  leaseExpiresAt,
+			"reclaimed":         candidate.State == "leased",
 		}, nowText); err != nil {
 			_ = tx.Rollback()
 			return ReceivedMessage{}, err
@@ -364,7 +364,7 @@ WHERE delivery_id = ?
 		message := ReceivedMessage{
 			DeliveryID:          candidate.DeliveryID,
 			MessageID:           candidate.MessageID,
-			RecipientAlias:      alias,
+			RecipientAddress:    address,
 			RecipientEndpointID: candidate.RecipientEndpointID,
 			State:               "leased",
 			VisibleAt:           candidate.VisibleAt,

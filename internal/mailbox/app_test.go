@@ -40,7 +40,7 @@ func TestOpenRuntimeInitializesStateAndSchema(t *testing.T) {
 		t.Fatalf("journal mode = %q, want wal", journalMode)
 	}
 
-	tables := []string{"endpoints", "endpoint_aliases", "messages", "deliveries", "events"}
+	tables := []string{"endpoints", "endpoint_addresses", "messages", "deliveries", "events"}
 	for _, table := range tables {
 		var name string
 		if err := runtime.DB().QueryRow(`
@@ -75,7 +75,7 @@ WHERE type = 'table' AND name = ?
 	}
 }
 
-func TestRegisterEndpointAliasOnlyIdempotency(t *testing.T) {
+func TestRegisterEndpointAddressOnlyIdempotency(t *testing.T) {
 	t.Parallel()
 
 	runtime, err := OpenRuntime(context.Background(), filepath.Join(t.TempDir(), "mailbox-state"))
@@ -118,8 +118,8 @@ LIMIT 1
 	if err := json.Unmarshal([]byte(detailJSON), &detail); err != nil {
 		t.Fatalf("json.Unmarshal(detail_json) error = %v", err)
 	}
-	if detail["alias"] != "workflow/reviewer/task-123" {
-		t.Fatalf("detail alias = %q, want workflow/reviewer/task-123", detail["alias"])
+	if detail["address"] != "workflow/reviewer/task-123" {
+		t.Fatalf("detail address = %q, want workflow/reviewer/task-123", detail["address"])
 	}
 	if _, ok := detail["kind"]; ok {
 		t.Fatalf("detail_json unexpectedly contains kind: %v", detail)
@@ -154,14 +154,14 @@ func TestSendAndListHappyPath(t *testing.T) {
 			if err := registerApp.Run(context.Background(), []string{
 				"--state-dir", stateDir,
 				"endpoint", "register",
-				"--alias", "workflow/reviewer/task-123",
+				"--address", "workflow/reviewer/task-123",
 			}); err != nil {
 				t.Fatalf("register recipient error = %v", err)
 			}
 			if err := registerApp.Run(context.Background(), []string{
 				"--state-dir", stateDir,
 				"endpoint", "register",
-				"--alias", "agent/sender",
+				"--address", "agent/sender",
 			}); err != nil {
 				t.Fatalf("register sender error = %v", err)
 			}
@@ -212,8 +212,8 @@ func TestSendAndListHappyPath(t *testing.T) {
 			if deliveries[0].Subject != "review request" {
 				t.Fatalf("delivery subject = %q, want review request", deliveries[0].Subject)
 			}
-			if deliveries[0].RecipientAlias != "workflow/reviewer/task-123" {
-				t.Fatalf("recipient alias = %q", deliveries[0].RecipientAlias)
+			if deliveries[0].RecipientAddress != "workflow/reviewer/task-123" {
+				t.Fatalf("recipient address = %q", deliveries[0].RecipientAddress)
 			}
 			if deliveries[0].SenderEndpointID == nil {
 				t.Fatal("sender endpoint id = nil, want non-nil")
@@ -288,7 +288,7 @@ func TestInvalidCLIPathsDoNotCreateRuntimeState(t *testing.T) {
 			args: []string{"send", "--bogus"},
 		},
 		{
-			name: "endpoint register missing alias",
+			name: "endpoint register missing address",
 			args: []string{"endpoint", "register"},
 		},
 		{

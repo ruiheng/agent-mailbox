@@ -18,7 +18,7 @@ func TestCLIRegisterSendRecvAckFlow(t *testing.T) {
 
 	registerRecipient := runCLI(t, "", "--state-dir", stateDir,
 		"endpoint", "register",
-		"--alias", "workflow/reviewer/task-123",
+		"--address", "workflow/reviewer/task-123",
 	)
 	if registerRecipient.exitCode != 0 {
 		t.Fatalf("register recipient exit code = %d, stderr = %q", registerRecipient.exitCode, registerRecipient.stderr)
@@ -32,7 +32,7 @@ func TestCLIRegisterSendRecvAckFlow(t *testing.T) {
 
 	registerSender := runCLI(t, "", "--state-dir", stateDir,
 		"endpoint", "register",
-		"--alias", "agent/sender",
+		"--address", "agent/sender",
 	)
 	if registerSender.exitCode != 0 {
 		t.Fatalf("register sender exit code = %d, stderr = %q", registerSender.exitCode, registerSender.stderr)
@@ -93,14 +93,14 @@ func TestCLIRecvNoMessageExitCodeAndSilence(t *testing.T) {
 
 	register := runCLI(t, "", "--state-dir", stateDir,
 		"endpoint", "register",
-		"--alias", "workflow/empty",
+		"--address", "workflow/empty",
 	)
 	if register.exitCode != 0 {
 		t.Fatalf("register exit code = %d, stderr = %q", register.exitCode, register.stderr)
 	}
 	registerSecond := runCLI(t, "", "--state-dir", stateDir,
 		"endpoint", "register",
-		"--alias", "workflow/empty-2",
+		"--address", "workflow/empty-2",
 	)
 	if registerSecond.exitCode != 0 {
 		t.Fatalf("register second exit code = %d, stderr = %q", registerSecond.exitCode, registerSecond.stderr)
@@ -154,21 +154,21 @@ func TestCLIRecvNoMessageExitCodeAndSilence(t *testing.T) {
 	}
 }
 
-func TestCLIRecvMultipleAliasesPlainTextIncludesRecipientAlias(t *testing.T) {
+func TestCLIRecvMultipleAddressesPlainTextIncludesRecipientAddress(t *testing.T) {
 	stateDir := filepath.Join(t.TempDir(), "mailbox-state")
 
-	for _, alias := range []string{"workflow/older", "workflow/newer"} {
+	for _, address := range []string{"workflow/older", "workflow/newer"} {
 		register := runCLI(t, "", "--state-dir", stateDir,
 			"endpoint", "register",
-			"--alias", alias,
+			"--address", address,
 		)
 		if register.exitCode != 0 {
-			t.Fatalf("register %s exit code = %d, stderr = %q", alias, register.exitCode, register.stderr)
+			t.Fatalf("register %s exit code = %d, stderr = %q", address, register.exitCode, register.stderr)
 		}
 	}
 	registerSender := runCLI(t, "", "--state-dir", stateDir,
 		"endpoint", "register",
-		"--alias", "agent/sender",
+		"--address", "agent/sender",
 	)
 	if registerSender.exitCode != 0 {
 		t.Fatalf("register sender exit code = %d, stderr = %q", registerSender.exitCode, registerSender.stderr)
@@ -203,20 +203,20 @@ func TestCLIRecvMultipleAliasesPlainTextIncludesRecipientAlias(t *testing.T) {
 	if recv.exitCode != 0 {
 		t.Fatalf("recv multi plain text exit code = %d, stderr = %q", recv.exitCode, recv.stderr)
 	}
-	if !strings.Contains(recv.stdout, "recipient_alias=workflow/older") {
-		t.Fatalf("recv multi plain text stdout = %q, want recipient_alias=workflow/older", recv.stdout)
+	if !strings.Contains(recv.stdout, "recipient_address=workflow/older") {
+		t.Fatalf("recv multi plain text stdout = %q, want recipient_address=workflow/older", recv.stdout)
 	}
 	if !strings.Contains(recv.stdout, "older body\n") {
 		t.Fatalf("recv multi plain text stdout = %q, want older body", recv.stdout)
 	}
 }
 
-func TestCLIRecvMultipleAliasesUnknownAliasFails(t *testing.T) {
+func TestCLIRecvMultipleAddressesUnknownAddressFails(t *testing.T) {
 	stateDir := filepath.Join(t.TempDir(), "mailbox-state")
 
 	register := runCLI(t, "", "--state-dir", stateDir,
 		"endpoint", "register",
-		"--alias", "workflow/known",
+		"--address", "workflow/known",
 	)
 	if register.exitCode != 0 {
 		t.Fatalf("register exit code = %d, stderr = %q", register.exitCode, register.stderr)
@@ -228,23 +228,23 @@ func TestCLIRecvMultipleAliasesUnknownAliasFails(t *testing.T) {
 		"--for", "workflow/missing",
 	)
 	if recv.exitCode != 1 {
-		t.Fatalf("recv unknown alias exit code = %d, want 1; stderr = %q", recv.exitCode, recv.stderr)
+		t.Fatalf("recv unknown address exit code = %d, want 1; stderr = %q", recv.exitCode, recv.stderr)
 	}
-	if !strings.Contains(recv.stderr, `alias "workflow/missing" not found`) {
-		t.Fatalf("recv unknown alias stderr = %q, want missing alias error", recv.stderr)
+	if !strings.Contains(recv.stderr, `address "workflow/missing" not found`) {
+		t.Fatalf("recv unknown address stderr = %q, want missing address error", recv.stderr)
 	}
 }
 
 func TestCLIWatchStreamsNDJSONWithoutClaiming(t *testing.T) {
 	stateDir := filepath.Join(t.TempDir(), "mailbox-state")
 
-	for _, alias := range []string{"workflow/watch", "agent/sender"} {
+	for _, address := range []string{"workflow/watch", "agent/sender"} {
 		register := runCLI(t, "", "--state-dir", stateDir,
 			"endpoint", "register",
-			"--alias", alias,
+			"--address", address,
 		)
 		if register.exitCode != 0 {
-			t.Fatalf("register %s exit code = %d, stderr = %q", alias, register.exitCode, register.stderr)
+			t.Fatalf("register %s exit code = %d, stderr = %q", address, register.exitCode, register.stderr)
 		}
 	}
 
@@ -281,8 +281,8 @@ func TestCLIWatchStreamsNDJSONWithoutClaiming(t *testing.T) {
 	if err := json.Unmarshal([]byte(lines[0]), &delivery); err != nil {
 		t.Fatalf("json.Unmarshal(watch line) error = %v; line = %q", err, lines[0])
 	}
-	if delivery["recipient_alias"] != "workflow/watch" {
-		t.Fatalf("watch recipient_alias = %v, want workflow/watch", delivery["recipient_alias"])
+	if delivery["recipient_address"] != "workflow/watch" {
+		t.Fatalf("watch recipient_address = %v, want workflow/watch", delivery["recipient_address"])
 	}
 	if delivery["subject"] != "watch me" {
 		t.Fatalf("watch subject = %v, want watch me", delivery["subject"])
@@ -309,7 +309,7 @@ func TestCLIWatchTimeoutExitsCleanlyWithoutOutput(t *testing.T) {
 
 	register := runCLI(t, "", "--state-dir", stateDir,
 		"endpoint", "register",
-		"--alias", "workflow/empty-watch",
+		"--address", "workflow/empty-watch",
 	)
 	if register.exitCode != 0 {
 		t.Fatalf("register exit code = %d, stderr = %q", register.exitCode, register.stderr)

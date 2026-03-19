@@ -16,8 +16,8 @@ CREATE TABLE IF NOT EXISTS endpoints (
   metadata_json TEXT NOT NULL DEFAULT '{}'
 );
 
-CREATE TABLE IF NOT EXISTS endpoint_aliases (
-  alias TEXT PRIMARY KEY,
+CREATE TABLE IF NOT EXISTS endpoint_addresses (
+  address TEXT PRIMARY KEY,
   endpoint_id TEXT NOT NULL,
   created_at TEXT NOT NULL,
   FOREIGN KEY (endpoint_id) REFERENCES endpoints(endpoint_id)
@@ -69,8 +69,8 @@ CREATE TABLE IF NOT EXISTS events (
   FOREIGN KEY (delivery_id) REFERENCES deliveries(delivery_id)
 );
 
-CREATE INDEX IF NOT EXISTS idx_endpoint_aliases_endpoint_id
-  ON endpoint_aliases (endpoint_id);
+CREATE INDEX IF NOT EXISTS idx_endpoint_addresses_endpoint_id
+  ON endpoint_addresses (endpoint_id);
 
 CREATE INDEX IF NOT EXISTS idx_deliveries_recipient_state_visible
   ON deliveries (recipient_endpoint_id, state, visible_at);

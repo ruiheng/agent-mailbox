@@ -18,8 +18,8 @@ func TestWatchEmitsQueuedDeliveryWithoutClaiming(t *testing.T) {
 
 	var deliveries []ListedDelivery
 	if err := store.Watch(context.Background(), WatchParams{
-		Aliases: []string{"workflow/reviewer/task-123"},
-		Timeout: 120 * time.Millisecond,
+		Addresses: []string{"workflow/reviewer/task-123"},
+		Timeout:   120 * time.Millisecond,
 	}, func(delivery ListedDelivery) error {
 		deliveries = append(deliveries, delivery)
 		return nil
@@ -33,11 +33,11 @@ func TestWatchEmitsQueuedDeliveryWithoutClaiming(t *testing.T) {
 	if deliveries[0].DeliveryID != sent.DeliveryID {
 		t.Fatalf("watch delivery id = %q, want %q", deliveries[0].DeliveryID, sent.DeliveryID)
 	}
-	if deliveries[0].RecipientAlias != "workflow/reviewer/task-123" {
-		t.Fatalf("watch recipient alias = %q, want workflow/reviewer/task-123", deliveries[0].RecipientAlias)
+	if deliveries[0].RecipientAddress != "workflow/reviewer/task-123" {
+		t.Fatalf("watch recipient address = %q, want workflow/reviewer/task-123", deliveries[0].RecipientAddress)
 	}
 
-	queued, err := store.List(context.Background(), ListParams{Alias: "workflow/reviewer/task-123"})
+	queued, err := store.List(context.Background(), ListParams{Address: "workflow/reviewer/task-123"})
 	if err != nil {
 		t.Fatalf("List() error = %v", err)
 	}
@@ -53,7 +53,7 @@ func TestWatchEmitsQueuedDeliveryWithoutClaiming(t *testing.T) {
 	assertStringSlicesEqual(t, eventTypes, want)
 }
 
-func TestWatchMultipleAliasesUsesOldestFirstUnion(t *testing.T) {
+func TestWatchMultipleAddressesUsesOldestFirstUnion(t *testing.T) {
 	t.Parallel()
 
 	_, store := newLeaseTestStore(t)
@@ -73,8 +73,8 @@ func TestWatchMultipleAliasesUsesOldestFirstUnion(t *testing.T) {
 
 	var deliveries []ListedDelivery
 	if err := store.Watch(context.Background(), WatchParams{
-		Aliases: []string{"workflow/newer", "workflow/older", "workflow/newer"},
-		Timeout: 120 * time.Millisecond,
+		Addresses: []string{"workflow/newer", "workflow/older", "workflow/newer"},
+		Timeout:   120 * time.Millisecond,
 	}, func(delivery ListedDelivery) error {
 		deliveries = append(deliveries, delivery)
 		return nil
@@ -88,13 +88,13 @@ func TestWatchMultipleAliasesUsesOldestFirstUnion(t *testing.T) {
 	if deliveries[0].DeliveryID != older.DeliveryID {
 		t.Fatalf("deliveries[0].delivery_id = %q, want %q", deliveries[0].DeliveryID, older.DeliveryID)
 	}
-	if deliveries[0].RecipientAlias != "workflow/older" {
-		t.Fatalf("deliveries[0].recipient_alias = %q, want workflow/older", deliveries[0].RecipientAlias)
+	if deliveries[0].RecipientAddress != "workflow/older" {
+		t.Fatalf("deliveries[0].recipient_address = %q, want workflow/older", deliveries[0].RecipientAddress)
 	}
 	if deliveries[1].DeliveryID != newer.DeliveryID {
 		t.Fatalf("deliveries[1].delivery_id = %q, want %q", deliveries[1].DeliveryID, newer.DeliveryID)
 	}
-	if deliveries[1].RecipientAlias != "workflow/newer" {
-		t.Fatalf("deliveries[1].recipient_alias = %q, want workflow/newer", deliveries[1].RecipientAlias)
+	if deliveries[1].RecipientAddress != "workflow/newer" {
+		t.Fatalf("deliveries[1].recipient_address = %q, want workflow/newer", deliveries[1].RecipientAddress)
 	}
 }

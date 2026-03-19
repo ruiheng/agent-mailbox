@@ -120,23 +120,23 @@ func (a *App) prepareEndpointRegister(args []string) (preparedCommand, error) {
 	fs := flag.NewFlagSet("agent-mailbox endpoint register", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 
-	var alias string
-	fs.StringVar(&alias, "alias", "", "endpoint alias")
+	var address string
+	fs.StringVar(&address, "address", "", "endpoint address")
 
 	if err := fs.Parse(args); err != nil {
 		return nil, err
 	}
-	if err := requireFlag(alias, "--alias"); err != nil {
+	if err := requireFlag(address, "--address"); err != nil {
 		return nil, err
 	}
 
 	return func(ctx context.Context, store *Store) error {
-		result, err := store.RegisterEndpoint(ctx, alias)
+		result, err := store.RegisterEndpoint(ctx, address)
 		if err != nil {
 			return err
 		}
 
-		fmt.Fprintf(a.stdout, "endpoint_id=%s alias=%s created=%t\n", result.EndpointID, result.Alias, result.Created)
+		fmt.Fprintf(a.stdout, "endpoint_id=%s address=%s created=%t\n", result.EndpointID, result.Address, result.Created)
 		return nil
 	}, nil
 }
@@ -145,15 +145,15 @@ func (a *App) prepareSendCommand(args []string) (preparedCommand, error) {
 	fs := flag.NewFlagSet("agent-mailbox send", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 
-	var toAlias string
-	var fromAlias string
+	var toAddress string
+	var fromAddress string
 	var subject string
 	var contentType string
 	var schemaVersion string
 	var bodyFile string
 
-	fs.StringVar(&toAlias, "to", "", "recipient alias")
-	fs.StringVar(&fromAlias, "from", "", "sender alias")
+	fs.StringVar(&toAddress, "to", "", "recipient address")
+	fs.StringVar(&fromAddress, "from", "", "sender address")
 	fs.StringVar(&subject, "subject", "", "message subject")
 	fs.StringVar(&contentType, "content-type", "text/plain", "message content type")
 	fs.StringVar(&schemaVersion, "schema-version", "v1", "sender-defined schema version")
@@ -162,7 +162,7 @@ func (a *App) prepareSendCommand(args []string) (preparedCommand, error) {
 	if err := fs.Parse(args); err != nil {
 		return nil, err
 	}
-	if err := requireFlag(toAlias, "--to"); err != nil {
+	if err := requireFlag(toAddress, "--to"); err != nil {
 		return nil, err
 	}
 
@@ -172,8 +172,8 @@ func (a *App) prepareSendCommand(args []string) (preparedCommand, error) {
 	}
 
 	params := SendParams{
-		ToAlias:       toAlias,
-		FromAlias:     fromAlias,
+		ToAddress:     toAddress,
+		FromAddress:   fromAddress,
 		Subject:       subject,
 		ContentType:   contentType,
 		SchemaVersion: schemaVersion,
@@ -214,23 +214,23 @@ func (a *App) prepareListCommand(args []string) (preparedCommand, error) {
 	fs := flag.NewFlagSet("agent-mailbox list", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 
-	var alias string
+	var address string
 	var jsonOutput bool
 	var state string
-	fs.StringVar(&alias, "for", "", "recipient alias")
+	fs.StringVar(&address, "for", "", "recipient address")
 	fs.BoolVar(&jsonOutput, "json", false, "emit JSON")
 	fs.StringVar(&state, "state", "", "filter by delivery state")
 
 	if err := fs.Parse(args); err != nil {
 		return nil, err
 	}
-	if err := requireFlag(alias, "--for"); err != nil {
+	if err := requireFlag(address, "--for"); err != nil {
 		return nil, err
 	}
 
 	params := ListParams{
-		Alias: alias,
-		State: state,
+		Address: address,
+		State:   state,
 	}
 
 	return func(ctx context.Context, store *Store) error {
@@ -256,12 +256,12 @@ func (a *App) prepareRecvCommand(args []string) (preparedCommand, error) {
 	fs := flag.NewFlagSet("agent-mailbox recv", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 
-	var aliases stringListFlag
+	var addresses stringListFlag
 	var wait bool
 	var timeout time.Duration
 	var jsonOutput bool
 
-	fs.Var(&aliases, "for", "recipient alias (repeatable)")
+	fs.Var(&addresses, "for", "recipient address (repeatable)")
 	fs.BoolVar(&wait, "wait", false, "wait for a claimable delivery")
 	fs.DurationVar(&timeout, "timeout", 0, "maximum time to wait when --wait is set")
 	fs.BoolVar(&jsonOutput, "json", false, "emit JSON")
@@ -269,7 +269,7 @@ func (a *App) prepareRecvCommand(args []string) (preparedCommand, error) {
 	if err := fs.Parse(args); err != nil {
 		return nil, err
 	}
-	normalizedAliases, err := normalizeAliases("", []string(aliases), "--for")
+	normalizedAddresses, err := normalizeAddresses("", []string(addresses), "--for")
 	if err != nil {
 		return nil, err
 	}
@@ -281,9 +281,9 @@ func (a *App) prepareRecvCommand(args []string) (preparedCommand, error) {
 	}
 
 	params := ReceiveParams{
-		Aliases: normalizedAliases,
-		Wait:    wait,
-		Timeout: timeout,
+		Addresses: normalizedAddresses,
+		Wait:      wait,
+		Timeout:   timeout,
 	}
 
 	return func(ctx context.Context, store *Store) error {
@@ -298,7 +298,7 @@ func (a *App) prepareRecvCommand(args []string) (preparedCommand, error) {
 			return encoder.Encode(message)
 		}
 
-		fmt.Fprintf(a.stdout, "delivery_id=%s message_id=%s recipient_alias=%s lease_token=%s lease_expires_at=%s subject=%q\n", message.DeliveryID, message.MessageID, message.RecipientAlias, message.LeaseToken, message.LeaseExpiresAt, message.Subject)
+		fmt.Fprintf(a.stdout, "delivery_id=%s message_id=%s recipient_address=%s lease_token=%s lease_expires_at=%s subject=%q\n", message.DeliveryID, message.MessageID, message.RecipientAddress, message.LeaseToken, message.LeaseExpiresAt, message.Subject)
 		fmt.Fprint(a.stdout, message.Body)
 		if !strings.HasSuffix(message.Body, "\n") {
 			fmt.Fprintln(a.stdout)
@@ -311,12 +311,12 @@ func (a *App) prepareWatchCommand(args []string) (preparedCommand, error) {
 	fs := flag.NewFlagSet("agent-mailbox watch", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 
-	var aliases stringListFlag
+	var addresses stringListFlag
 	var timeout time.Duration
 	var jsonOutput bool
 	var state string
 
-	fs.Var(&aliases, "for", "recipient alias (repeatable)")
+	fs.Var(&addresses, "for", "recipient address (repeatable)")
 	fs.DurationVar(&timeout, "timeout", 0, "maximum idle time before watch exits")
 	fs.BoolVar(&jsonOutput, "json", false, "emit NDJSON")
 	fs.StringVar(&state, "state", "", "filter by delivery state")
@@ -324,7 +324,7 @@ func (a *App) prepareWatchCommand(args []string) (preparedCommand, error) {
 	if err := fs.Parse(args); err != nil {
 		return nil, err
 	}
-	normalizedAliases, err := normalizeAliases("", []string(aliases), "--for")
+	normalizedAddresses, err := normalizeAddresses("", []string(addresses), "--for")
 	if err != nil {
 		return nil, err
 	}
@@ -333,9 +333,9 @@ func (a *App) prepareWatchCommand(args []string) (preparedCommand, error) {
 	}
 
 	params := WatchParams{
-		Aliases: normalizedAliases,
-		State:   state,
-		Timeout: timeout,
+		Addresses: normalizedAddresses,
+		State:     state,
+		Timeout:   timeout,
 	}
 
 	return func(ctx context.Context, store *Store) error {
@@ -351,9 +351,9 @@ func (a *App) prepareWatchCommand(args []string) (preparedCommand, error) {
 
 			fmt.Fprintf(
 				a.stdout,
-				"delivery_id=%s recipient_alias=%s state=%s visible_at=%s subject=%q\n",
+				"delivery_id=%s recipient_address=%s state=%s visible_at=%s subject=%q\n",
 				delivery.DeliveryID,
-				delivery.RecipientAlias,
+				delivery.RecipientAddress,
 				delivery.State,
 				delivery.VisibleAt,
 				delivery.Subject,
@@ -501,12 +501,12 @@ func requireFlag(value, name string) error {
 	return nil
 }
 
-func normalizeAliases(alias string, aliases []string, flagName string) ([]string, error) {
-	values := make([]string, 0, len(aliases)+1)
-	if alias != "" {
-		values = append(values, alias)
+func normalizeAddresses(address string, addresses []string, flagName string) ([]string, error) {
+	values := make([]string, 0, len(addresses)+1)
+	if address != "" {
+		values = append(values, address)
 	}
-	values = append(values, aliases...)
+	values = append(values, addresses...)
 
 	normalized := make([]string, 0, len(values))
 	seen := make(map[string]struct{}, len(values))

@@ -10,14 +10,14 @@ import (
 )
 
 type WatchParams struct {
-	Alias   string
-	Aliases []string
-	State   string
-	Timeout time.Duration
+	Address   string
+	Addresses []string
+	State     string
+	Timeout   time.Duration
 }
 
 func (s *Store) Watch(ctx context.Context, params WatchParams, emit func(ListedDelivery) error) error {
-	recipients, err := s.resolveRecipients(ctx, params.Alias, params.Aliases, "--for")
+	recipients, err := s.resolveRecipients(ctx, params.Address, params.Addresses, "--for")
 	if err != nil {
 		return err
 	}
@@ -89,10 +89,10 @@ func (s *Store) listDeliveriesForRecipients(ctx context.Context, recipients []re
 		return nil, nil
 	}
 
-	aliasByEndpointID := make(map[string]string, len(recipients))
+	addressByEndpointID := make(map[string]string, len(recipients))
 	recipientEndpointIDs := make([]string, 0, len(recipients))
 	for _, recipient := range recipients {
-		aliasByEndpointID[recipient.EndpointID] = recipient.Alias
+		addressByEndpointID[recipient.EndpointID] = recipient.Address
 		recipientEndpointIDs = append(recipientEndpointIDs, recipient.EndpointID)
 	}
 
@@ -164,7 +164,7 @@ ORDER BY d.visible_at ASC, m.created_at ASC, d.delivery_id ASC
 		); err != nil {
 			return nil, fmt.Errorf("scan delivery row: %w", err)
 		}
-		delivery.RecipientAlias = aliasByEndpointID[delivery.RecipientEndpointID]
+		delivery.RecipientAddress = addressByEndpointID[delivery.RecipientEndpointID]
 		if senderID.Valid {
 			delivery.SenderEndpointID = &senderID.String
 		}
@@ -185,7 +185,7 @@ func watchFingerprint(delivery ListedDelivery) string {
 
 	parts := []string{
 		delivery.MessageID,
-		delivery.RecipientAlias,
+		delivery.RecipientAddress,
 		delivery.RecipientEndpointID,
 		senderEndpointID,
 		delivery.State,

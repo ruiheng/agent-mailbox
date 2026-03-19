@@ -24,7 +24,7 @@ func TestReceiveReclaimsExpiredLeaseAndRejectsStaleToken(t *testing.T) {
 
 	sent := mustSendMessage(t, store, "workflow/reviewer/task-123", "agent/sender", "review request", "hello reviewer")
 
-	first, err := store.Receive(context.Background(), ReceiveParams{Alias: "workflow/reviewer/task-123"})
+	first, err := store.Receive(context.Background(), ReceiveParams{Address: "workflow/reviewer/task-123"})
 	if err != nil {
 		t.Fatalf("Receive(first) error = %v", err)
 	}
@@ -37,7 +37,7 @@ func TestReceiveReclaimsExpiredLeaseAndRejectsStaleToken(t *testing.T) {
 
 	current = current.Add(defaultLeaseTimeout + time.Second)
 
-	second, err := store.Receive(context.Background(), ReceiveParams{Alias: "workflow/reviewer/task-123"})
+	second, err := store.Receive(context.Background(), ReceiveParams{Address: "workflow/reviewer/task-123"})
 	if err != nil {
 		t.Fatalf("Receive(second) error = %v", err)
 	}
@@ -81,7 +81,7 @@ func TestReleaseDeferAndReceiveTimeout(t *testing.T) {
 	mustRegisterEndpoint(t, store, "agent/sender")
 	mustSendMessage(t, store, "workflow/reviewer/task-123", "agent/sender", "review request", "hello reviewer")
 
-	first, err := store.Receive(context.Background(), ReceiveParams{Alias: "workflow/reviewer/task-123"})
+	first, err := store.Receive(context.Background(), ReceiveParams{Address: "workflow/reviewer/task-123"})
 	if err != nil {
 		t.Fatalf("Receive(first) error = %v", err)
 	}
@@ -94,7 +94,7 @@ func TestReleaseDeferAndReceiveTimeout(t *testing.T) {
 		t.Fatalf("Release() state = %q, want queued", released.State)
 	}
 
-	second, err := store.Receive(context.Background(), ReceiveParams{Alias: "workflow/reviewer/task-123"})
+	second, err := store.Receive(context.Background(), ReceiveParams{Address: "workflow/reviewer/task-123"})
 	if err != nil {
 		t.Fatalf("Receive(second) error = %v", err)
 	}
@@ -108,7 +108,7 @@ func TestReleaseDeferAndReceiveTimeout(t *testing.T) {
 		t.Fatalf("Defer() visible_at = %q, want %q", deferred.VisibleAt, formatTimestamp(until))
 	}
 
-	visible, err := store.List(context.Background(), ListParams{Alias: "workflow/reviewer/task-123"})
+	visible, err := store.List(context.Background(), ListParams{Address: "workflow/reviewer/task-123"})
 	if err != nil {
 		t.Fatalf("List(visible queued) error = %v", err)
 	}
@@ -116,7 +116,7 @@ func TestReleaseDeferAndReceiveTimeout(t *testing.T) {
 		t.Fatalf("len(visible queued) = %d, want 0", len(visible))
 	}
 
-	queued, err := store.List(context.Background(), ListParams{Alias: "workflow/reviewer/task-123", State: "queued"})
+	queued, err := store.List(context.Background(), ListParams{Address: "workflow/reviewer/task-123", State: "queued"})
 	if err != nil {
 		t.Fatalf("List(all queued) error = %v", err)
 	}
@@ -128,7 +128,7 @@ func TestReleaseDeferAndReceiveTimeout(t *testing.T) {
 	}
 
 	if _, err := store.Receive(context.Background(), ReceiveParams{
-		Alias:   "workflow/empty",
+		Address: "workflow/empty",
 		Wait:    true,
 		Timeout: 30 * time.Millisecond,
 	}); !errors.Is(err, ErrNoMessage) {
@@ -136,7 +136,7 @@ func TestReleaseDeferAndReceiveTimeout(t *testing.T) {
 	}
 }
 
-func TestReceiveMultipleAliasesOrdersUnionOldestFirst(t *testing.T) {
+func TestReceiveMultipleAddressesOrdersUnionOldestFirst(t *testing.T) {
 	t.Parallel()
 
 	runtime, store := newLeaseTestStore(t)
@@ -156,7 +156,7 @@ func TestReceiveMultipleAliasesOrdersUnionOldestFirst(t *testing.T) {
 	newer := mustSendMessage(t, store, "workflow/newer", "agent/sender", "newer", "newer body")
 
 	first, err := store.Receive(context.Background(), ReceiveParams{
-		Aliases: []string{"workflow/newer", "workflow/older", "workflow/newer"},
+		Addresses: []string{"workflow/newer", "workflow/older", "workflow/newer"},
 	})
 	if err != nil {
 		t.Fatalf("Receive(first multi) error = %v", err)
@@ -164,8 +164,8 @@ func TestReceiveMultipleAliasesOrdersUnionOldestFirst(t *testing.T) {
 	if first.DeliveryID != older.DeliveryID {
 		t.Fatalf("Receive(first multi) delivery id = %q, want %q", first.DeliveryID, older.DeliveryID)
 	}
-	if first.RecipientAlias != "workflow/older" {
-		t.Fatalf("Receive(first multi) recipient alias = %q, want workflow/older", first.RecipientAlias)
+	if first.RecipientAddress != "workflow/older" {
+		t.Fatalf("Receive(first multi) recipient address = %q, want workflow/older", first.RecipientAddress)
 	}
 
 	if _, err := store.Ack(context.Background(), first.DeliveryID, first.LeaseToken); err != nil {
@@ -173,7 +173,7 @@ func TestReceiveMultipleAliasesOrdersUnionOldestFirst(t *testing.T) {
 	}
 
 	second, err := store.Receive(context.Background(), ReceiveParams{
-		Aliases: []string{"workflow/newer", "workflow/older", "workflow/newer"},
+		Addresses: []string{"workflow/newer", "workflow/older", "workflow/newer"},
 	})
 	if err != nil {
 		t.Fatalf("Receive(second multi) error = %v", err)
@@ -181,12 +181,12 @@ func TestReceiveMultipleAliasesOrdersUnionOldestFirst(t *testing.T) {
 	if second.DeliveryID != newer.DeliveryID {
 		t.Fatalf("Receive(second multi) delivery id = %q, want %q", second.DeliveryID, newer.DeliveryID)
 	}
-	if second.RecipientAlias != "workflow/newer" {
-		t.Fatalf("Receive(second multi) recipient alias = %q, want workflow/newer", second.RecipientAlias)
+	if second.RecipientAddress != "workflow/newer" {
+		t.Fatalf("Receive(second multi) recipient address = %q, want workflow/newer", second.RecipientAddress)
 	}
 }
 
-func TestReceiveMultipleAliasesUsesDeliveryIDTiebreak(t *testing.T) {
+func TestReceiveMultipleAddressesUsesDeliveryIDTiebreak(t *testing.T) {
 	t.Parallel()
 
 	runtime, store := newLeaseTestStore(t)
@@ -205,14 +205,14 @@ func TestReceiveMultipleAliasesUsesDeliveryIDTiebreak(t *testing.T) {
 	beta := mustSendMessage(t, store, "workflow/beta", "agent/sender", "beta", "beta body")
 
 	wantDeliveryID := alpha.DeliveryID
-	wantAlias := "workflow/alpha"
+	wantAddress := "workflow/alpha"
 	if beta.DeliveryID < wantDeliveryID {
 		wantDeliveryID = beta.DeliveryID
-		wantAlias = "workflow/beta"
+		wantAddress = "workflow/beta"
 	}
 
 	message, err := store.Receive(context.Background(), ReceiveParams{
-		Aliases: []string{"workflow/beta", "workflow/alpha"},
+		Addresses: []string{"workflow/beta", "workflow/alpha"},
 	})
 	if err != nil {
 		t.Fatalf("Receive(tiebreak multi) error = %v", err)
@@ -220,12 +220,12 @@ func TestReceiveMultipleAliasesUsesDeliveryIDTiebreak(t *testing.T) {
 	if message.DeliveryID != wantDeliveryID {
 		t.Fatalf("Receive(tiebreak multi) delivery id = %q, want %q", message.DeliveryID, wantDeliveryID)
 	}
-	if message.RecipientAlias != wantAlias {
-		t.Fatalf("Receive(tiebreak multi) recipient alias = %q, want %q", message.RecipientAlias, wantAlias)
+	if message.RecipientAddress != wantAddress {
+		t.Fatalf("Receive(tiebreak multi) recipient address = %q, want %q", message.RecipientAddress, wantAddress)
 	}
 }
 
-func TestReceiveMultipleAliasesReclaimsExpiredLeaseAcrossUnion(t *testing.T) {
+func TestReceiveMultipleAddressesReclaimsExpiredLeaseAcrossUnion(t *testing.T) {
 	t.Parallel()
 
 	runtime, store := newLeaseTestStore(t)
@@ -241,7 +241,7 @@ func TestReceiveMultipleAliasesReclaimsExpiredLeaseAcrossUnion(t *testing.T) {
 	mustRegisterEndpoint(t, store, "agent/sender")
 
 	reclaimed := mustSendMessage(t, store, "workflow/reclaim", "agent/sender", "reclaim me", "reclaim body")
-	first, err := store.Receive(context.Background(), ReceiveParams{Alias: "workflow/reclaim"})
+	first, err := store.Receive(context.Background(), ReceiveParams{Address: "workflow/reclaim"})
 	if err != nil {
 		t.Fatalf("Receive(initial reclaim) error = %v", err)
 	}
@@ -250,7 +250,7 @@ func TestReceiveMultipleAliasesReclaimsExpiredLeaseAcrossUnion(t *testing.T) {
 	fresh := mustSendMessage(t, store, "workflow/fresh", "agent/sender", "fresh", "fresh body")
 
 	second, err := store.Receive(context.Background(), ReceiveParams{
-		Aliases: []string{"workflow/fresh", "workflow/reclaim"},
+		Addresses: []string{"workflow/fresh", "workflow/reclaim"},
 	})
 	if err != nil {
 		t.Fatalf("Receive(reclaim multi) error = %v", err)
@@ -258,8 +258,8 @@ func TestReceiveMultipleAliasesReclaimsExpiredLeaseAcrossUnion(t *testing.T) {
 	if second.DeliveryID != reclaimed.DeliveryID {
 		t.Fatalf("Receive(reclaim multi) delivery id = %q, want %q", second.DeliveryID, reclaimed.DeliveryID)
 	}
-	if second.RecipientAlias != "workflow/reclaim" {
-		t.Fatalf("Receive(reclaim multi) recipient alias = %q, want workflow/reclaim", second.RecipientAlias)
+	if second.RecipientAddress != "workflow/reclaim" {
+		t.Fatalf("Receive(reclaim multi) recipient address = %q, want workflow/reclaim", second.RecipientAddress)
 	}
 	if second.LeaseToken == first.LeaseToken {
 		t.Fatal("Receive(reclaim multi) reused the expired lease token")
@@ -270,7 +270,7 @@ func TestReceiveMultipleAliasesReclaimsExpiredLeaseAcrossUnion(t *testing.T) {
 	}
 
 	third, err := store.Receive(context.Background(), ReceiveParams{
-		Aliases: []string{"workflow/fresh", "workflow/reclaim"},
+		Addresses: []string{"workflow/fresh", "workflow/reclaim"},
 	})
 	if err != nil {
 		t.Fatalf("Receive(fresh after reclaim) error = %v", err)
@@ -297,7 +297,7 @@ func TestFailRetryPolicyDeadLettersAfterThirdFailure(t *testing.T) {
 	sent := mustSendMessage(t, store, "workflow/reviewer/task-123", "agent/sender", "review request", "hello reviewer")
 
 	for attempt := 1; attempt <= 3; attempt++ {
-		message, err := store.Receive(context.Background(), ReceiveParams{Alias: "workflow/reviewer/task-123"})
+		message, err := store.Receive(context.Background(), ReceiveParams{Address: "workflow/reviewer/task-123"})
 		if err != nil {
 			t.Fatalf("Receive(attempt %d) error = %v", attempt, err)
 		}
@@ -321,7 +321,7 @@ func TestFailRetryPolicyDeadLettersAfterThirdFailure(t *testing.T) {
 		current = current.Add(time.Second)
 	}
 
-	deadLetters, err := store.List(context.Background(), ListParams{Alias: "workflow/reviewer/task-123", State: "dead_letter"})
+	deadLetters, err := store.List(context.Background(), ListParams{Address: "workflow/reviewer/task-123", State: "dead_letter"})
 	if err != nil {
 		t.Fatalf("List(dead_letter) error = %v", err)
 	}
@@ -356,20 +356,20 @@ func newLeaseTestStore(t *testing.T) (*Runtime, *Store) {
 	return runtime, runtime.Store()
 }
 
-func mustRegisterEndpoint(t *testing.T, store *Store, alias string) {
+func mustRegisterEndpoint(t *testing.T, store *Store, address string) {
 	t.Helper()
 
-	if _, err := store.RegisterEndpoint(context.Background(), alias); err != nil {
-		t.Fatalf("RegisterEndpoint(%q) error = %v", alias, err)
+	if _, err := store.RegisterEndpoint(context.Background(), address); err != nil {
+		t.Fatalf("RegisterEndpoint(%q) error = %v", address, err)
 	}
 }
 
-func mustSendMessage(t *testing.T, store *Store, toAlias, fromAlias, subject, body string) SendResult {
+func mustSendMessage(t *testing.T, store *Store, toAddress, fromAddress, subject, body string) SendResult {
 	t.Helper()
 
 	result, err := store.Send(context.Background(), SendParams{
-		ToAlias:       toAlias,
-		FromAlias:     fromAlias,
+		ToAddress:     toAddress,
+		FromAddress:   fromAddress,
 		Subject:       subject,
 		ContentType:   "text/plain",
 		SchemaVersion: "v1",

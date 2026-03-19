@@ -54,7 +54,7 @@ The v1 trust boundary is one local Unix user on one machine.
 Use SQLite for authoritative mutable state:
 
 - `endpoints`
-- `endpoint_aliases`
+- `endpoint_addresses`
 - `messages`
 - `deliveries`
 - `events`
@@ -96,17 +96,17 @@ Human-friendly names are useful, but they should not be the primary key.
 Use two identity forms:
 
 - endpoint id: stable logical identity, for example `ep_01hv...`
-- alias: optional human-facing name, for example `workflow/reviewer/task-123`
+- address: optional human-facing name, for example `workflow/reviewer/task-123`
 
 Rules:
 
 - deliveries target endpoint ids
-- humans and workflows may address aliases
-- aliases resolve through a local registry
-- aliases are namespaced
-- alias uniqueness is enforced per mailbox instance
+- humans and workflows may address addresses
+- addresses resolve through a local registry
+- addresses are namespaced
+- address uniqueness is enforced per mailbox instance
 
-Recommended alias prefixes:
+Recommended address prefixes:
 
 - `user/...`
 - `agent/...`
@@ -123,11 +123,11 @@ Suggested fields:
 - `created_at`
 - `metadata_json`
 
-### Alias
+### Address
 
 Suggested fields:
 
-- `alias`
+- `address`
 - `endpoint_id`
 - `created_at`
 
@@ -257,9 +257,9 @@ agent-mailbox send --to workflow/reviewer/task-123 --subject "review request" --
 
 Behavior:
 
-- resolve the recipient alias
-- fail if the recipient alias does not exist
-- do not implicitly create endpoints or aliases during `send`
+- resolve the recipient address
+- fail if the recipient address does not exist
+- do not implicitly create endpoints or addresses during `send`
 - if `--from` is provided, resolve it to `sender_endpoint_id`
 - if `--from` is omitted, store `sender_endpoint_id = NULL`
 - accept body input from either `--body-file <path>` or `--body-file -` for
@@ -279,16 +279,16 @@ SQLite transaction.
 ### Endpoint Registration
 
 ```text
-agent-mailbox endpoint register --alias workflow/reviewer/task-123
+agent-mailbox endpoint register --address workflow/reviewer/task-123
 ```
 
 Behavior:
 
-- create a new endpoint and bind the alias if the alias does not exist
-- if the alias already exists, return the existing endpoint id and exit success
-- make alias creation explicit before first receive
+- create a new endpoint and bind the address if the address does not exist
+- if the address already exists, return the existing endpoint id and exit success
+- make address creation explicit before first receive
 
-Alias prefixes such as `workflow/...` and `agent/...` remain useful naming
+Address prefixes such as `workflow/...` and `agent/...` remain useful naming
 conventions for humans and tooling, but they are not stored as a separate
 endpoint type field in the mailbox state.
 
@@ -303,9 +303,9 @@ Behavior:
 - if `--wait` is not provided, attempt one immediate claim
 - if `--wait` is provided, block until a message becomes claimable or until an
   optional timeout expires
-- require at least one `--for` alias; repeated `--for` flags search the union
+- require at least one `--for` address; repeated `--for` flags search the union
   of the requested inboxes
-- if any requested alias does not resolve, fail the whole command
+- if any requested address does not resolve, fail the whole command
 - atomically select the oldest visible queued delivery across the eligible union
 - selection order is `visible_at`, then `message_created_at`, then `delivery_id`
 - transition it to `leased`
@@ -330,8 +330,8 @@ Blocking wait in v1 is implemented by polling SQLite with adaptive backoff.
 The recommended schedule starts around `50ms`, grows up to about `1s`, and
 resets after a successful claim.
 This avoids a daemon dependency while keeping latency acceptable for local use.
-No fairness or alias rotation guarantee is made in v1 while waiting across
-multiple aliases.
+No fairness or address rotation guarantee is made in v1 while waiting across
+multiple addresses.
 
 ### Watch
 
@@ -341,9 +341,9 @@ agent-mailbox watch --for workflow/reviewer/task-123 --for workflow/reviewer/tas
 
 Behavior:
 
-- require at least one `--for` alias; repeated `--for` flags watch the union of
+- require at least one `--for` address; repeated `--for` flags watch the union of
   the requested inboxes
-- if any requested alias does not resolve, fail the whole command
+- if any requested address does not resolve, fail the whole command
 - default watch scope is currently visible queued deliveries
 - `--state <state>` may watch another delivery state using the same delivery
   metadata schema as `list`
@@ -451,7 +451,7 @@ injection.
 For example, an `agent-deck` adapter would ideally send:
 
 - a short hint that new mail exists
-- the endpoint alias
+- the endpoint address
 - the command needed to fetch the next message
 
 The actual message remains in the mailbox store until a receiver explicitly
@@ -547,10 +547,10 @@ model should not assume permanent unbounded growth.
 
 Build the smallest complete slice:
 
-1. SQLite schema for `endpoints`, `endpoint_aliases`, `messages`,
+1. SQLite schema for `endpoints`, `endpoint_addresses`, `messages`,
    `deliveries`, and `events`
 2. `endpoint register`
-3. alias lookup
+3. address lookup
 4. `send`
 5. `recv --wait`
 6. `watch`

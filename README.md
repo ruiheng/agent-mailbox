@@ -7,7 +7,7 @@ sender can persist work immediately and a receiver can claim it later.
 The current MVP is intentionally narrow:
 
 - one local Unix user on one machine
-- direct mailbox delivery by endpoint alias
+- direct mailbox delivery by endpoint address
 - SQLite metadata plus blob-backed message bodies
 - explicit `send`, `recv`, `watch`, `ack`, `release`, `defer`, `fail`, and `list`
 - no daemon, no network transport, no adapter-specific correctness dependency
@@ -79,13 +79,13 @@ Use `--state-dir` for demos and tests so mailbox state stays isolated:
 
 ```bash
 MAILBOX_STATE_DIR=/tmp/mailbox-demo agent-mailbox endpoint register \
-  --alias workflow/reviewer/task-123
+  --address workflow/reviewer/task-123
 
 MAILBOX_STATE_DIR=/tmp/mailbox-demo agent-mailbox endpoint register \
-  --alias agent/sender
+  --address agent/sender
 ```
 
-Alias prefixes such as `workflow/...` or `agent/...` are naming conventions for
+Address prefixes such as `workflow/...` or `agent/...` are naming conventions for
 humans and tooling.
 
 The default state directory is:
@@ -140,10 +140,10 @@ For the full command reference, see [`docs/cli.md`](docs/cli.md).
 `recv` v1 contract for multiple `--for` flags:
 
 - repeated `--for` searches the union of the requested inboxes
-- unknown aliases fail the whole command
+- unknown addresses fail the whole command
 - selection is deterministic global oldest-first by `visible_at`, then
   `message_created_at`, then `delivery_id`
-- no fairness or alias rotation guarantee is made while waiting
+- no fairness or address rotation guarantee is made while waiting
 
 Use `list` for a one-shot snapshot, `watch` for observe-only streaming metadata,
 and `recv` when the consumer is ready to claim work and receive a lease token.

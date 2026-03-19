@@ -23,13 +23,13 @@ type Store struct {
 
 type EndpointRegistration struct {
 	EndpointID string
-	Alias      string
+	Address    string
 	Created    bool
 }
 
 type SendParams struct {
-	ToAlias       string
-	FromAlias     string
+	ToAddress     string
+	FromAddress   string
 	Subject       string
 	ContentType   string
 	SchemaVersion string
@@ -48,14 +48,14 @@ type SendResult struct {
 }
 
 type ListParams struct {
-	Alias string
-	State string
+	Address string
+	State   string
 }
 
 type ListedDelivery struct {
 	DeliveryID          string  `json:"delivery_id"`
 	MessageID           string  `json:"message_id"`
-	RecipientAlias      string  `json:"recipient_alias"`
+	RecipientAddress    string  `json:"recipient_address"`
 	RecipientEndpointID string  `json:"recipient_endpoint_id"`
 	SenderEndpointID    *string `json:"sender_endpoint_id,omitempty"`
 	State               string  `json:"state"`
@@ -79,10 +79,10 @@ func NewStore(db *sql.DB, blobDir string) *Store {
 	}
 }
 
-func (s *Store) RegisterEndpoint(ctx context.Context, alias string) (EndpointRegistration, error) {
-	alias = strings.TrimSpace(alias)
-	if alias == "" {
-		return EndpointRegistration{}, errors.New("endpoint alias is required")
+func (s *Store) RegisterEndpoint(ctx context.Context, address string) (EndpointRegistration, error) {
+	address = strings.TrimSpace(address)
+	if address == "" {
+		return EndpointRegistration{}, errors.New("endpoint address is required")
 	}
 
 	tx, err := s.db.BeginTx(ctx, nil)
@@ -94,9 +94,9 @@ func (s *Store) RegisterEndpoint(ctx context.Context, alias string) (EndpointReg
 	var endpointID string
 	row := tx.QueryRowContext(ctx, `
 SELECT endpoint_id
-FROM endpoint_aliases
-WHERE alias = ?
-`, alias)
+FROM endpoint_addresses
+WHERE address = ?
+`, address)
 
 	switch err := row.Scan(&endpointID); {
 	case errors.Is(err, sql.ErrNoRows):
@@ -118,14 +118,14 @@ VALUES (?, ?, '{}')
 		}
 
 		if _, err := tx.ExecContext(ctx, `
-INSERT INTO endpoint_aliases (alias, endpoint_id, created_at)
+INSERT INTO endpoint_addresses (address, endpoint_id, created_at)
 VALUES (?, ?, ?)
-`, alias, endpointID, timestamp); err != nil {
-			return EndpointRegistration{}, fmt.Errorf("insert endpoint alias: %w", err)
+`, address, endpointID, timestamp); err != nil {
+			return EndpointRegistration{}, fmt.Errorf("insert endpoint address: %w", err)
 		}
 
 		detailJSON, err := marshalDetail(map[string]string{
-			"alias": alias,
+			"address": address,
 		})
 		if err != nil {
 			return EndpointRegistration{}, err
@@ -143,27 +143,27 @@ VALUES (?, ?, ?, ?, ?)
 
 		return EndpointRegistration{
 			EndpointID: endpointID,
-			Alias:      alias,
+			Address:    address,
 			Created:    true,
 		}, nil
 	case err != nil:
-		return EndpointRegistration{}, fmt.Errorf("read existing endpoint alias: %w", err)
+		return EndpointRegistration{}, fmt.Errorf("read existing endpoint address: %w", err)
 	default:
 		if err := tx.Commit(); err != nil {
 			return EndpointRegistration{}, fmt.Errorf("commit endpoint lookup transaction: %w", err)
 		}
 		return EndpointRegistration{
 			EndpointID: endpointID,
-			Alias:      alias,
+			Address:    address,
 			Created:    false,
 		}, nil
 	}
 }
 
 func (s *Store) Send(ctx context.Context, params SendParams) (SendResult, error) {
-	toAlias := strings.TrimSpace(params.ToAlias)
-	if toAlias == "" {
-		return SendResult{}, errors.New("recipient alias is required")
+	toAddress := strings.TrimSpace(params.ToAddress)
+	if toAddress == "" {
+		return SendResult{}, errors.New("recipient address is required")
 	}
 	contentType := strings.TrimSpace(params.ContentType)
 	if contentType == "" {
@@ -174,16 +174,16 @@ func (s *Store) Send(ctx context.Context, params SendParams) (SendResult, error)
 		schemaVersion = "v1"
 	}
 
-	recipientEndpointID, err := s.lookupEndpointID(ctx, s.db, toAlias)
+	recipientEndpointID, err := s.lookupEndpointID(ctx, s.db, toAddress)
 	if err != nil {
-		return SendResult{}, fmt.Errorf("resolve recipient alias: %w", err)
+		return SendResult{}, fmt.Errorf("resolve recipient address: %w", err)
 	}
 
 	var senderEndpointID *string
-	if alias := strings.TrimSpace(params.FromAlias); alias != "" {
-		id, err := s.lookupEndpointID(ctx, s.db, alias)
+	if address := strings.TrimSpace(params.FromAddress); address != "" {
+		id, err := s.lookupEndpointID(ctx, s.db, address)
 		if err != nil {
-			return SendResult{}, fmt.Errorf("resolve sender alias: %w", err)
+			return SendResult{}, fmt.Errorf("resolve sender address: %w", err)
 		}
 		senderEndpointID = &id
 	}
@@ -259,8 +259,8 @@ INSERT INTO deliveries (
 	}
 
 	messageDetailJSON, err := marshalDetail(map[string]string{
-		"recipient_alias": toAlias,
-		"subject":         params.Subject,
+		"recipient_address": toAddress,
+		"subject":           params.Subject,
 	})
 	if err != nil {
 		return SendResult{}, err
@@ -273,8 +273,8 @@ VALUES (?, ?, ?, ?, ?, ?)
 	}
 
 	deliveryDetailJSON, err := marshalDetail(map[string]string{
-		"recipient_alias": toAlias,
-		"state":           "queued",
+		"recipient_address": toAddress,
+		"state":             "queued",
 	})
 	if err != nil {
 		return SendResult{}, err
@@ -303,36 +303,36 @@ VALUES (?, ?, ?, ?, ?, ?, ?)
 }
 
 func (s *Store) List(ctx context.Context, params ListParams) ([]ListedDelivery, error) {
-	alias := strings.TrimSpace(params.Alias)
-	if alias == "" {
-		return nil, errors.New("recipient alias is required")
+	address := strings.TrimSpace(params.Address)
+	if address == "" {
+		return nil, errors.New("recipient address is required")
 	}
 
-	recipientEndpointID, err := s.lookupEndpointID(ctx, s.db, alias)
+	recipientEndpointID, err := s.lookupEndpointID(ctx, s.db, address)
 	if err != nil {
-		return nil, fmt.Errorf("resolve recipient alias: %w", err)
+		return nil, fmt.Errorf("resolve recipient address: %w", err)
 	}
 
 	return s.listDeliveriesForRecipients(ctx, []resolvedRecipient{{
-		Alias:      alias,
+		Address:    address,
 		EndpointID: recipientEndpointID,
 	}}, strings.TrimSpace(params.State))
 }
 
 func (s *Store) lookupEndpointID(ctx context.Context, querier interface {
 	QueryRowContext(context.Context, string, ...any) *sql.Row
-}, alias string) (string, error) {
+}, address string) (string, error) {
 	var endpointID string
 	err := querier.QueryRowContext(ctx, `
 SELECT endpoint_id
-FROM endpoint_aliases
-WHERE alias = ?
-`, alias).Scan(&endpointID)
+FROM endpoint_addresses
+WHERE address = ?
+`, address).Scan(&endpointID)
 	if errors.Is(err, sql.ErrNoRows) {
-		return "", fmt.Errorf("alias %q not found", alias)
+		return "", fmt.Errorf("address %q not found", address)
 	}
 	if err != nil {
-		return "", fmt.Errorf("lookup alias %q: %w", alias, err)
+		return "", fmt.Errorf("lookup address %q: %w", address, err)
 	}
 	return endpointID, nil
 }
