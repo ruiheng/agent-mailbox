@@ -331,6 +331,45 @@ func TestCLIWatchTimeoutExitsCleanlyWithoutOutput(t *testing.T) {
 	}
 }
 
+func TestCLIHelpExitsZeroAndPrintsUsage(t *testing.T) {
+	testCases := []struct {
+		name         string
+		args         []string
+		wantContains string
+	}{
+		{
+			name:         "root help",
+			args:         []string{"--help"},
+			wantContains: "Usage:\n  agent-mailbox [--state-dir PATH] <command> [options]",
+		},
+		{
+			name:         "recv help",
+			args:         []string{"recv", "--help"},
+			wantContains: "Usage:\n  agent-mailbox recv --for ADDRESS [--for ADDRESS ...] [--wait] [--timeout DURATION] [--json]",
+		},
+		{
+			name:         "watch help",
+			args:         []string{"watch", "--help"},
+			wantContains: "Usage:\n  agent-mailbox watch --for ADDRESS [--for ADDRESS ...] [--state STATE] [--timeout DURATION] [--json]",
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			result := runCLI(t, "", tc.args...)
+			if result.exitCode != 0 {
+				t.Fatalf("exit code = %d, want 0; stderr = %q", result.exitCode, result.stderr)
+			}
+			if !strings.Contains(result.stdout, tc.wantContains) {
+				t.Fatalf("stdout = %q, want substring %q", result.stdout, tc.wantContains)
+			}
+			if result.stderr != "" {
+				t.Fatalf("stderr = %q, want empty", result.stderr)
+			}
+		})
+	}
+}
+
 func TestCLIHelperProcess(t *testing.T) {
 	if os.Getenv("GO_WANT_HELPER_PROCESS") != "1" {
 		return

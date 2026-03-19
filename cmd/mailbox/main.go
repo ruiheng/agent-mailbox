@@ -12,6 +12,9 @@ import (
 func main() {
 	app := mailbox.NewApp(os.Stdin, os.Stdout, os.Stderr)
 	if err := app.Run(context.Background(), os.Args[1:]); err != nil {
+		if errors.Is(err, mailbox.ErrHelpRequested) {
+			return
+		}
 		if errors.Is(err, mailbox.ErrNoMessage) {
 			os.Exit(2)
 		}

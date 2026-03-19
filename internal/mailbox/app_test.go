@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -374,6 +375,73 @@ func TestInvalidCLIPathsDoNotCreateRuntimeState(t *testing.T) {
 			err := app.Run(context.Background(), append([]string{"--state-dir", stateDir}, tc.args...))
 			if err == nil {
 				t.Fatal("Run() error = nil, want non-nil")
+			}
+
+			assertPathMissing(t, stateDir)
+			assertPathMissing(t, filepath.Join(stateDir, databaseFilename))
+			assertPathMissing(t, filepath.Join(stateDir, blobsDirName))
+		})
+	}
+}
+
+func TestHelpCLIPathsDoNotCreateRuntimeState(t *testing.T) {
+	t.Parallel()
+
+	testCases := []struct {
+		name         string
+		args         []string
+		wantContains string
+	}{
+		{
+			name:         "root help",
+			args:         []string{"--help"},
+			wantContains: "Usage:\n  agent-mailbox [--state-dir PATH] <command> [options]",
+		},
+		{
+			name:         "endpoint help",
+			args:         []string{"endpoint", "--help"},
+			wantContains: "Usage:\n  agent-mailbox endpoint <subcommand> [options]",
+		},
+		{
+			name:         "endpoint register help",
+			args:         []string{"endpoint", "register", "--help"},
+			wantContains: "Usage:\n  agent-mailbox endpoint register --address ADDRESS",
+		},
+		{
+			name:         "send help",
+			args:         []string{"send", "--help"},
+			wantContains: "Usage:\n  agent-mailbox send --to ADDRESS --body-file PATH [options]",
+		},
+		{
+			name:         "recv help",
+			args:         []string{"recv", "--help"},
+			wantContains: "Usage:\n  agent-mailbox recv --for ADDRESS [--for ADDRESS ...] [--wait] [--timeout DURATION] [--json]",
+		},
+		{
+			name:         "watch help",
+			args:         []string{"watch", "--help"},
+			wantContains: "Usage:\n  agent-mailbox watch --for ADDRESS [--for ADDRESS ...] [--state STATE] [--timeout DURATION] [--json]",
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			stateDir := filepath.Join(t.TempDir(), "mailbox-state")
+			stdout := &bytes.Buffer{}
+			stderr := &bytes.Buffer{}
+			app := NewApp(strings.NewReader(""), stdout, stderr)
+
+			err := app.Run(context.Background(), append([]string{"--state-dir", stateDir}, tc.args...))
+			if !errors.Is(err, ErrHelpRequested) {
+				t.Fatalf("Run() error = %v, want ErrHelpRequested", err)
+			}
+			if !strings.Contains(stdout.String(), tc.wantContains) {
+				t.Fatalf("stdout = %q, want substring %q", stdout.String(), tc.wantContains)
+			}
+			if stderr.Len() != 0 {
+				t.Fatalf("stderr = %q, want empty", stderr.String())
 			}
 
 			assertPathMissing(t, stateDir)

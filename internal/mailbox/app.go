@@ -12,6 +12,8 @@ import (
 	"time"
 )
 
+var ErrHelpRequested = errors.New("help requested")
+
 type App struct {
 	stdin  io.Reader
 	stdout io.Writer
@@ -40,9 +42,13 @@ func (f *stringListFlag) Set(value string) error {
 }
 
 func (a *App) Run(ctx context.Context, args []string) error {
-	stateDir, rest, err := parseGlobalArgs(args)
+	stateDir, rest, helpRequested, err := parseGlobalArgs(args)
 	if err != nil {
 		return err
+	}
+	if helpRequested {
+		a.writeRootHelp()
+		return ErrHelpRequested
 	}
 	if len(rest) == 0 {
 		return errors.New("expected a command: endpoint, send, recv, watch, ack, release, defer, fail, or list")
@@ -91,7 +97,7 @@ func (a *App) prepareCommand(args []string) (preparedCommand, error) {
 	}
 }
 
-func parseGlobalArgs(args []string) (string, []string, error) {
+func parseGlobalArgs(args []string) (string, []string, bool, error) {
 	fs := flag.NewFlagSet("agent-mailbox", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 
@@ -99,14 +105,21 @@ func parseGlobalArgs(args []string) (string, []string, error) {
 	fs.StringVar(&stateDir, "state-dir", "", "override mailbox state directory")
 
 	if err := fs.Parse(args); err != nil {
-		return "", nil, err
+		if errors.Is(err, flag.ErrHelp) {
+			return "", nil, true, nil
+		}
+		return "", nil, false, err
 	}
-	return stateDir, fs.Args(), nil
+	return stateDir, fs.Args(), false, nil
 }
 
 func (a *App) prepareEndpointCommand(args []string) (preparedCommand, error) {
 	if len(args) == 0 {
 		return nil, errors.New("expected endpoint subcommand")
+	}
+	if len(args) == 1 && isHelpArg(args[0]) {
+		a.writeEndpointHelp()
+		return nil, ErrHelpRequested
 	}
 	switch args[0] {
 	case "register":
@@ -123,7 +136,7 @@ func (a *App) prepareEndpointRegister(args []string) (preparedCommand, error) {
 	var address string
 	fs.StringVar(&address, "address", "", "endpoint address")
 
-	if err := fs.Parse(args); err != nil {
+	if err := a.parseCommandFlags(fs, args, a.writeEndpointRegisterHelp); err != nil {
 		return nil, err
 	}
 	if err := requireFlag(address, "--address"); err != nil {
@@ -159,7 +172,7 @@ func (a *App) prepareSendCommand(args []string) (preparedCommand, error) {
 	fs.StringVar(&schemaVersion, "schema-version", "v1", "sender-defined schema version")
 	fs.StringVar(&bodyFile, "body-file", "", "path to message body, or - for stdin")
 
-	if err := fs.Parse(args); err != nil {
+	if err := a.parseCommandFlags(fs, args, a.writeSendHelp); err != nil {
 		return nil, err
 	}
 	if err := requireFlag(toAddress, "--to"); err != nil {
@@ -221,7 +234,7 @@ func (a *App) prepareListCommand(args []string) (preparedCommand, error) {
 	fs.BoolVar(&jsonOutput, "json", false, "emit JSON")
 	fs.StringVar(&state, "state", "", "filter by delivery state")
 
-	if err := fs.Parse(args); err != nil {
+	if err := a.parseCommandFlags(fs, args, a.writeListHelp); err != nil {
 		return nil, err
 	}
 	if err := requireFlag(address, "--for"); err != nil {
@@ -266,7 +279,7 @@ func (a *App) prepareRecvCommand(args []string) (preparedCommand, error) {
 	fs.DurationVar(&timeout, "timeout", 0, "maximum time to wait when --wait is set")
 	fs.BoolVar(&jsonOutput, "json", false, "emit JSON")
 
-	if err := fs.Parse(args); err != nil {
+	if err := a.parseCommandFlags(fs, args, a.writeRecvHelp); err != nil {
 		return nil, err
 	}
 	normalizedAddresses, err := normalizeAddresses("", []string(addresses), "--for")
@@ -321,7 +334,7 @@ func (a *App) prepareWatchCommand(args []string) (preparedCommand, error) {
 	fs.BoolVar(&jsonOutput, "json", false, "emit NDJSON")
 	fs.StringVar(&state, "state", "", "filter by delivery state")
 
-	if err := fs.Parse(args); err != nil {
+	if err := a.parseCommandFlags(fs, args, a.writeWatchHelp); err != nil {
 		return nil, err
 	}
 	normalizedAddresses, err := normalizeAddresses("", []string(addresses), "--for")
@@ -372,7 +385,7 @@ func (a *App) prepareAckCommand(args []string) (preparedCommand, error) {
 	fs.StringVar(&deliveryID, "delivery", "", "delivery id")
 	fs.StringVar(&leaseToken, "lease-token", "", "lease token")
 
-	if err := fs.Parse(args); err != nil {
+	if err := a.parseCommandFlags(fs, args, a.writeAckHelp); err != nil {
 		return nil, err
 	}
 	if err := requireFlag(deliveryID, "--delivery"); err != nil {
@@ -401,7 +414,7 @@ func (a *App) prepareReleaseCommand(args []string) (preparedCommand, error) {
 	fs.StringVar(&deliveryID, "delivery", "", "delivery id")
 	fs.StringVar(&leaseToken, "lease-token", "", "lease token")
 
-	if err := fs.Parse(args); err != nil {
+	if err := a.parseCommandFlags(fs, args, a.writeReleaseHelp); err != nil {
 		return nil, err
 	}
 	if err := requireFlag(deliveryID, "--delivery"); err != nil {
@@ -432,7 +445,7 @@ func (a *App) prepareDeferCommand(args []string) (preparedCommand, error) {
 	fs.StringVar(&leaseToken, "lease-token", "", "lease token")
 	fs.StringVar(&untilText, "until", "", "future RFC3339 timestamp")
 
-	if err := fs.Parse(args); err != nil {
+	if err := a.parseCommandFlags(fs, args, a.writeDeferHelp); err != nil {
 		return nil, err
 	}
 	if err := requireFlag(deliveryID, "--delivery"); err != nil {
@@ -471,7 +484,7 @@ func (a *App) prepareFailCommand(args []string) (preparedCommand, error) {
 	fs.StringVar(&leaseToken, "lease-token", "", "lease token")
 	fs.StringVar(&reason, "reason", "", "failure reason")
 
-	if err := fs.Parse(args); err != nil {
+	if err := a.parseCommandFlags(fs, args, a.writeFailHelp); err != nil {
 		return nil, err
 	}
 	if err := requireFlag(deliveryID, "--delivery"); err != nil {
@@ -525,6 +538,154 @@ func normalizeAddresses(address string, addresses []string, flagName string) ([]
 		return nil, fmt.Errorf("%s is required", flagName)
 	}
 	return normalized, nil
+}
+
+func (a *App) parseCommandFlags(fs *flag.FlagSet, args []string, writeHelp func()) error {
+	if err := fs.Parse(args); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			writeHelp()
+			return ErrHelpRequested
+		}
+		return err
+	}
+	return nil
+}
+
+func isHelpArg(value string) bool {
+	return value == "-h" || value == "--help"
+}
+
+func (a *App) writeRootHelp() {
+	writeHelp(a.stdout, []string{
+		"Usage:",
+		"  agent-mailbox [--state-dir PATH] <command> [options]",
+		"",
+		"Commands:",
+		"  endpoint register   Register an endpoint address",
+		"  send                Send a message to an address",
+		"  recv                Claim the next delivery",
+		"  watch               Observe deliveries without claiming",
+		"  list                List deliveries",
+		"  ack                 Acknowledge a leased delivery",
+		"  release             Return a leased delivery to the queue",
+		"  defer               Hide a leased delivery until a future time",
+		"  fail                Record a failed delivery attempt",
+		"",
+		"Global options:",
+		"  --state-dir PATH    Override mailbox state directory",
+		"  --help              Show help",
+		"",
+		"Use \"agent-mailbox <command> --help\" for command-specific details.",
+	})
+}
+
+func (a *App) writeEndpointHelp() {
+	writeHelp(a.stdout, []string{
+		"Usage:",
+		"  agent-mailbox endpoint <subcommand> [options]",
+		"",
+		"Subcommands:",
+		"  register            Register an endpoint address",
+		"",
+		"Use \"agent-mailbox endpoint register --help\" for details.",
+	})
+}
+
+func (a *App) writeEndpointRegisterHelp() {
+	writeHelp(a.stdout, []string{
+		"Usage:",
+		"  agent-mailbox endpoint register --address ADDRESS",
+		"",
+		"Options:",
+		"  --address ADDRESS   Endpoint address to register",
+	})
+}
+
+func (a *App) writeSendHelp() {
+	writeHelp(a.stdout, []string{
+		"Usage:",
+		"  agent-mailbox send --to ADDRESS --body-file PATH [options]",
+		"",
+		"Options:",
+		"  --to ADDRESS           Recipient address",
+		"  --from ADDRESS         Sender address",
+		"  --subject TEXT         Message subject",
+		"  --content-type TYPE    Message content type",
+		"  --schema-version VER   Sender-defined schema version",
+		"  --body-file PATH|-     Read body from a file or stdin",
+	})
+}
+
+func (a *App) writeListHelp() {
+	writeHelp(a.stdout, []string{
+		"Usage:",
+		"  agent-mailbox list --for ADDRESS [--state STATE] [--json]",
+		"",
+		"Options:",
+		"  --for ADDRESS      Recipient address",
+		"  --state STATE      Filter by delivery state",
+		"  --json             Emit JSON",
+	})
+}
+
+func (a *App) writeRecvHelp() {
+	writeHelp(a.stdout, []string{
+		"Usage:",
+		"  agent-mailbox recv --for ADDRESS [--for ADDRESS ...] [--wait] [--timeout DURATION] [--json]",
+		"",
+		"Options:",
+		"  --for ADDRESS        Recipient address (repeatable)",
+		"  --wait               Wait for a claimable delivery",
+		"  --timeout DURATION   Maximum time to wait when --wait is set",
+		"  --json               Emit JSON",
+	})
+}
+
+func (a *App) writeWatchHelp() {
+	writeHelp(a.stdout, []string{
+		"Usage:",
+		"  agent-mailbox watch --for ADDRESS [--for ADDRESS ...] [--state STATE] [--timeout DURATION] [--json]",
+		"",
+		"Options:",
+		"  --for ADDRESS        Recipient address (repeatable)",
+		"  --state STATE        Filter by delivery state",
+		"  --timeout DURATION   Maximum idle time before watch exits",
+		"  --json               Emit NDJSON",
+	})
+}
+
+func (a *App) writeAckHelp() {
+	writeHelp(a.stdout, []string{
+		"Usage:",
+		"  agent-mailbox ack --delivery ID --lease-token TOKEN",
+	})
+}
+
+func (a *App) writeReleaseHelp() {
+	writeHelp(a.stdout, []string{
+		"Usage:",
+		"  agent-mailbox release --delivery ID --lease-token TOKEN",
+	})
+}
+
+func (a *App) writeDeferHelp() {
+	writeHelp(a.stdout, []string{
+		"Usage:",
+		"  agent-mailbox defer --delivery ID --lease-token TOKEN --until RFC3339",
+	})
+}
+
+func (a *App) writeFailHelp() {
+	writeHelp(a.stdout, []string{
+		"Usage:",
+		"  agent-mailbox fail --delivery ID --lease-token TOKEN --reason TEXT",
+	})
+}
+
+func writeHelp(w io.Writer, lines []string) {
+	for _, line := range lines {
+		fmt.Fprintln(w, line)
+	}
 }
 
 func flagWasProvided(fs *flag.FlagSet, name string) bool {
