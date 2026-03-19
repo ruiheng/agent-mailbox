@@ -146,7 +146,7 @@ func TestCLIHelperProcess(t *testing.T) {
 		os.Exit(97)
 	}
 
-	os.Args = append([]string{"mailbox"}, os.Args[separator+1:]...)
+	os.Args = append([]string{"agent-mailbox"}, os.Args[separator+1:]...)
 	main()
 	os.Exit(0)
 }

@@ -79,7 +79,7 @@ func (a *App) prepareCommand(args []string) (preparedCommand, error) {
 }
 
 func parseGlobalArgs(args []string) (string, []string, error) {
-	fs := flag.NewFlagSet("mailbox", flag.ContinueOnError)
+	fs := flag.NewFlagSet("agent-mailbox", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 
 	var stateDir string
@@ -104,7 +104,7 @@ func (a *App) prepareEndpointCommand(args []string) (preparedCommand, error) {
 }
 
 func (a *App) prepareEndpointRegister(args []string) (preparedCommand, error) {
-	fs := flag.NewFlagSet("mailbox endpoint register", flag.ContinueOnError)
+	fs := flag.NewFlagSet("agent-mailbox endpoint register", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 
 	var alias string
@@ -134,7 +134,7 @@ func (a *App) prepareEndpointRegister(args []string) (preparedCommand, error) {
 }
 
 func (a *App) prepareSendCommand(args []string) (preparedCommand, error) {
-	fs := flag.NewFlagSet("mailbox send", flag.ContinueOnError)
+	fs := flag.NewFlagSet("agent-mailbox send", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 
 	var toAlias string
@@ -203,7 +203,7 @@ func (a *App) readBody(bodyFile string) ([]byte, error) {
 }
 
 func (a *App) prepareListCommand(args []string) (preparedCommand, error) {
-	fs := flag.NewFlagSet("mailbox list", flag.ContinueOnError)
+	fs := flag.NewFlagSet("agent-mailbox list", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 
 	var alias string
@@ -245,7 +245,7 @@ func (a *App) prepareListCommand(args []string) (preparedCommand, error) {
 }
 
 func (a *App) prepareRecvCommand(args []string) (preparedCommand, error) {
-	fs := flag.NewFlagSet("mailbox recv", flag.ContinueOnError)
+	fs := flag.NewFlagSet("agent-mailbox recv", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 
 	var alias string
@@ -299,7 +299,7 @@ func (a *App) prepareRecvCommand(args []string) (preparedCommand, error) {
 }
 
 func (a *App) prepareAckCommand(args []string) (preparedCommand, error) {
-	fs := flag.NewFlagSet("mailbox ack", flag.ContinueOnError)
+	fs := flag.NewFlagSet("agent-mailbox ack", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 
 	var deliveryID string
@@ -328,7 +328,7 @@ func (a *App) prepareAckCommand(args []string) (preparedCommand, error) {
 }
 
 func (a *App) prepareReleaseCommand(args []string) (preparedCommand, error) {
-	fs := flag.NewFlagSet("mailbox release", flag.ContinueOnError)
+	fs := flag.NewFlagSet("agent-mailbox release", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 
 	var deliveryID string
@@ -357,7 +357,7 @@ func (a *App) prepareReleaseCommand(args []string) (preparedCommand, error) {
 }
 
 func (a *App) prepareDeferCommand(args []string) (preparedCommand, error) {
-	fs := flag.NewFlagSet("mailbox defer", flag.ContinueOnError)
+	fs := flag.NewFlagSet("agent-mailbox defer", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 
 	var deliveryID string
@@ -396,7 +396,7 @@ func (a *App) prepareDeferCommand(args []string) (preparedCommand, error) {
 }
 
 func (a *App) prepareFailCommand(args []string) (preparedCommand, error) {
-	fs := flag.NewFlagSet("mailbox fail", flag.ContinueOnError)
+	fs := flag.NewFlagSet("agent-mailbox fail", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 
 	var deliveryID string

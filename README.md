@@ -36,7 +36,7 @@ make build
 This produces:
 
 ```text
-./bin/mailbox
+./bin/agent-mailbox
 ```
 
 Run the full test suite:
@@ -78,10 +78,10 @@ reference, see [`docs/cli.md`](docs/cli.md).
 Use `--state-dir` for demos and tests so mailbox state stays isolated:
 
 ```bash
-MAILBOX_STATE_DIR=/tmp/mailbox-demo ./bin/mailbox endpoint register \
+MAILBOX_STATE_DIR=/tmp/mailbox-demo agent-mailbox endpoint register \
   --alias workflow/reviewer/task-123 --kind workflow
 
-MAILBOX_STATE_DIR=/tmp/mailbox-demo ./bin/mailbox endpoint register \
+MAILBOX_STATE_DIR=/tmp/mailbox-demo agent-mailbox endpoint register \
   --alias agent/sender --kind agent
 ```
 
@@ -99,7 +99,7 @@ Send a message from stdin:
 
 ```bash
 printf 'review request body\n' | \
-./bin/mailbox --state-dir /tmp/mailbox-demo \
+agent-mailbox --state-dir /tmp/mailbox-demo \
   send --to workflow/reviewer/task-123 --from agent/sender \
   --subject "review request" --body-file -
 ```
@@ -107,14 +107,14 @@ printf 'review request body\n' | \
 Receive the next claimable message:
 
 ```bash
-./bin/mailbox --state-dir /tmp/mailbox-demo \
+agent-mailbox --state-dir /tmp/mailbox-demo \
   recv --for workflow/reviewer/task-123 --json
 ```
 
 Ack the leased delivery using the returned `delivery_id` and `lease_token`:
 
 ```bash
-./bin/mailbox --state-dir /tmp/mailbox-demo \
+agent-mailbox --state-dir /tmp/mailbox-demo \
   ack --delivery <delivery_id> --lease-token <lease_token>
 ```
 

@@ -1,7 +1,7 @@
 GO ?= go
 CMD_PATH ?= ./cmd/mailbox
 BIN_DIR ?= bin
-BINARY_NAME ?= mailbox
+BINARY_NAME ?= agent-mailbox
 PREFIX ?= /usr/local
 DESTDIR ?=
 INSTALL_DIR ?= $(PREFIX)/bin
@@ -12,7 +12,7 @@ BUILD_OUTPUT := $(BIN_DIR)/$(BINARY_NAME)
 help:
 	@printf '%s\n' \
 		'Available targets:' \
-		'  make build                 Build the mailbox CLI into $(BUILD_OUTPUT)' \
+		'  make build                 Build the agent-mailbox CLI into $(BUILD_OUTPUT)' \
 		'  make test                  Run the Go test suite' \
 		'  make run ARGS="..."        Run the CLI with go run and pass ARGS through' \
 		'  make install               Install the built CLI into $(DESTDIR)$(INSTALL_DIR)' \

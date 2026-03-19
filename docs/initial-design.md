@@ -253,7 +253,7 @@ Recommended exit codes:
 ### Send
 
 ```text
-mailbox send --to workflow/reviewer/task-123 --subject "review request" --body-file /abs/path/request.md
+agent-mailbox send --to workflow/reviewer/task-123 --subject "review request" --body-file /abs/path/request.md
 ```
 
 Behavior:
@@ -280,7 +280,7 @@ SQLite transaction.
 ### Endpoint Registration
 
 ```text
-mailbox endpoint register --alias workflow/reviewer/task-123 --kind workflow
+agent-mailbox endpoint register --alias workflow/reviewer/task-123 --kind workflow
 ```
 
 Behavior:
@@ -294,7 +294,7 @@ Behavior:
 ### Receive
 
 ```text
-mailbox recv --for workflow/reviewer/task-123 --wait --timeout 30s --json
+agent-mailbox recv --for workflow/reviewer/task-123 --wait --timeout 30s --json
 ```
 
 Behavior:
@@ -329,7 +329,7 @@ This avoids a daemon dependency while keeping latency acceptable for local use.
 ### Ack
 
 ```text
-mailbox ack --delivery <delivery_id> --lease-token <lease_token>
+agent-mailbox ack --delivery <delivery_id> --lease-token <lease_token>
 ```
 
 Behavior:
@@ -340,7 +340,7 @@ Behavior:
 ### Release
 
 ```text
-mailbox release --delivery <delivery_id> --lease-token <lease_token>
+agent-mailbox release --delivery <delivery_id> --lease-token <lease_token>
 ```
 
 Behavior:
@@ -352,7 +352,7 @@ Behavior:
 ### Defer
 
 ```text
-mailbox defer --delivery <delivery_id> --lease-token <lease_token> --until 2026-03-18T12:00:00Z
+agent-mailbox defer --delivery <delivery_id> --lease-token <lease_token> --until 2026-03-18T12:00:00Z
 ```
 
 Behavior:
@@ -364,7 +364,7 @@ Behavior:
 ### Fail
 
 ```text
-mailbox fail --delivery <delivery_id> --lease-token <lease_token> --reason "tool crashed"
+agent-mailbox fail --delivery <delivery_id> --lease-token <lease_token> --reason "tool crashed"
 ```
 
 Behavior:
@@ -380,7 +380,7 @@ Failure handling is fixed in v1 so behavior is testable and predictable.
 ### List
 
 ```text
-mailbox list --for workflow/reviewer/task-123 --json
+agent-mailbox list --for workflow/reviewer/task-123 --json
 ```
 
 Behavior:
