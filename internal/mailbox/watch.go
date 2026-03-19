@@ -1,0 +1,202 @@
+package mailbox
+
+import (
+	"context"
+	"database/sql"
+	"fmt"
+	"strconv"
+	"strings"
+	"time"
+)
+
+type WatchParams struct {
+	Alias   string
+	Aliases []string
+	State   string
+	Timeout time.Duration
+}
+
+func (s *Store) Watch(ctx context.Context, params WatchParams, emit func(ListedDelivery) error) error {
+	recipients, err := s.resolveRecipients(ctx, params.Alias, params.Aliases, "--for")
+	if err != nil {
+		return err
+	}
+
+	state := strings.TrimSpace(params.State)
+	emitted := make(map[string]string)
+	idleDeadline := time.Time{}
+	if params.Timeout > 0 {
+		idleDeadline = time.Now().Add(params.Timeout)
+	}
+
+	delay := initialPollDelay
+	for {
+		deliveries, err := s.listDeliveriesForRecipients(ctx, recipients, state)
+		if err != nil {
+			return err
+		}
+
+		observedNewDelivery := false
+		for _, delivery := range deliveries {
+			fingerprint := watchFingerprint(delivery)
+			if emitted[delivery.DeliveryID] == fingerprint {
+				continue
+			}
+			if err := emit(delivery); err != nil {
+				return err
+			}
+			emitted[delivery.DeliveryID] = fingerprint
+			observedNewDelivery = true
+		}
+
+		if observedNewDelivery {
+			delay = initialPollDelay
+			if params.Timeout > 0 {
+				idleDeadline = time.Now().Add(params.Timeout)
+			}
+		} else if delay < maxPollDelay {
+			delay *= 2
+			if delay > maxPollDelay {
+				delay = maxPollDelay
+			}
+		}
+
+		waitFor := delay
+		if !idleDeadline.IsZero() {
+			remaining := time.Until(idleDeadline)
+			if remaining <= 0 {
+				return nil
+			}
+			if waitFor > remaining {
+				waitFor = remaining
+			}
+		}
+
+		timer := time.NewTimer(waitFor)
+		select {
+		case <-ctx.Done():
+			if !timer.Stop() {
+				<-timer.C
+			}
+			return ctx.Err()
+		case <-timer.C:
+		}
+	}
+}
+
+func (s *Store) listDeliveriesForRecipients(ctx context.Context, recipients []resolvedRecipient, state string) ([]ListedDelivery, error) {
+	if len(recipients) == 0 {
+		return nil, nil
+	}
+
+	aliasByEndpointID := make(map[string]string, len(recipients))
+	recipientEndpointIDs := make([]string, 0, len(recipients))
+	for _, recipient := range recipients {
+		aliasByEndpointID[recipient.EndpointID] = recipient.Alias
+		recipientEndpointIDs = append(recipientEndpointIDs, recipient.EndpointID)
+	}
+
+	placeholders := strings.TrimSuffix(strings.Repeat("?,", len(recipientEndpointIDs)), ",")
+	args := make([]any, 0, len(recipientEndpointIDs)+1)
+	for _, recipientEndpointID := range recipientEndpointIDs {
+		args = append(args, recipientEndpointID)
+	}
+
+	query := fmt.Sprintf(`
+SELECT
+  d.delivery_id,
+  d.message_id,
+  d.recipient_endpoint_id,
+  m.sender_endpoint_id,
+  d.state,
+  d.visible_at,
+  m.created_at,
+  m.subject,
+  m.content_type,
+  m.schema_version,
+  m.body_blob_ref,
+  m.body_size,
+  m.body_sha256
+FROM deliveries AS d
+JOIN messages AS m ON m.message_id = d.message_id
+WHERE d.recipient_endpoint_id IN (%s)
+`, placeholders)
+	if state == "" {
+		query += `
+  AND d.state = 'queued'
+  AND d.visible_at <= ?
+`
+		args = append(args, formatTimestamp(s.now()))
+	} else {
+		query += `
+  AND d.state = ?
+`
+		args = append(args, state)
+	}
+	query += `
+ORDER BY d.visible_at ASC, m.created_at ASC, d.delivery_id ASC
+`
+
+	rows, err := s.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("query deliveries: %w", err)
+	}
+	defer rows.Close()
+
+	var deliveries []ListedDelivery
+	for rows.Next() {
+		var delivery ListedDelivery
+		var senderID sql.NullString
+		if err := rows.Scan(
+			&delivery.DeliveryID,
+			&delivery.MessageID,
+			&delivery.RecipientEndpointID,
+			&senderID,
+			&delivery.State,
+			&delivery.VisibleAt,
+			&delivery.MessageCreatedAt,
+			&delivery.Subject,
+			&delivery.ContentType,
+			&delivery.SchemaVersion,
+			&delivery.BodyBlobRef,
+			&delivery.BodySize,
+			&delivery.BodySHA256,
+		); err != nil {
+			return nil, fmt.Errorf("scan delivery row: %w", err)
+		}
+		delivery.RecipientAlias = aliasByEndpointID[delivery.RecipientEndpointID]
+		if senderID.Valid {
+			delivery.SenderEndpointID = &senderID.String
+		}
+		deliveries = append(deliveries, delivery)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate delivery rows: %w", err)
+	}
+
+	return deliveries, nil
+}
+
+func watchFingerprint(delivery ListedDelivery) string {
+	senderEndpointID := ""
+	if delivery.SenderEndpointID != nil {
+		senderEndpointID = *delivery.SenderEndpointID
+	}
+
+	parts := []string{
+		delivery.MessageID,
+		delivery.RecipientAlias,
+		delivery.RecipientEndpointID,
+		senderEndpointID,
+		delivery.State,
+		delivery.VisibleAt,
+		delivery.MessageCreatedAt,
+		delivery.Subject,
+		delivery.ContentType,
+		delivery.SchemaVersion,
+		delivery.BodyBlobRef,
+		strconv.FormatInt(delivery.BodySize, 10),
+		delivery.BodySHA256,
+	}
+	return strings.Join(parts, "\x00")
+}

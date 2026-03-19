@@ -313,91 +313,10 @@ func (s *Store) List(ctx context.Context, params ListParams) ([]ListedDelivery, 
 		return nil, fmt.Errorf("resolve recipient alias: %w", err)
 	}
 
-	var rows *sql.Rows
-	state := strings.TrimSpace(params.State)
-	if state == "" {
-		rows, err = s.db.QueryContext(ctx, `
-SELECT
-  d.delivery_id,
-  d.message_id,
-  d.recipient_endpoint_id,
-  m.sender_endpoint_id,
-  d.state,
-  d.visible_at,
-  m.created_at,
-  m.subject,
-  m.content_type,
-  m.schema_version,
-  m.body_blob_ref,
-  m.body_size,
-  m.body_sha256
-FROM deliveries AS d
-JOIN messages AS m ON m.message_id = d.message_id
-WHERE d.recipient_endpoint_id = ?
-  AND d.state = 'queued'
-  AND d.visible_at <= ?
-ORDER BY d.visible_at ASC, m.created_at ASC
-`, recipientEndpointID, formatTimestamp(s.now()))
-	} else {
-		rows, err = s.db.QueryContext(ctx, `
-SELECT
-  d.delivery_id,
-  d.message_id,
-  d.recipient_endpoint_id,
-  m.sender_endpoint_id,
-  d.state,
-  d.visible_at,
-  m.created_at,
-  m.subject,
-  m.content_type,
-  m.schema_version,
-  m.body_blob_ref,
-  m.body_size,
-  m.body_sha256
-FROM deliveries AS d
-JOIN messages AS m ON m.message_id = d.message_id
-WHERE d.recipient_endpoint_id = ?
-  AND d.state = ?
-ORDER BY d.visible_at ASC, m.created_at ASC
-`, recipientEndpointID, state)
-	}
-	if err != nil {
-		return nil, fmt.Errorf("query deliveries: %w", err)
-	}
-	defer rows.Close()
-
-	var deliveries []ListedDelivery
-	for rows.Next() {
-		var delivery ListedDelivery
-		var senderID sql.NullString
-		if err := rows.Scan(
-			&delivery.DeliveryID,
-			&delivery.MessageID,
-			&delivery.RecipientEndpointID,
-			&senderID,
-			&delivery.State,
-			&delivery.VisibleAt,
-			&delivery.MessageCreatedAt,
-			&delivery.Subject,
-			&delivery.ContentType,
-			&delivery.SchemaVersion,
-			&delivery.BodyBlobRef,
-			&delivery.BodySize,
-			&delivery.BodySHA256,
-		); err != nil {
-			return nil, fmt.Errorf("scan delivery row: %w", err)
-		}
-		delivery.RecipientAlias = alias
-		if senderID.Valid {
-			delivery.SenderEndpointID = &senderID.String
-		}
-		deliveries = append(deliveries, delivery)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate delivery rows: %w", err)
-	}
-
-	return deliveries, nil
+	return s.listDeliveriesForRecipients(ctx, []resolvedRecipient{{
+		Alias:      alias,
+		EndpointID: recipientEndpointID,
+	}}, strings.TrimSpace(params.State))
 }
 
 func (s *Store) lookupEndpointID(ctx context.Context, querier interface {

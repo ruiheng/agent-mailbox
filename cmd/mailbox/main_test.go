@@ -235,6 +235,102 @@ func TestCLIRecvMultipleAliasesUnknownAliasFails(t *testing.T) {
 	}
 }
 
+func TestCLIWatchStreamsNDJSONWithoutClaiming(t *testing.T) {
+	stateDir := filepath.Join(t.TempDir(), "mailbox-state")
+
+	for _, alias := range []string{"workflow/watch", "agent/sender"} {
+		register := runCLI(t, "", "--state-dir", stateDir,
+			"endpoint", "register",
+			"--alias", alias,
+		)
+		if register.exitCode != 0 {
+			t.Fatalf("register %s exit code = %d, stderr = %q", alias, register.exitCode, register.stderr)
+		}
+	}
+
+	send := runCLI(t, "watch body\n", "--state-dir", stateDir,
+		"send",
+		"--to", "workflow/watch",
+		"--from", "agent/sender",
+		"--subject", "watch me",
+		"--body-file", "-",
+	)
+	if send.exitCode != 0 {
+		t.Fatalf("send exit code = %d, stderr = %q", send.exitCode, send.stderr)
+	}
+
+	watch := runCLI(t, "", "--state-dir", stateDir,
+		"watch",
+		"--for", "workflow/watch",
+		"--timeout", "120ms",
+		"--json",
+	)
+	if watch.exitCode != 0 {
+		t.Fatalf("watch exit code = %d, stderr = %q", watch.exitCode, watch.stderr)
+	}
+	if watch.stderr != "" {
+		t.Fatalf("watch stderr = %q, want empty", watch.stderr)
+	}
+
+	lines := strings.Split(strings.TrimSpace(watch.stdout), "\n")
+	if len(lines) != 1 {
+		t.Fatalf("watch line count = %d, want 1; stdout = %q", len(lines), watch.stdout)
+	}
+
+	var delivery map[string]any
+	if err := json.Unmarshal([]byte(lines[0]), &delivery); err != nil {
+		t.Fatalf("json.Unmarshal(watch line) error = %v; line = %q", err, lines[0])
+	}
+	if delivery["recipient_alias"] != "workflow/watch" {
+		t.Fatalf("watch recipient_alias = %v, want workflow/watch", delivery["recipient_alias"])
+	}
+	if delivery["subject"] != "watch me" {
+		t.Fatalf("watch subject = %v, want watch me", delivery["subject"])
+	}
+	if _, ok := delivery["lease_token"]; ok {
+		t.Fatalf("watch payload unexpectedly contains lease_token: %v", delivery)
+	}
+	if _, ok := delivery["body"]; ok {
+		t.Fatalf("watch payload unexpectedly contains body: %v", delivery)
+	}
+
+	recv := runCLI(t, "", "--state-dir", stateDir,
+		"recv",
+		"--for", "workflow/watch",
+		"--json",
+	)
+	if recv.exitCode != 0 {
+		t.Fatalf("recv after watch exit code = %d, stderr = %q", recv.exitCode, recv.stderr)
+	}
+}
+
+func TestCLIWatchTimeoutExitsCleanlyWithoutOutput(t *testing.T) {
+	stateDir := filepath.Join(t.TempDir(), "mailbox-state")
+
+	register := runCLI(t, "", "--state-dir", stateDir,
+		"endpoint", "register",
+		"--alias", "workflow/empty-watch",
+	)
+	if register.exitCode != 0 {
+		t.Fatalf("register exit code = %d, stderr = %q", register.exitCode, register.stderr)
+	}
+
+	watch := runCLI(t, "", "--state-dir", stateDir,
+		"watch",
+		"--for", "workflow/empty-watch",
+		"--timeout", "30ms",
+	)
+	if watch.exitCode != 0 {
+		t.Fatalf("watch timeout exit code = %d, want 0; stderr = %q", watch.exitCode, watch.stderr)
+	}
+	if watch.stdout != "" {
+		t.Fatalf("watch timeout stdout = %q, want empty", watch.stdout)
+	}
+	if watch.stderr != "" {
+		t.Fatalf("watch timeout stderr = %q, want empty", watch.stderr)
+	}
+}
+
 func TestCLIHelperProcess(t *testing.T) {
 	if os.Getenv("GO_WANT_HELPER_PROCESS") != "1" {
 		return

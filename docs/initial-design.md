@@ -29,8 +29,8 @@ Separate the system into four layers:
 4. workflow protocols
 
 The mailbox core owns persistence, routing, leasing, and recovery.
-The consumer CLI exposes explicit local operations such as `send`, `recv`, and
-`ack`.
+The consumer CLI exposes explicit local operations such as `send`, `recv`,
+`watch`, and `ack`.
 Transport adapters may notify other runtimes, but they are not the source of
 truth.
 Workflow protocols sit above the mailbox and should treat it as infrastructure.
@@ -333,6 +333,37 @@ This avoids a daemon dependency while keeping latency acceptable for local use.
 No fairness or alias rotation guarantee is made in v1 while waiting across
 multiple aliases.
 
+### Watch
+
+```text
+agent-mailbox watch --for workflow/reviewer/task-123 --for workflow/reviewer/task-456 --timeout 30s --json
+```
+
+Behavior:
+
+- require at least one `--for` alias; repeated `--for` flags watch the union of
+  the requested inboxes
+- if any requested alias does not resolve, fail the whole command
+- default watch scope is currently visible queued deliveries
+- `--state <state>` may watch another delivery state using the same delivery
+  metadata schema as `list`
+- emit delivery metadata only; do not claim, lease, or return message bodies
+- `--json` emits newline-delimited JSON objects, one matching delivery snapshot
+  per line
+- emit each unchanged delivery snapshot at most once per watch session
+- when a delivery changes and matches again, it may be emitted again as a new
+  snapshot
+
+`watch` is observe-only.
+It is for discovering work, not claiming it.
+Use `recv` when a consumer is ready to take lease ownership.
+
+Timeout behavior:
+
+- without `--timeout`, continue until interrupted
+- with `--timeout <duration>`, exit success after that much idle time without a
+  newly matching delivery
+
 ### Ack
 
 ```text
@@ -403,6 +434,7 @@ The core system must work even if there are no adapters.
 That means:
 
 - `recv --wait` is a first-class operation
+- `watch` is a first-class observe-only operation
 - no receiver is forced to accept pushed full-body content
 - transport failures do not redefine mailbox correctness
 
@@ -521,11 +553,12 @@ Build the smallest complete slice:
 3. alias lookup
 4. `send`
 5. `recv --wait`
-6. `ack`
-7. `release`
-8. `defer`
-9. `fail`
-10. `list`
+6. `watch`
+7. `ack`
+8. `release`
+9. `defer`
+10. `fail`
+11. `list`
 
 Skip for now:
 

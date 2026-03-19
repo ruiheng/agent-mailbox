@@ -6,7 +6,7 @@ This guide is intentionally short. It covers what a user needs to run the CLI:
 
 - where state lives
 - the normal send/receive flow
-- how blocking receive works
+- how blocking receive and observe-only watch work
 - what each command is for
 
 ## State Directory
@@ -78,6 +78,18 @@ agent-mailbox recv \
 The receive result includes `delivery_id` and `lease_token`. Keep both. You
 need them for follow-up actions.
 
+Observe deliveries without claiming them:
+
+```bash
+agent-mailbox watch \
+  --for workflow/reviewer/task-123 \
+  --timeout 30s \
+  --json
+```
+
+`watch` emits delivery metadata only. It never returns message bodies or lease
+tokens.
+
 Ack when processing succeeds:
 
 ```bash
@@ -118,6 +130,28 @@ Rules:
 - v1 does not guarantee fairness or alias rotation while waiting
 - if any requested alias is unknown, `recv` fails instead of partially
   succeeding
+
+## Watch
+
+`watch` is the observe-only companion to `recv`.
+
+```bash
+agent-mailbox watch --for <alias> [--for <alias> ...] [--state dead_letter] [--timeout 30s] [--json]
+```
+
+Rules:
+
+- `watch` always stays observe-only; it does not claim deliveries or create
+  lease tokens
+- repeated `--for` flags search the union of the requested inboxes
+- duplicate `--for` values are ignored after the first occurrence
+- default output watches currently visible queued deliveries
+- `--state <state>` watches that delivery state instead
+- `--json` emits one JSON object per line (NDJSON)
+- without `--timeout`, `watch` runs until interrupted
+- `--timeout` is an idle timeout; if no newly matching delivery appears during
+  that interval, `watch` exits successfully
+- duplicate polling cycles do not reprint the same unchanged delivery snapshot
 
 ## Commands
 
@@ -174,6 +208,24 @@ Notes:
 - plain-text output includes `recipient_alias=...` so the matched inbox is clear
 - `--json` keeps the existing schema and still includes `recipient_alias`
 
+### `watch`
+
+Observe matching deliveries without claiming them.
+
+```bash
+agent-mailbox watch --for <alias> [--for <alias> ...] [--state dead_letter] [--timeout 30s] [--json]
+```
+
+Use `--json` for streaming consumers. Each output line is one delivery metadata
+object, not a JSON array.
+
+Notes:
+
+- default watch scope is visible queued deliveries
+- `--state` lets you watch another delivery state with the same metadata schema
+- plain-text output includes `recipient_alias=...`
+- `watch` is for observation only; use `recv` to claim work
+
 ### `ack`
 
 Mark a leased delivery as complete.
@@ -229,6 +281,7 @@ Notes:
 
 - default output shows currently claimable queued deliveries
 - `--state dead_letter` shows dead-lettered deliveries
+- `list` is a snapshot; use `watch` for a stream
 - use `--json` for scripts and agents
 
 ## Exit Codes

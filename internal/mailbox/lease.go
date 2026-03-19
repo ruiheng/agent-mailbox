@@ -13,8 +13,8 @@ import (
 
 const (
 	defaultLeaseTimeout     = 5 * time.Minute
-	initialReceivePollDelay = 50 * time.Millisecond
-	maxReceivePollDelay     = time.Second
+	initialPollDelay        = 50 * time.Millisecond
+	maxPollDelay            = time.Second
 	maxDeliveryAttemptCount = 3
 )
 
@@ -106,7 +106,7 @@ type resolvedRecipient struct {
 }
 
 func (s *Store) Receive(ctx context.Context, params ReceiveParams) (ReceivedMessage, error) {
-	recipients, err := s.resolveReceiveRecipients(ctx, params)
+	recipients, err := s.resolveRecipients(ctx, params.Alias, params.Aliases, "--for")
 	if err != nil {
 		return ReceivedMessage{}, err
 	}
@@ -120,7 +120,7 @@ func (s *Store) Receive(ctx context.Context, params ReceiveParams) (ReceivedMess
 		deadline = time.Now().Add(params.Timeout)
 	}
 
-	delay := initialReceivePollDelay
+	delay := initialPollDelay
 	for {
 		message, err := s.receiveOnce(ctx, recipients)
 		if err == nil {
@@ -149,24 +149,24 @@ func (s *Store) Receive(ctx context.Context, params ReceiveParams) (ReceivedMess
 		case <-timer.C:
 		}
 
-		if delay < maxReceivePollDelay {
+		if delay < maxPollDelay {
 			delay *= 2
-			if delay > maxReceivePollDelay {
-				delay = maxReceivePollDelay
+			if delay > maxPollDelay {
+				delay = maxPollDelay
 			}
 		}
 	}
 }
 
-func (s *Store) resolveReceiveRecipients(ctx context.Context, params ReceiveParams) ([]resolvedRecipient, error) {
-	aliases, err := normalizeAliases(params.Alias, params.Aliases, "--for")
+func (s *Store) resolveRecipients(ctx context.Context, alias string, aliases []string, flagName string) ([]resolvedRecipient, error) {
+	normalizedAliases, err := normalizeAliases(alias, aliases, flagName)
 	if err != nil {
 		return nil, err
 	}
 
-	recipients := make([]resolvedRecipient, 0, len(aliases))
-	seenEndpointIDs := make(map[string]struct{}, len(aliases))
-	for _, alias := range aliases {
+	recipients := make([]resolvedRecipient, 0, len(normalizedAliases))
+	seenEndpointIDs := make(map[string]struct{}, len(normalizedAliases))
+	for _, alias := range normalizedAliases {
 		endpointID, err := s.lookupEndpointID(ctx, s.db, alias)
 		if err != nil {
 			return nil, fmt.Errorf("resolve recipient alias: %w", err)

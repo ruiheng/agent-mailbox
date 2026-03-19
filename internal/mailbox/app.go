@@ -45,7 +45,7 @@ func (a *App) Run(ctx context.Context, args []string) error {
 		return err
 	}
 	if len(rest) == 0 {
-		return errors.New("expected a command: endpoint, send, recv, ack, release, defer, fail, or list")
+		return errors.New("expected a command: endpoint, send, recv, watch, ack, release, defer, fail, or list")
 	}
 
 	command, err := a.prepareCommand(rest)
@@ -64,7 +64,7 @@ func (a *App) Run(ctx context.Context, args []string) error {
 
 func (a *App) prepareCommand(args []string) (preparedCommand, error) {
 	if len(args) == 0 {
-		return nil, errors.New("expected a command: endpoint, send, recv, ack, release, defer, fail, or list")
+		return nil, errors.New("expected a command: endpoint, send, recv, watch, ack, release, defer, fail, or list")
 	}
 
 	switch args[0] {
@@ -74,6 +74,8 @@ func (a *App) prepareCommand(args []string) (preparedCommand, error) {
 		return a.prepareSendCommand(args[1:])
 	case "recv":
 		return a.prepareRecvCommand(args[1:])
+	case "watch":
+		return a.prepareWatchCommand(args[1:])
 	case "ack":
 		return a.prepareAckCommand(args[1:])
 	case "release":
@@ -302,6 +304,62 @@ func (a *App) prepareRecvCommand(args []string) (preparedCommand, error) {
 			fmt.Fprintln(a.stdout)
 		}
 		return nil
+	}, nil
+}
+
+func (a *App) prepareWatchCommand(args []string) (preparedCommand, error) {
+	fs := flag.NewFlagSet("agent-mailbox watch", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+
+	var aliases stringListFlag
+	var timeout time.Duration
+	var jsonOutput bool
+	var state string
+
+	fs.Var(&aliases, "for", "recipient alias (repeatable)")
+	fs.DurationVar(&timeout, "timeout", 0, "maximum idle time before watch exits")
+	fs.BoolVar(&jsonOutput, "json", false, "emit NDJSON")
+	fs.StringVar(&state, "state", "", "filter by delivery state")
+
+	if err := fs.Parse(args); err != nil {
+		return nil, err
+	}
+	normalizedAliases, err := normalizeAliases("", []string(aliases), "--for")
+	if err != nil {
+		return nil, err
+	}
+	if timeout < 0 {
+		return nil, errors.New("--timeout must be greater than or equal to 0")
+	}
+
+	params := WatchParams{
+		Aliases: normalizedAliases,
+		State:   state,
+		Timeout: timeout,
+	}
+
+	return func(ctx context.Context, store *Store) error {
+		var encoder *json.Encoder
+		if jsonOutput {
+			encoder = json.NewEncoder(a.stdout)
+		}
+
+		return store.Watch(ctx, params, func(delivery ListedDelivery) error {
+			if jsonOutput {
+				return encoder.Encode(delivery)
+			}
+
+			fmt.Fprintf(
+				a.stdout,
+				"delivery_id=%s recipient_alias=%s state=%s visible_at=%s subject=%q\n",
+				delivery.DeliveryID,
+				delivery.RecipientAlias,
+				delivery.State,
+				delivery.VisibleAt,
+				delivery.Subject,
+			)
+			return nil
+		})
 	}, nil
 }
 

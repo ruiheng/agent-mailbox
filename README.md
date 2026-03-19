@@ -9,7 +9,7 @@ The current MVP is intentionally narrow:
 - one local Unix user on one machine
 - direct mailbox delivery by endpoint alias
 - SQLite metadata plus blob-backed message bodies
-- explicit `send`, `recv`, `ack`, `release`, `defer`, `fail`, and `list`
+- explicit `send`, `recv`, `watch`, `ack`, `release`, `defer`, `fail`, and `list`
 - no daemon, no network transport, no adapter-specific correctness dependency
 
 ## Status
@@ -121,6 +121,13 @@ agent-mailbox --state-dir /tmp/mailbox-demo \
   recv --for workflow/reviewer/task-123 --for workflow/reviewer/task-456 --json
 ```
 
+Observe matching queued deliveries without claiming them:
+
+```bash
+agent-mailbox --state-dir /tmp/mailbox-demo \
+  watch --for workflow/reviewer/task-123 --timeout 30s --json
+```
+
 Ack the leased delivery using the returned `delivery_id` and `lease_token`:
 
 ```bash
@@ -137,6 +144,9 @@ For the full command reference, see [`docs/cli.md`](docs/cli.md).
 - selection is deterministic global oldest-first by `visible_at`, then
   `message_created_at`, then `delivery_id`
 - no fairness or alias rotation guarantee is made while waiting
+
+Use `list` for a one-shot snapshot, `watch` for observe-only streaming metadata,
+and `recv` when the consumer is ready to claim work and receive a lease token.
 
 ## Local State Layout
 
