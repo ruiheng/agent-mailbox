@@ -26,6 +26,7 @@ var (
 
 type ReceiveParams struct {
 	Alias   string
+	Aliases []string
 	Wait    bool
 	Timeout time.Duration
 }
@@ -99,19 +100,19 @@ type deliveryTransitionSpec struct {
 	SecondaryEventDetail map[string]any
 }
 
-func (s *Store) Receive(ctx context.Context, params ReceiveParams) (ReceivedMessage, error) {
-	alias := strings.TrimSpace(params.Alias)
-	if alias == "" {
-		return ReceivedMessage{}, errors.New("recipient alias is required")
-	}
+type resolvedRecipient struct {
+	Alias      string
+	EndpointID string
+}
 
-	recipientEndpointID, err := s.lookupEndpointID(ctx, s.db, alias)
+func (s *Store) Receive(ctx context.Context, params ReceiveParams) (ReceivedMessage, error) {
+	recipients, err := s.resolveReceiveRecipients(ctx, params)
 	if err != nil {
-		return ReceivedMessage{}, fmt.Errorf("resolve recipient alias: %w", err)
+		return ReceivedMessage{}, err
 	}
 
 	if !params.Wait {
-		return s.receiveOnce(ctx, recipientEndpointID, alias)
+		return s.receiveOnce(ctx, recipients)
 	}
 
 	var deadline time.Time
@@ -121,7 +122,7 @@ func (s *Store) Receive(ctx context.Context, params ReceiveParams) (ReceivedMess
 
 	delay := initialReceivePollDelay
 	for {
-		message, err := s.receiveOnce(ctx, recipientEndpointID, alias)
+		message, err := s.receiveOnce(ctx, recipients)
 		if err == nil {
 			return message, nil
 		}
@@ -155,6 +156,32 @@ func (s *Store) Receive(ctx context.Context, params ReceiveParams) (ReceivedMess
 			}
 		}
 	}
+}
+
+func (s *Store) resolveReceiveRecipients(ctx context.Context, params ReceiveParams) ([]resolvedRecipient, error) {
+	aliases, err := normalizeAliases(params.Alias, params.Aliases, "--for")
+	if err != nil {
+		return nil, err
+	}
+
+	recipients := make([]resolvedRecipient, 0, len(aliases))
+	seenEndpointIDs := make(map[string]struct{}, len(aliases))
+	for _, alias := range aliases {
+		endpointID, err := s.lookupEndpointID(ctx, s.db, alias)
+		if err != nil {
+			return nil, fmt.Errorf("resolve recipient alias: %w", err)
+		}
+		// Multiple aliases may resolve to one endpoint. Claim against the union once.
+		if _, exists := seenEndpointIDs[endpointID]; exists {
+			continue
+		}
+		seenEndpointIDs[endpointID] = struct{}{}
+		recipients = append(recipients, resolvedRecipient{
+			Alias:      alias,
+			EndpointID: endpointID,
+		})
+	}
+	return recipients, nil
 }
 
 func (s *Store) Ack(ctx context.Context, deliveryID, leaseToken string) (DeliveryTransitionResult, error) {
@@ -253,8 +280,14 @@ func (s *Store) Fail(ctx context.Context, deliveryID, leaseToken, reason string)
 	})
 }
 
-func (s *Store) receiveOnce(ctx context.Context, recipientEndpointID, alias string) (ReceivedMessage, error) {
+func (s *Store) receiveOnce(ctx context.Context, recipients []resolvedRecipient) (ReceivedMessage, error) {
 	nowText := formatTimestamp(s.now())
+	aliasByEndpointID := make(map[string]string, len(recipients))
+	recipientEndpointIDs := make([]string, 0, len(recipients))
+	for _, recipient := range recipients {
+		aliasByEndpointID[recipient.EndpointID] = recipient.Alias
+		recipientEndpointIDs = append(recipientEndpointIDs, recipient.EndpointID)
+	}
 
 	for {
 		tx, err := s.db.BeginTx(ctx, nil)
@@ -262,7 +295,7 @@ func (s *Store) receiveOnce(ctx context.Context, recipientEndpointID, alias stri
 			return ReceivedMessage{}, fmt.Errorf("begin receive transaction: %w", err)
 		}
 
-		candidate, err := loadClaimCandidate(ctx, tx, recipientEndpointID, nowText)
+		candidate, err := loadClaimCandidate(ctx, tx, recipientEndpointIDs, nowText)
 		if errors.Is(err, sql.ErrNoRows) {
 			_ = tx.Rollback()
 			return ReceivedMessage{}, ErrNoMessage
@@ -292,7 +325,7 @@ WHERE delivery_id = ?
     OR
     (state = 'leased' AND lease_expires_at IS NOT NULL AND lease_expires_at <= ?)
   )
-`, leaseToken, leaseExpiresAt, candidate.DeliveryID, recipientEndpointID, nowText, nowText)
+`, leaseToken, leaseExpiresAt, candidate.DeliveryID, candidate.RecipientEndpointID, nowText, nowText)
 		if err != nil {
 			_ = tx.Rollback()
 			return ReceivedMessage{}, fmt.Errorf("claim delivery: %w", err)
@@ -308,6 +341,7 @@ WHERE delivery_id = ?
 			continue
 		}
 
+		alias := aliasByEndpointID[candidate.RecipientEndpointID]
 		if err := insertDeliveryEvent(ctx, tx, "delivery_leased", candidate.RecipientEndpointID, candidate.MessageID, candidate.DeliveryID, map[string]any{
 			"previous_state":   candidate.State,
 			"recipient_alias":  alias,
@@ -452,9 +486,20 @@ WHERE delivery_id = ?
 	return resultSummary, nil
 }
 
-func loadClaimCandidate(ctx context.Context, tx *sql.Tx, recipientEndpointID, nowText string) (claimCandidate, error) {
+func loadClaimCandidate(ctx context.Context, tx *sql.Tx, recipientEndpointIDs []string, nowText string) (claimCandidate, error) {
+	if len(recipientEndpointIDs) == 0 {
+		return claimCandidate{}, sql.ErrNoRows
+	}
+
+	placeholders := strings.TrimSuffix(strings.Repeat("?,", len(recipientEndpointIDs)), ",")
+	args := make([]any, 0, len(recipientEndpointIDs)+2)
+	for _, recipientEndpointID := range recipientEndpointIDs {
+		args = append(args, recipientEndpointID)
+	}
+	args = append(args, nowText, nowText)
+
 	var candidate claimCandidate
-	err := tx.QueryRowContext(ctx, `
+	err := tx.QueryRowContext(ctx, fmt.Sprintf(`
 SELECT
   d.delivery_id,
   d.message_id,
@@ -472,15 +517,15 @@ SELECT
   m.body_sha256
 FROM deliveries AS d
 JOIN messages AS m ON m.message_id = d.message_id
-WHERE d.recipient_endpoint_id = ?
+WHERE d.recipient_endpoint_id IN (%s)
   AND (
     (d.state = 'queued' AND d.visible_at <= ?)
     OR
     (d.state = 'leased' AND d.lease_expires_at IS NOT NULL AND d.lease_expires_at <= ?)
   )
-ORDER BY d.visible_at ASC, m.created_at ASC
+ORDER BY d.visible_at ASC, m.created_at ASC, d.delivery_id ASC
 LIMIT 1
-`, recipientEndpointID, nowText, nowText).Scan(
+`, placeholders), args...).Scan(
 		&candidate.DeliveryID,
 		&candidate.MessageID,
 		&candidate.RecipientEndpointID,

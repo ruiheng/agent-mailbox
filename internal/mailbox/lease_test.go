@@ -136,6 +136,150 @@ func TestReleaseDeferAndReceiveTimeout(t *testing.T) {
 	}
 }
 
+func TestReceiveMultipleAliasesOrdersUnionOldestFirst(t *testing.T) {
+	t.Parallel()
+
+	runtime, store := newLeaseTestStore(t)
+	defer runtime.Close()
+
+	current := time.Date(2026, 3, 18, 13, 30, 0, 0, time.UTC)
+	store.now = func() time.Time {
+		return current
+	}
+
+	mustRegisterEndpoint(t, store, "workflow/older", "workflow")
+	mustRegisterEndpoint(t, store, "workflow/newer", "workflow")
+	mustRegisterEndpoint(t, store, "agent/sender", "agent")
+
+	older := mustSendMessage(t, store, "workflow/older", "agent/sender", "older", "older body")
+	current = current.Add(time.Second)
+	newer := mustSendMessage(t, store, "workflow/newer", "agent/sender", "newer", "newer body")
+
+	first, err := store.Receive(context.Background(), ReceiveParams{
+		Aliases: []string{"workflow/newer", "workflow/older", "workflow/newer"},
+	})
+	if err != nil {
+		t.Fatalf("Receive(first multi) error = %v", err)
+	}
+	if first.DeliveryID != older.DeliveryID {
+		t.Fatalf("Receive(first multi) delivery id = %q, want %q", first.DeliveryID, older.DeliveryID)
+	}
+	if first.RecipientAlias != "workflow/older" {
+		t.Fatalf("Receive(first multi) recipient alias = %q, want workflow/older", first.RecipientAlias)
+	}
+
+	if _, err := store.Ack(context.Background(), first.DeliveryID, first.LeaseToken); err != nil {
+		t.Fatalf("Ack(first multi) error = %v", err)
+	}
+
+	second, err := store.Receive(context.Background(), ReceiveParams{
+		Aliases: []string{"workflow/newer", "workflow/older", "workflow/newer"},
+	})
+	if err != nil {
+		t.Fatalf("Receive(second multi) error = %v", err)
+	}
+	if second.DeliveryID != newer.DeliveryID {
+		t.Fatalf("Receive(second multi) delivery id = %q, want %q", second.DeliveryID, newer.DeliveryID)
+	}
+	if second.RecipientAlias != "workflow/newer" {
+		t.Fatalf("Receive(second multi) recipient alias = %q, want workflow/newer", second.RecipientAlias)
+	}
+}
+
+func TestReceiveMultipleAliasesUsesDeliveryIDTiebreak(t *testing.T) {
+	t.Parallel()
+
+	runtime, store := newLeaseTestStore(t)
+	defer runtime.Close()
+
+	current := time.Date(2026, 3, 18, 13, 45, 0, 0, time.UTC)
+	store.now = func() time.Time {
+		return current
+	}
+
+	mustRegisterEndpoint(t, store, "workflow/alpha", "workflow")
+	mustRegisterEndpoint(t, store, "workflow/beta", "workflow")
+	mustRegisterEndpoint(t, store, "agent/sender", "agent")
+
+	alpha := mustSendMessage(t, store, "workflow/alpha", "agent/sender", "alpha", "alpha body")
+	beta := mustSendMessage(t, store, "workflow/beta", "agent/sender", "beta", "beta body")
+
+	wantDeliveryID := alpha.DeliveryID
+	wantAlias := "workflow/alpha"
+	if beta.DeliveryID < wantDeliveryID {
+		wantDeliveryID = beta.DeliveryID
+		wantAlias = "workflow/beta"
+	}
+
+	message, err := store.Receive(context.Background(), ReceiveParams{
+		Aliases: []string{"workflow/beta", "workflow/alpha"},
+	})
+	if err != nil {
+		t.Fatalf("Receive(tiebreak multi) error = %v", err)
+	}
+	if message.DeliveryID != wantDeliveryID {
+		t.Fatalf("Receive(tiebreak multi) delivery id = %q, want %q", message.DeliveryID, wantDeliveryID)
+	}
+	if message.RecipientAlias != wantAlias {
+		t.Fatalf("Receive(tiebreak multi) recipient alias = %q, want %q", message.RecipientAlias, wantAlias)
+	}
+}
+
+func TestReceiveMultipleAliasesReclaimsExpiredLeaseAcrossUnion(t *testing.T) {
+	t.Parallel()
+
+	runtime, store := newLeaseTestStore(t)
+	defer runtime.Close()
+
+	current := time.Date(2026, 3, 18, 14, 30, 0, 0, time.UTC)
+	store.now = func() time.Time {
+		return current
+	}
+
+	mustRegisterEndpoint(t, store, "workflow/reclaim", "workflow")
+	mustRegisterEndpoint(t, store, "workflow/fresh", "workflow")
+	mustRegisterEndpoint(t, store, "agent/sender", "agent")
+
+	reclaimed := mustSendMessage(t, store, "workflow/reclaim", "agent/sender", "reclaim me", "reclaim body")
+	first, err := store.Receive(context.Background(), ReceiveParams{Alias: "workflow/reclaim"})
+	if err != nil {
+		t.Fatalf("Receive(initial reclaim) error = %v", err)
+	}
+
+	current = current.Add(defaultLeaseTimeout + time.Second)
+	fresh := mustSendMessage(t, store, "workflow/fresh", "agent/sender", "fresh", "fresh body")
+
+	second, err := store.Receive(context.Background(), ReceiveParams{
+		Aliases: []string{"workflow/fresh", "workflow/reclaim"},
+	})
+	if err != nil {
+		t.Fatalf("Receive(reclaim multi) error = %v", err)
+	}
+	if second.DeliveryID != reclaimed.DeliveryID {
+		t.Fatalf("Receive(reclaim multi) delivery id = %q, want %q", second.DeliveryID, reclaimed.DeliveryID)
+	}
+	if second.RecipientAlias != "workflow/reclaim" {
+		t.Fatalf("Receive(reclaim multi) recipient alias = %q, want workflow/reclaim", second.RecipientAlias)
+	}
+	if second.LeaseToken == first.LeaseToken {
+		t.Fatal("Receive(reclaim multi) reused the expired lease token")
+	}
+
+	if _, err := store.Ack(context.Background(), second.DeliveryID, second.LeaseToken); err != nil {
+		t.Fatalf("Ack(reclaim multi current token) error = %v", err)
+	}
+
+	third, err := store.Receive(context.Background(), ReceiveParams{
+		Aliases: []string{"workflow/fresh", "workflow/reclaim"},
+	})
+	if err != nil {
+		t.Fatalf("Receive(fresh after reclaim) error = %v", err)
+	}
+	if third.DeliveryID != fresh.DeliveryID {
+		t.Fatalf("Receive(fresh after reclaim) delivery id = %q, want %q", third.DeliveryID, fresh.DeliveryID)
+	}
+}
+
 func TestFailRetryPolicyDeadLettersAfterThirdFailure(t *testing.T) {
 	t.Parallel()
 

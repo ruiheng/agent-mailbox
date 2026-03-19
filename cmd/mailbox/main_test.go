@@ -98,6 +98,14 @@ func TestCLIRecvNoMessageExitCodeAndSilence(t *testing.T) {
 	if register.exitCode != 0 {
 		t.Fatalf("register exit code = %d, stderr = %q", register.exitCode, register.stderr)
 	}
+	registerSecond := runCLI(t, "", "--state-dir", stateDir,
+		"endpoint", "register",
+		"--alias", "workflow/empty-2",
+		"--kind", "workflow",
+	)
+	if registerSecond.exitCode != 0 {
+		t.Fatalf("register second exit code = %d, stderr = %q", registerSecond.exitCode, registerSecond.stderr)
+	}
 
 	immediate := runCLI(t, "", "--state-dir", stateDir,
 		"recv",
@@ -127,6 +135,107 @@ func TestCLIRecvNoMessageExitCodeAndSilence(t *testing.T) {
 	}
 	if timedOut.stderr != "" {
 		t.Fatalf("timed recv stderr = %q, want empty", timedOut.stderr)
+	}
+
+	multiTimedOut := runCLI(t, "", "--state-dir", stateDir,
+		"recv",
+		"--for", "workflow/empty",
+		"--for", "workflow/empty-2",
+		"--wait",
+		"--timeout", "20ms",
+	)
+	if multiTimedOut.exitCode != 2 {
+		t.Fatalf("multi timed recv exit code = %d, want 2; stderr = %q", multiTimedOut.exitCode, multiTimedOut.stderr)
+	}
+	if multiTimedOut.stdout != "" {
+		t.Fatalf("multi timed recv stdout = %q, want empty", multiTimedOut.stdout)
+	}
+	if multiTimedOut.stderr != "" {
+		t.Fatalf("multi timed recv stderr = %q, want empty", multiTimedOut.stderr)
+	}
+}
+
+func TestCLIRecvMultipleAliasesPlainTextIncludesRecipientAlias(t *testing.T) {
+	stateDir := filepath.Join(t.TempDir(), "mailbox-state")
+
+	for _, alias := range []string{"workflow/older", "workflow/newer"} {
+		register := runCLI(t, "", "--state-dir", stateDir,
+			"endpoint", "register",
+			"--alias", alias,
+			"--kind", "workflow",
+		)
+		if register.exitCode != 0 {
+			t.Fatalf("register %s exit code = %d, stderr = %q", alias, register.exitCode, register.stderr)
+		}
+	}
+	registerSender := runCLI(t, "", "--state-dir", stateDir,
+		"endpoint", "register",
+		"--alias", "agent/sender",
+		"--kind", "agent",
+	)
+	if registerSender.exitCode != 0 {
+		t.Fatalf("register sender exit code = %d, stderr = %q", registerSender.exitCode, registerSender.stderr)
+	}
+
+	sendOlder := runCLI(t, "older body\n", "--state-dir", stateDir,
+		"send",
+		"--to", "workflow/older",
+		"--from", "agent/sender",
+		"--subject", "older",
+		"--body-file", "-",
+	)
+	if sendOlder.exitCode != 0 {
+		t.Fatalf("send older exit code = %d, stderr = %q", sendOlder.exitCode, sendOlder.stderr)
+	}
+	sendNewer := runCLI(t, "newer body\n", "--state-dir", stateDir,
+		"send",
+		"--to", "workflow/newer",
+		"--from", "agent/sender",
+		"--subject", "newer",
+		"--body-file", "-",
+	)
+	if sendNewer.exitCode != 0 {
+		t.Fatalf("send newer exit code = %d, stderr = %q", sendNewer.exitCode, sendNewer.stderr)
+	}
+
+	recv := runCLI(t, "", "--state-dir", stateDir,
+		"recv",
+		"--for", "workflow/newer",
+		"--for", "workflow/older",
+	)
+	if recv.exitCode != 0 {
+		t.Fatalf("recv multi plain text exit code = %d, stderr = %q", recv.exitCode, recv.stderr)
+	}
+	if !strings.Contains(recv.stdout, "recipient_alias=workflow/older") {
+		t.Fatalf("recv multi plain text stdout = %q, want recipient_alias=workflow/older", recv.stdout)
+	}
+	if !strings.Contains(recv.stdout, "older body\n") {
+		t.Fatalf("recv multi plain text stdout = %q, want older body", recv.stdout)
+	}
+}
+
+func TestCLIRecvMultipleAliasesUnknownAliasFails(t *testing.T) {
+	stateDir := filepath.Join(t.TempDir(), "mailbox-state")
+
+	register := runCLI(t, "", "--state-dir", stateDir,
+		"endpoint", "register",
+		"--alias", "workflow/known",
+		"--kind", "workflow",
+	)
+	if register.exitCode != 0 {
+		t.Fatalf("register exit code = %d, stderr = %q", register.exitCode, register.stderr)
+	}
+
+	recv := runCLI(t, "", "--state-dir", stateDir,
+		"recv",
+		"--for", "workflow/known",
+		"--for", "workflow/missing",
+	)
+	if recv.exitCode != 1 {
+		t.Fatalf("recv unknown alias exit code = %d, want 1; stderr = %q", recv.exitCode, recv.stderr)
+	}
+	if !strings.Contains(recv.stderr, `alias "workflow/missing" not found`) {
+		t.Fatalf("recv unknown alias stderr = %q, want missing alias error", recv.stderr)
 	}
 }
 

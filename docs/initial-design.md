@@ -294,7 +294,7 @@ Behavior:
 ### Receive
 
 ```text
-agent-mailbox recv --for workflow/reviewer/task-123 --wait --timeout 30s --json
+agent-mailbox recv --for workflow/reviewer/task-123 --for workflow/reviewer/task-456 --wait --timeout 30s --json
 ```
 
 Behavior:
@@ -302,7 +302,11 @@ Behavior:
 - if `--wait` is not provided, attempt one immediate claim
 - if `--wait` is provided, block until a message becomes claimable or until an
   optional timeout expires
-- atomically select the oldest visible queued delivery
+- require at least one `--for` alias; repeated `--for` flags search the union
+  of the requested inboxes
+- if any requested alias does not resolve, fail the whole command
+- atomically select the oldest visible queued delivery across the eligible union
+- selection order is `visible_at`, then `message_created_at`, then `delivery_id`
 - transition it to `leased`
 - assign a fresh lease token and lease timeout
 - return the message envelope and identifiers
@@ -325,6 +329,8 @@ Blocking wait in v1 is implemented by polling SQLite with adaptive backoff.
 The recommended schedule starts around `50ms`, grows up to about `1s`, and
 resets after a successful claim.
 This avoids a daemon dependency while keeping latency acceptable for local use.
+No fairness or alias rotation guarantee is made in v1 while waiting across
+multiple aliases.
 
 ### Ack
 

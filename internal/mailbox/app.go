@@ -28,6 +28,17 @@ func NewApp(stdin io.Reader, stdout, stderr io.Writer) *App {
 
 type preparedCommand func(context.Context, *Store) error
 
+type stringListFlag []string
+
+func (f *stringListFlag) String() string {
+	return strings.Join(*f, ",")
+}
+
+func (f *stringListFlag) Set(value string) error {
+	*f = append(*f, value)
+	return nil
+}
+
 func (a *App) Run(ctx context.Context, args []string) error {
 	stateDir, rest, err := parseGlobalArgs(args)
 	if err != nil {
@@ -248,12 +259,12 @@ func (a *App) prepareRecvCommand(args []string) (preparedCommand, error) {
 	fs := flag.NewFlagSet("agent-mailbox recv", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 
-	var alias string
+	var aliases stringListFlag
 	var wait bool
 	var timeout time.Duration
 	var jsonOutput bool
 
-	fs.StringVar(&alias, "for", "", "recipient alias")
+	fs.Var(&aliases, "for", "recipient alias (repeatable)")
 	fs.BoolVar(&wait, "wait", false, "wait for a claimable delivery")
 	fs.DurationVar(&timeout, "timeout", 0, "maximum time to wait when --wait is set")
 	fs.BoolVar(&jsonOutput, "json", false, "emit JSON")
@@ -261,7 +272,8 @@ func (a *App) prepareRecvCommand(args []string) (preparedCommand, error) {
 	if err := fs.Parse(args); err != nil {
 		return nil, err
 	}
-	if err := requireFlag(alias, "--for"); err != nil {
+	normalizedAliases, err := normalizeAliases("", []string(aliases), "--for")
+	if err != nil {
 		return nil, err
 	}
 	if timeout < 0 {
@@ -272,7 +284,7 @@ func (a *App) prepareRecvCommand(args []string) (preparedCommand, error) {
 	}
 
 	params := ReceiveParams{
-		Alias:   alias,
+		Aliases: normalizedAliases,
 		Wait:    wait,
 		Timeout: timeout,
 	}
@@ -289,7 +301,7 @@ func (a *App) prepareRecvCommand(args []string) (preparedCommand, error) {
 			return encoder.Encode(message)
 		}
 
-		fmt.Fprintf(a.stdout, "delivery_id=%s message_id=%s lease_token=%s lease_expires_at=%s subject=%q\n", message.DeliveryID, message.MessageID, message.LeaseToken, message.LeaseExpiresAt, message.Subject)
+		fmt.Fprintf(a.stdout, "delivery_id=%s message_id=%s recipient_alias=%s lease_token=%s lease_expires_at=%s subject=%q\n", message.DeliveryID, message.MessageID, message.RecipientAlias, message.LeaseToken, message.LeaseExpiresAt, message.Subject)
 		fmt.Fprint(a.stdout, message.Body)
 		if !strings.HasSuffix(message.Body, "\n") {
 			fmt.Fprintln(a.stdout)
@@ -434,6 +446,32 @@ func requireFlag(value, name string) error {
 		return fmt.Errorf("%s is required", name)
 	}
 	return nil
+}
+
+func normalizeAliases(alias string, aliases []string, flagName string) ([]string, error) {
+	values := make([]string, 0, len(aliases)+1)
+	if alias != "" {
+		values = append(values, alias)
+	}
+	values = append(values, aliases...)
+
+	normalized := make([]string, 0, len(values))
+	seen := make(map[string]struct{}, len(values))
+	for _, value := range values {
+		trimmed := strings.TrimSpace(value)
+		if trimmed == "" {
+			return nil, fmt.Errorf("%s must not be empty", flagName)
+		}
+		if _, exists := seen[trimmed]; exists {
+			continue
+		}
+		seen[trimmed] = struct{}{}
+		normalized = append(normalized, trimmed)
+	}
+	if len(normalized) == 0 {
+		return nil, fmt.Errorf("%s is required", flagName)
+	}
+	return normalized, nil
 }
 
 func flagWasProvided(fs *flag.FlagSet, name string) bool {

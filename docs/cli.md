@@ -68,6 +68,15 @@ agent-mailbox recv \
   --json
 ```
 
+Search multiple inboxes with one receive:
+
+```bash
+agent-mailbox recv \
+  --for workflow/reviewer/task-123 \
+  --for workflow/reviewer/task-456 \
+  --json
+```
+
 The receive result includes `delivery_id` and `lease_token`. Keep both. You
 need them for follow-up actions.
 
@@ -105,6 +114,12 @@ Rules:
 - without `--wait`, `recv` returns immediately
 - `--timeout` requires `--wait`
 - timeout or no-message returns exit code `2`
+- repeated `--for` flags search the union of the requested inboxes
+- selection is global oldest-first by `visible_at`, then `message_created_at`,
+  then `delivery_id`
+- v1 does not guarantee fairness or alias rotation while waiting
+- if any requested alias is unknown, `recv` fails instead of partially
+  succeeding
 
 ## Commands
 
@@ -144,13 +159,20 @@ Notes:
 
 ### `recv`
 
-Claim the next delivery for a recipient alias.
+Claim the next delivery for one or more recipient aliases.
 
 ```bash
-agent-mailbox recv --for <alias> [--wait] [--timeout 30s] [--json]
+agent-mailbox recv --for <alias> [--for <alias> ...] [--wait] [--timeout 30s] [--json]
 ```
 
 Use `--json` for scripts and agents.
+
+Notes:
+
+- repeat `--for` to search multiple inboxes with one claim attempt
+- duplicate `--for` values are ignored after the first occurrence
+- plain-text output includes `recipient_alias=...` so the matched inbox is clear
+- `--json` keeps the existing schema and still includes `recipient_alias`
 
 ### `ack`
 

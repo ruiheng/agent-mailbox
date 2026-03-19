@@ -111,6 +111,13 @@ agent-mailbox --state-dir /tmp/mailbox-demo \
   recv --for workflow/reviewer/task-123 --json
 ```
 
+Receive across multiple inboxes with one command:
+
+```bash
+agent-mailbox --state-dir /tmp/mailbox-demo \
+  recv --for workflow/reviewer/task-123 --for workflow/reviewer/task-456 --json
+```
+
 Ack the leased delivery using the returned `delivery_id` and `lease_token`:
 
 ```bash
@@ -119,6 +126,14 @@ agent-mailbox --state-dir /tmp/mailbox-demo \
 ```
 
 For the full command reference, see [`docs/cli.md`](docs/cli.md).
+
+`recv` v1 contract for multiple `--for` flags:
+
+- repeated `--for` searches the union of the requested inboxes
+- unknown aliases fail the whole command
+- selection is deterministic global oldest-first by `visible_at`, then
+  `message_created_at`, then `delivery_id`
+- no fairness or alias rotation guarantee is made while waiting
 
 ## Local State Layout
 
