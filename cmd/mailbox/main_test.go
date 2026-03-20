@@ -274,6 +274,60 @@ func TestCLIListYAMLOutput(t *testing.T) {
 	}
 }
 
+func TestCLIListStructuredOutputUsesEmptyArraysForExistingEmptyInbox(t *testing.T) {
+	stateDir := filepath.Join(t.TempDir(), "mailbox-state")
+
+	send := runCLI(t, "hello reviewer\n", "--state-dir", stateDir,
+		"send",
+		"--to", "workflow/reviewer/task-123",
+		"--from", "agent/sender",
+		"--subject", "review request",
+		"--body-file", "-",
+	)
+	if send.exitCode != 0 {
+		t.Fatalf("send exit code = %d, stderr = %q", send.exitCode, send.stderr)
+	}
+
+	recv := runCLI(t, "", "--state-dir", stateDir,
+		"recv",
+		"--for", "workflow/reviewer/task-123",
+		"--json",
+	)
+	if recv.exitCode != 0 {
+		t.Fatalf("recv exit code = %d, stderr = %q", recv.exitCode, recv.stderr)
+	}
+
+	jsonList := runCLI(t, "", "--state-dir", stateDir,
+		"list",
+		"--for", "workflow/reviewer/task-123",
+		"--json",
+	)
+	if jsonList.exitCode != 0 {
+		t.Fatalf("list --json exit code = %d, stderr = %q", jsonList.exitCode, jsonList.stderr)
+	}
+	if jsonList.stderr != "" {
+		t.Fatalf("list --json stderr = %q, want empty", jsonList.stderr)
+	}
+	if jsonList.stdout != "[]\n" {
+		t.Fatalf("list --json stdout = %q, want empty array", jsonList.stdout)
+	}
+
+	yamlList := runCLI(t, "", "--state-dir", stateDir,
+		"list",
+		"--for", "workflow/reviewer/task-123",
+		"--yaml",
+	)
+	if yamlList.exitCode != 0 {
+		t.Fatalf("list --yaml exit code = %d, stderr = %q", yamlList.exitCode, yamlList.stderr)
+	}
+	if yamlList.stderr != "" {
+		t.Fatalf("list --yaml stderr = %q, want empty", yamlList.stderr)
+	}
+	if yamlList.stdout != "[]\n" {
+		t.Fatalf("list --yaml stdout = %q, want empty array", yamlList.stdout)
+	}
+}
+
 func TestCLIWatchStreamsNDJSONWithoutClaiming(t *testing.T) {
 	stateDir := filepath.Join(t.TempDir(), "mailbox-state")
 

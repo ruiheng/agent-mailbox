@@ -148,7 +148,7 @@ ORDER BY d.visible_at ASC, m.created_at ASC, d.delivery_id ASC
 	}
 	defer rows.Close()
 
-	var deliveries []ListedDelivery
+	deliveries := make([]ListedDelivery, 0)
 	for rows.Next() {
 		var delivery ListedDelivery
 		var senderID sql.NullString
