@@ -52,6 +52,8 @@ agent-mailbox recv \
   --json
 ```
 
+Swap `--json` for `--yaml` when you want the same payload in YAML.
+
 Search multiple inboxes with one receive:
 
 ```bash
@@ -74,7 +76,7 @@ agent-mailbox watch \
 ```
 
 `watch` emits delivery metadata only. It never returns message bodies or lease
-tokens.
+tokens. Use `--yaml` to emit the same metadata as a YAML document stream.
 
 Ack when processing succeeds:
 
@@ -109,6 +111,7 @@ Rules:
 
 - without `--wait`, `recv` returns immediately
 - `--timeout` requires `--wait`
+- `--json` and `--yaml` are mutually exclusive
 - timeout or no-message returns exit code `2`
 - repeated `--for` flags search the union of the requested inboxes
 - selection is global oldest-first by `visible_at`, then `message_created_at`,
@@ -122,7 +125,7 @@ Rules:
 `watch` is the observe-only companion to `recv`.
 
 ```bash
-agent-mailbox watch --for <address> [--for <address> ...] [--state dead_letter] [--timeout 30s] [--json]
+agent-mailbox watch --for <address> [--for <address> ...] [--state dead_letter] [--timeout 30s] [--json | --yaml]
 ```
 
 Rules:
@@ -134,6 +137,7 @@ Rules:
 - default output watches currently visible queued deliveries
 - `--state <state>` watches that delivery state instead
 - `--json` emits one JSON object per line (NDJSON)
+- `--yaml` emits one YAML document per matching delivery, each starting with `---`
 - without `--timeout`, `watch` runs until interrupted
 - `--timeout` is an idle timeout; if no newly matching delivery appears during
   that interval, `watch` exits successfully
@@ -170,10 +174,10 @@ Notes:
 Claim the next delivery for one or more recipient addresses.
 
 ```bash
-agent-mailbox recv --for <address> [--for <address> ...] [--wait] [--timeout 30s] [--json]
+agent-mailbox recv --for <address> [--for <address> ...] [--wait] [--timeout 30s] [--json | --yaml]
 ```
 
-Use `--json` for scripts and agents.
+Use `--json` or `--yaml` for scripts and agents.
 
 Notes:
 
@@ -181,6 +185,7 @@ Notes:
 - duplicate `--for` values are ignored after the first occurrence
 - plain-text output includes `recipient_address=...` so the matched inbox is clear
 - `--json` keeps the existing schema and still includes `recipient_address`
+- `--yaml` emits the same fields as `--json`, using YAML instead of JSON
 - unseen addresses are ignored until a matching delivery exists
 
 ### `watch`
@@ -188,11 +193,13 @@ Notes:
 Observe matching deliveries without claiming them.
 
 ```bash
-agent-mailbox watch --for <address> [--for <address> ...] [--state dead_letter] [--timeout 30s] [--json]
+agent-mailbox watch --for <address> [--for <address> ...] [--state dead_letter] [--timeout 30s] [--json | --yaml]
 ```
 
-Use `--json` for streaming consumers. Each output line is one delivery metadata
-object, not a JSON array.
+Use `--json` or `--yaml` for streaming consumers.
+
+- `--json` emits one delivery metadata object per line, not a JSON array
+- `--yaml` emits one YAML document per delivery, separated by `---`
 
 Notes:
 
@@ -249,7 +256,7 @@ Retry behavior in v1:
 Inspect deliveries for one recipient address.
 
 ```bash
-agent-mailbox list --for <address> [--state dead_letter] [--json]
+agent-mailbox list --for <address> [--state dead_letter] [--json | --yaml]
 ```
 
 Notes:
@@ -257,7 +264,7 @@ Notes:
 - default output shows currently claimable queued deliveries
 - `--state dead_letter` shows dead-lettered deliveries
 - `list` is a snapshot; use `watch` for a stream
-- use `--json` for scripts and agents
+- use `--json` or `--yaml` for scripts and agents
 - unseen addresses return an empty result
 
 ## Exit Codes

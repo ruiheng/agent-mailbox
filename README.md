@@ -91,6 +91,8 @@ The default state directory is:
 - otherwise `~/.local/state/ai-agent/mailbox`
 
 You can set `MAILBOX_STATE_DIR` once, or pass `--state-dir` per command.
+Read-style commands (`list`, `recv`, and `watch`) accept either `--json` or
+`--yaml`, but not both together.
 
 ## Minimal Example
 
@@ -126,6 +128,10 @@ Observe matching queued deliveries without claiming them:
 agent-mailbox --state-dir /tmp/mailbox-demo \
   watch --for workflow/reviewer/task-123 --timeout 30s --json
 ```
+
+Use `--yaml` when you want the same `list`, `recv`, or `watch` payloads in YAML.
+For `watch`, YAML output is a document stream with one delivery per `---`
+document.
 
 Ack the leased delivery using the returned `delivery_id` and `lease_token`:
 

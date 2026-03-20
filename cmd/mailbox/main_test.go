@@ -66,6 +66,42 @@ func TestCLISendRecvAckFlow(t *testing.T) {
 	}
 }
 
+func TestCLIRecvYAMLOutput(t *testing.T) {
+	stateDir := filepath.Join(t.TempDir(), "mailbox-state")
+
+	send := runCLI(t, "hello reviewer\n", "--state-dir", stateDir,
+		"send",
+		"--to", "workflow/reviewer/task-123",
+		"--from", "agent/sender",
+		"--subject", "review request",
+		"--body-file", "-",
+	)
+	if send.exitCode != 0 {
+		t.Fatalf("send exit code = %d, stderr = %q", send.exitCode, send.stderr)
+	}
+
+	recv := runCLI(t, "", "--state-dir", stateDir,
+		"recv",
+		"--for", "workflow/reviewer/task-123",
+		"--yaml",
+	)
+	if recv.exitCode != 0 {
+		t.Fatalf("recv exit code = %d, stderr = %q", recv.exitCode, recv.stderr)
+	}
+	if recv.stderr != "" {
+		t.Fatalf("recv stderr = %q, want empty", recv.stderr)
+	}
+	if !strings.Contains(recv.stdout, "recipient_address: \"workflow/reviewer/task-123\"\n") {
+		t.Fatalf("recv stdout = %q, want YAML recipient_address", recv.stdout)
+	}
+	if !strings.Contains(recv.stdout, "lease_token: \"") {
+		t.Fatalf("recv stdout = %q, want lease_token field", recv.stdout)
+	}
+	if !strings.Contains(recv.stdout, "body: \"hello reviewer\\n\"\n") {
+		t.Fatalf("recv stdout = %q, want YAML body", recv.stdout)
+	}
+}
+
 func TestCLIRecvNoMessageExitCodeAndSilence(t *testing.T) {
 	stateDir := filepath.Join(t.TempDir(), "mailbox-state")
 
@@ -205,6 +241,39 @@ func TestCLIRecvMultipleAddressesIgnoresUnknownAddress(t *testing.T) {
 	}
 }
 
+func TestCLIListYAMLOutput(t *testing.T) {
+	stateDir := filepath.Join(t.TempDir(), "mailbox-state")
+
+	send := runCLI(t, "hello reviewer\n", "--state-dir", stateDir,
+		"send",
+		"--to", "workflow/reviewer/task-123",
+		"--from", "agent/sender",
+		"--subject", "review request",
+		"--body-file", "-",
+	)
+	if send.exitCode != 0 {
+		t.Fatalf("send exit code = %d, stderr = %q", send.exitCode, send.stderr)
+	}
+
+	list := runCLI(t, "", "--state-dir", stateDir,
+		"list",
+		"--for", "workflow/reviewer/task-123",
+		"--yaml",
+	)
+	if list.exitCode != 0 {
+		t.Fatalf("list exit code = %d, stderr = %q", list.exitCode, list.stderr)
+	}
+	if list.stderr != "" {
+		t.Fatalf("list stderr = %q, want empty", list.stderr)
+	}
+	if !strings.HasPrefix(list.stdout, "-\n  delivery_id: ") {
+		t.Fatalf("list stdout = %q, want YAML sequence", list.stdout)
+	}
+	if !strings.Contains(list.stdout, "recipient_address: \"workflow/reviewer/task-123\"\n") {
+		t.Fatalf("list stdout = %q, want YAML recipient_address", list.stdout)
+	}
+}
+
 func TestCLIWatchStreamsNDJSONWithoutClaiming(t *testing.T) {
 	stateDir := filepath.Join(t.TempDir(), "mailbox-state")
 
@@ -264,6 +333,55 @@ func TestCLIWatchStreamsNDJSONWithoutClaiming(t *testing.T) {
 	}
 }
 
+func TestCLIWatchStreamsYAMLDocumentsWithoutClaiming(t *testing.T) {
+	stateDir := filepath.Join(t.TempDir(), "mailbox-state")
+
+	send := runCLI(t, "watch body\n", "--state-dir", stateDir,
+		"send",
+		"--to", "workflow/watch",
+		"--from", "agent/sender",
+		"--subject", "watch me",
+		"--body-file", "-",
+	)
+	if send.exitCode != 0 {
+		t.Fatalf("send exit code = %d, stderr = %q", send.exitCode, send.stderr)
+	}
+
+	watch := runCLI(t, "", "--state-dir", stateDir,
+		"watch",
+		"--for", "workflow/watch",
+		"--timeout", "120ms",
+		"--yaml",
+	)
+	if watch.exitCode != 0 {
+		t.Fatalf("watch exit code = %d, stderr = %q", watch.exitCode, watch.stderr)
+	}
+	if watch.stderr != "" {
+		t.Fatalf("watch stderr = %q, want empty", watch.stderr)
+	}
+	if !strings.HasPrefix(watch.stdout, "---\ndelivery_id: ") {
+		t.Fatalf("watch stdout = %q, want YAML document stream", watch.stdout)
+	}
+	if !strings.Contains(watch.stdout, "recipient_address: \"workflow/watch\"\n") {
+		t.Fatalf("watch stdout = %q, want recipient_address field", watch.stdout)
+	}
+	if strings.Contains(watch.stdout, "lease_token: ") {
+		t.Fatalf("watch stdout unexpectedly contains lease_token: %q", watch.stdout)
+	}
+	if strings.Contains(watch.stdout, "body: ") {
+		t.Fatalf("watch stdout unexpectedly contains body: %q", watch.stdout)
+	}
+
+	recv := runCLI(t, "", "--state-dir", stateDir,
+		"recv",
+		"--for", "workflow/watch",
+		"--json",
+	)
+	if recv.exitCode != 0 {
+		t.Fatalf("recv after watch exit code = %d, stderr = %q", recv.exitCode, recv.stderr)
+	}
+}
+
 func TestCLIWatchTimeoutExitsCleanlyWithoutOutput(t *testing.T) {
 	stateDir := filepath.Join(t.TempDir(), "mailbox-state")
 
@@ -297,12 +415,12 @@ func TestCLIHelpExitsZeroAndPrintsUsage(t *testing.T) {
 		{
 			name:         "recv help",
 			args:         []string{"recv", "--help"},
-			wantContains: "Usage:\n  agent-mailbox recv --for ADDRESS [--for ADDRESS ...] [--wait] [--timeout DURATION] [--json]",
+			wantContains: "Usage:\n  agent-mailbox recv --for ADDRESS [--for ADDRESS ...] [--wait] [--timeout DURATION] [--json | --yaml]",
 		},
 		{
 			name:         "watch help",
 			args:         []string{"watch", "--help"},
-			wantContains: "Usage:\n  agent-mailbox watch --for ADDRESS [--for ADDRESS ...] [--state STATE] [--timeout DURATION] [--json]",
+			wantContains: "Usage:\n  agent-mailbox watch --for ADDRESS [--for ADDRESS ...] [--state STATE] [--timeout DURATION] [--json | --yaml]",
 		},
 	}
 
@@ -319,6 +437,26 @@ func TestCLIHelpExitsZeroAndPrintsUsage(t *testing.T) {
 				t.Fatalf("stderr = %q, want empty", result.stderr)
 			}
 		})
+	}
+}
+
+func TestCLIRejectsJSONAndYAMLTogether(t *testing.T) {
+	stateDir := filepath.Join(t.TempDir(), "mailbox-state")
+
+	recv := runCLI(t, "", "--state-dir", stateDir,
+		"recv",
+		"--for", "workflow/reviewer/task-123",
+		"--json",
+		"--yaml",
+	)
+	if recv.exitCode != 1 {
+		t.Fatalf("recv exit code = %d, want 1; stderr = %q", recv.exitCode, recv.stderr)
+	}
+	if recv.stdout != "" {
+		t.Fatalf("recv stdout = %q, want empty", recv.stdout)
+	}
+	if !strings.Contains(recv.stderr, "--json and --yaml are mutually exclusive") {
+		t.Fatalf("recv stderr = %q, want mutual exclusion error", recv.stderr)
 	}
 }
 

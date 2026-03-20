@@ -2,7 +2,6 @@ package mailbox
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -185,16 +184,20 @@ func (a *App) prepareListCommand(args []string) (preparedCommand, error) {
 	fs.SetOutput(io.Discard)
 
 	var address string
-	var jsonOutput bool
+	var formats outputFlags
 	var state string
 	fs.StringVar(&address, "for", "", "recipient address")
-	fs.BoolVar(&jsonOutput, "json", false, "emit JSON")
+	formats.register(fs, "emit JSON", "emit YAML")
 	fs.StringVar(&state, "state", "", "filter by delivery state")
 
 	if err := a.parseCommandFlags(fs, args, a.writeListHelp); err != nil {
 		return nil, err
 	}
 	if err := requireFlag(address, "--for"); err != nil {
+		return nil, err
+	}
+	format, err := formats.resolve()
+	if err != nil {
 		return nil, err
 	}
 
@@ -209,10 +212,8 @@ func (a *App) prepareListCommand(args []string) (preparedCommand, error) {
 			return err
 		}
 
-		if jsonOutput {
-			encoder := json.NewEncoder(a.stdout)
-			encoder.SetIndent("", "  ")
-			return encoder.Encode(deliveries)
+		if format != outputFormatText {
+			return a.writeStructuredOutput(format, deliveries)
 		}
 
 		for _, delivery := range deliveries {
@@ -229,12 +230,12 @@ func (a *App) prepareRecvCommand(args []string) (preparedCommand, error) {
 	var addresses stringListFlag
 	var wait bool
 	var timeout time.Duration
-	var jsonOutput bool
+	var formats outputFlags
 
 	fs.Var(&addresses, "for", "recipient address (repeatable)")
 	fs.BoolVar(&wait, "wait", false, "wait for a claimable delivery")
 	fs.DurationVar(&timeout, "timeout", 0, "maximum time to wait when --wait is set")
-	fs.BoolVar(&jsonOutput, "json", false, "emit JSON")
+	formats.register(fs, "emit JSON", "emit YAML")
 
 	if err := a.parseCommandFlags(fs, args, a.writeRecvHelp); err != nil {
 		return nil, err
@@ -249,6 +250,10 @@ func (a *App) prepareRecvCommand(args []string) (preparedCommand, error) {
 	if flagWasProvided(fs, "timeout") && !wait {
 		return nil, errors.New("--timeout requires --wait")
 	}
+	format, err := formats.resolve()
+	if err != nil {
+		return nil, err
+	}
 
 	params := ReceiveParams{
 		Addresses: normalizedAddresses,
@@ -262,10 +267,8 @@ func (a *App) prepareRecvCommand(args []string) (preparedCommand, error) {
 			return err
 		}
 
-		if jsonOutput {
-			encoder := json.NewEncoder(a.stdout)
-			encoder.SetIndent("", "  ")
-			return encoder.Encode(message)
+		if format != outputFormatText {
+			return a.writeStructuredOutput(format, message)
 		}
 
 		fmt.Fprintf(a.stdout, "delivery_id=%s message_id=%s recipient_address=%s lease_token=%s lease_expires_at=%s subject=%q\n", message.DeliveryID, message.MessageID, message.RecipientAddress, message.LeaseToken, message.LeaseExpiresAt, message.Subject)
@@ -283,12 +286,12 @@ func (a *App) prepareWatchCommand(args []string) (preparedCommand, error) {
 
 	var addresses stringListFlag
 	var timeout time.Duration
-	var jsonOutput bool
+	var formats outputFlags
 	var state string
 
 	fs.Var(&addresses, "for", "recipient address (repeatable)")
 	fs.DurationVar(&timeout, "timeout", 0, "maximum idle time before watch exits")
-	fs.BoolVar(&jsonOutput, "json", false, "emit NDJSON")
+	formats.register(fs, "emit NDJSON", "emit a YAML document stream")
 	fs.StringVar(&state, "state", "", "filter by delivery state")
 
 	if err := a.parseCommandFlags(fs, args, a.writeWatchHelp); err != nil {
@@ -301,6 +304,10 @@ func (a *App) prepareWatchCommand(args []string) (preparedCommand, error) {
 	if timeout < 0 {
 		return nil, errors.New("--timeout must be greater than or equal to 0")
 	}
+	format, err := formats.resolve()
+	if err != nil {
+		return nil, err
+	}
 
 	params := WatchParams{
 		Addresses: normalizedAddresses,
@@ -309,26 +316,13 @@ func (a *App) prepareWatchCommand(args []string) (preparedCommand, error) {
 	}
 
 	return func(ctx context.Context, store *Store) error {
-		var encoder *json.Encoder
-		if jsonOutput {
-			encoder = json.NewEncoder(a.stdout)
+		emit, err := a.newWatchEmitter(format)
+		if err != nil {
+			return err
 		}
 
 		return store.Watch(ctx, params, func(delivery ListedDelivery) error {
-			if jsonOutput {
-				return encoder.Encode(delivery)
-			}
-
-			fmt.Fprintf(
-				a.stdout,
-				"delivery_id=%s recipient_address=%s state=%s visible_at=%s subject=%q\n",
-				delivery.DeliveryID,
-				delivery.RecipientAddress,
-				delivery.State,
-				delivery.VisibleAt,
-				delivery.Subject,
-			)
-			return nil
+			return emit(delivery)
 		})
 	}, nil
 }
@@ -553,38 +547,41 @@ func (a *App) writeSendHelp() {
 func (a *App) writeListHelp() {
 	writeHelp(a.stdout, []string{
 		"Usage:",
-		"  agent-mailbox list --for ADDRESS [--state STATE] [--json]",
+		"  agent-mailbox list --for ADDRESS [--state STATE] [--json | --yaml]",
 		"",
 		"Options:",
 		"  --for ADDRESS      Recipient address",
 		"  --state STATE      Filter by delivery state",
 		"  --json             Emit JSON",
+		"  --yaml             Emit YAML",
 	})
 }
 
 func (a *App) writeRecvHelp() {
 	writeHelp(a.stdout, []string{
 		"Usage:",
-		"  agent-mailbox recv --for ADDRESS [--for ADDRESS ...] [--wait] [--timeout DURATION] [--json]",
+		"  agent-mailbox recv --for ADDRESS [--for ADDRESS ...] [--wait] [--timeout DURATION] [--json | --yaml]",
 		"",
 		"Options:",
 		"  --for ADDRESS        Recipient address (repeatable)",
 		"  --wait               Wait for a claimable delivery",
 		"  --timeout DURATION   Maximum time to wait when --wait is set",
 		"  --json               Emit JSON",
+		"  --yaml               Emit YAML",
 	})
 }
 
 func (a *App) writeWatchHelp() {
 	writeHelp(a.stdout, []string{
 		"Usage:",
-		"  agent-mailbox watch --for ADDRESS [--for ADDRESS ...] [--state STATE] [--timeout DURATION] [--json]",
+		"  agent-mailbox watch --for ADDRESS [--for ADDRESS ...] [--state STATE] [--timeout DURATION] [--json | --yaml]",
 		"",
 		"Options:",
 		"  --for ADDRESS        Recipient address (repeatable)",
 		"  --state STATE        Filter by delivery state",
 		"  --timeout DURATION   Maximum idle time before watch exits",
 		"  --json               Emit NDJSON",
+		"  --yaml               Emit a YAML document stream",
 	})
 }
 

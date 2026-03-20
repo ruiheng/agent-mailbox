@@ -492,6 +492,10 @@ func TestInvalidCLIPathsDoNotCreateRuntimeState(t *testing.T) {
 			args: []string{"list", "--json"},
 		},
 		{
+			name: "list conflicting formats",
+			args: []string{"list", "--for", "workflow/reviewer/task-123", "--json", "--yaml"},
+		},
+		{
 			name: "recv missing for",
 			args: []string{"recv", "--wait"},
 		},
@@ -508,6 +512,10 @@ func TestInvalidCLIPathsDoNotCreateRuntimeState(t *testing.T) {
 			args: []string{"recv", "--for", "workflow/reviewer/task-123", "--wait", "--timeout", "-1s"},
 		},
 		{
+			name: "recv conflicting formats",
+			args: []string{"recv", "--for", "workflow/reviewer/task-123", "--json", "--yaml"},
+		},
+		{
 			name: "watch missing for",
 			args: []string{"watch", "--json"},
 		},
@@ -518,6 +526,10 @@ func TestInvalidCLIPathsDoNotCreateRuntimeState(t *testing.T) {
 		{
 			name: "watch negative timeout",
 			args: []string{"watch", "--for", "workflow/reviewer/task-123", "--timeout", "-1s"},
+		},
+		{
+			name: "watch conflicting formats",
+			args: []string{"watch", "--for", "workflow/reviewer/task-123", "--json", "--yaml"},
 		},
 		{
 			name: "ack missing delivery",
@@ -596,12 +608,12 @@ func TestHelpCLIPathsDoNotCreateRuntimeState(t *testing.T) {
 		{
 			name:         "recv help",
 			args:         []string{"recv", "--help"},
-			wantContains: "Usage:\n  agent-mailbox recv --for ADDRESS [--for ADDRESS ...] [--wait] [--timeout DURATION] [--json]",
+			wantContains: "Usage:\n  agent-mailbox recv --for ADDRESS [--for ADDRESS ...] [--wait] [--timeout DURATION] [--json | --yaml]",
 		},
 		{
 			name:         "watch help",
 			args:         []string{"watch", "--help"},
-			wantContains: "Usage:\n  agent-mailbox watch --for ADDRESS [--for ADDRESS ...] [--state STATE] [--timeout DURATION] [--json]",
+			wantContains: "Usage:\n  agent-mailbox watch --for ADDRESS [--for ADDRESS ...] [--state STATE] [--timeout DURATION] [--json | --yaml]",
 		},
 	}
 
