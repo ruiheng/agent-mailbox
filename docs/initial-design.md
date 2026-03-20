@@ -91,18 +91,21 @@ Blob storage format in v1:
 
 ## 4. Identity Model
 
-Human-friendly names are useful, but they should not be the primary key.
+The public routing model is address-first.
+Senders and receivers talk in terms of mailbox addresses.
+Endpoint ids still exist internally so current state can use stable foreign keys.
 
 Use two identity forms:
 
-- endpoint id: stable logical identity, for example `ep_01hv...`
-- address: optional human-facing name, for example `workflow/reviewer/task-123`
+- address: public routing identity, for example `workflow/reviewer/task-123`
+- endpoint id: internal canonical identity, for example `ep_01hv...`
 
 Rules:
 
-- deliveries target endpoint ids
-- humans and workflows may address addresses
-- addresses resolve through a local registry
+- humans and workflows send to and receive for addresses
+- deliveries target internal endpoint ids after address resolution
+- addresses are created lazily on first use instead of through a separate
+  registration step
 - addresses are namespaced
 - address uniqueness is enforced per mailbox instance
 
@@ -117,6 +120,9 @@ the v1 routing model.
 
 ### Endpoint
 
+Endpoints are an internal normalization detail.
+In v1 they are created automatically when an address first appears.
+
 Suggested fields:
 
 - `endpoint_id`
@@ -124,6 +130,8 @@ Suggested fields:
 - `metadata_json`
 
 ### Address
+
+Addresses are the only public mailbox identity in v1.
 
 Suggested fields:
 
@@ -503,7 +511,7 @@ Suggested fields:
 
 The event log should capture lifecycle transitions such as:
 
-- endpoint registered
+- address first seen
 - message created
 - delivery queued
 - delivery leased
@@ -532,7 +540,7 @@ Build the smallest complete slice:
 
 1. SQLite schema for `endpoints`, `endpoint_addresses`, `messages`,
    `deliveries`, and `events`
-2. address lookup
+2. implicit address ensure and lookup
 3. `send`
 4. `recv --wait`
 5. `watch`
