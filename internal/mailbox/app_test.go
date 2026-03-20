@@ -347,6 +347,123 @@ func TestSendAndListHappyPath(t *testing.T) {
 	}
 }
 
+func TestSendRejectsEmptyBody(t *testing.T) {
+	t.Parallel()
+
+	runtime, err := OpenRuntime(context.Background(), filepath.Join(t.TempDir(), "mailbox-state"))
+	if err != nil {
+		t.Fatalf("OpenRuntime() error = %v", err)
+	}
+	defer runtime.Close()
+
+	store := runtime.Store()
+	for _, body := range [][]byte{nil, []byte{}} {
+		_, err := store.Send(context.Background(), SendParams{
+			ToAddress:     "workflow/reviewer/task-123",
+			FromAddress:   "agent/sender",
+			Subject:       "review request",
+			ContentType:   "text/plain",
+			SchemaVersion: "v1",
+			Body:          body,
+		})
+		if !errors.Is(err, ErrEmptyBody) {
+			t.Fatalf("Send(empty body) error = %v, want ErrEmptyBody", err)
+		}
+	}
+
+	var messageCount int
+	if err := runtime.DB().QueryRow(`SELECT COUNT(*) FROM messages`).Scan(&messageCount); err != nil {
+		t.Fatalf("count messages error = %v", err)
+	}
+	if messageCount != 0 {
+		t.Fatalf("message count = %d, want 0", messageCount)
+	}
+
+	var deliveryCount int
+	if err := runtime.DB().QueryRow(`SELECT COUNT(*) FROM deliveries`).Scan(&deliveryCount); err != nil {
+		t.Fatalf("count deliveries error = %v", err)
+	}
+	if deliveryCount != 0 {
+		t.Fatalf("delivery count = %d, want 0", deliveryCount)
+	}
+
+	entries, err := os.ReadDir(runtime.BlobDir())
+	if err != nil {
+		t.Fatalf("os.ReadDir(blob dir) error = %v", err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("len(blob entries) = %d, want 0", len(entries))
+	}
+}
+
+func TestAppSendRejectsEmptyBodyInput(t *testing.T) {
+	t.Parallel()
+
+	testCases := []struct {
+		name     string
+		stdin    string
+		bodyFile string
+	}{
+		{
+			name:     "empty stdin",
+			bodyFile: "-",
+		},
+		{
+			name: "empty file",
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			stateDir := filepath.Join(t.TempDir(), "mailbox-state")
+
+			bodyFile := tc.bodyFile
+			if bodyFile == "" {
+				path := filepath.Join(t.TempDir(), "body.txt")
+				if err := os.WriteFile(path, []byte{}, 0o600); err != nil {
+					t.Fatalf("os.WriteFile(empty body) error = %v", err)
+				}
+				bodyFile = path
+			}
+
+			app := NewApp(strings.NewReader(tc.stdin), &bytes.Buffer{}, &bytes.Buffer{})
+			err := app.Run(context.Background(), []string{
+				"--state-dir", stateDir,
+				"send",
+				"--to", "workflow/reviewer/task-123",
+				"--from", "agent/sender",
+				"--subject", "review request",
+				"--body-file", bodyFile,
+			})
+			if !errors.Is(err, ErrEmptyBody) {
+				t.Fatalf("Run(empty body) error = %v, want ErrEmptyBody", err)
+			}
+
+			runtime, err := OpenRuntime(context.Background(), stateDir)
+			if err != nil {
+				t.Fatalf("OpenRuntime(verify) error = %v", err)
+			}
+			defer runtime.Close()
+
+			var messageCount int
+			if err := runtime.DB().QueryRow(`SELECT COUNT(*) FROM messages`).Scan(&messageCount); err != nil {
+				t.Fatalf("count messages error = %v", err)
+			}
+			if messageCount != 0 {
+				t.Fatalf("message count = %d, want 0", messageCount)
+			}
+
+			entries, err := os.ReadDir(runtime.BlobDir())
+			if err != nil {
+				t.Fatalf("os.ReadDir(blob dir) error = %v", err)
+			}
+			if len(entries) != 0 {
+				t.Fatalf("len(blob entries) = %d, want 0", len(entries))
+			}
+		})
+	}
+}
+
 func TestInvalidCLIPathsDoNotCreateRuntimeState(t *testing.T) {
 	t.Parallel()
 

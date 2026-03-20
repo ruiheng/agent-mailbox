@@ -15,6 +15,8 @@ import (
 	"time"
 )
 
+var ErrEmptyBody = errors.New("message body must not be empty")
+
 type Store struct {
 	db      *sql.DB
 	blobDir string
@@ -106,6 +108,9 @@ func (s *Store) Send(ctx context.Context, params SendParams) (SendResult, error)
 	toAddress := strings.TrimSpace(params.ToAddress)
 	if toAddress == "" {
 		return SendResult{}, errors.New("recipient address is required")
+	}
+	if len(params.Body) == 0 {
+		return SendResult{}, ErrEmptyBody
 	}
 	contentType := strings.TrimSpace(params.ContentType)
 	if contentType == "" {

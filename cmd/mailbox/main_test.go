@@ -117,6 +117,27 @@ func TestCLIRecvNoMessageExitCodeAndSilence(t *testing.T) {
 	}
 }
 
+func TestCLISendRejectsEmptyBody(t *testing.T) {
+	stateDir := filepath.Join(t.TempDir(), "mailbox-state")
+
+	send := runCLI(t, "", "--state-dir", stateDir,
+		"send",
+		"--to", "workflow/reviewer/task-123",
+		"--from", "agent/sender",
+		"--subject", "review request",
+		"--body-file", "-",
+	)
+	if send.exitCode != 1 {
+		t.Fatalf("send empty body exit code = %d, want 1; stderr = %q", send.exitCode, send.stderr)
+	}
+	if send.stdout != "" {
+		t.Fatalf("send empty body stdout = %q, want empty", send.stdout)
+	}
+	if !strings.Contains(send.stderr, mailbox.ErrEmptyBody.Error()) {
+		t.Fatalf("send empty body stderr = %q, want substring %q", send.stderr, mailbox.ErrEmptyBody.Error())
+	}
+}
+
 func TestCLIRecvMultipleAddressesPlainTextIncludesRecipientAddress(t *testing.T) {
 	stateDir := filepath.Join(t.TempDir(), "mailbox-state")
 

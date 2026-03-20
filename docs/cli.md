@@ -160,6 +160,7 @@ Common options:
 Notes:
 
 - `--body-file -` reads from stdin
+- the message body must not be empty
 - `send` creates the recipient address automatically on first use
 - `send` also creates the optional `--from` address automatically on first use
 - `--from` is optional

@@ -180,8 +180,8 @@ Rules:
   body for the given `content_type`
 - the mailbox stores `schema_version` but does not interpret it in v1
 - `body_sha256` is computed and stored by `send`
-- `recv` does not verify `body_sha256` in v1; it is stored for audit and optional
-  consumer-side verification
+- `recv` verifies `body_size` and `body_sha256` before returning the message
+- a blob size/hash mismatch is treated as message-body corruption
 - `metadata_json` is for small extensible metadata, not an unbounded dumping
   ground
 
@@ -271,6 +271,7 @@ Behavior:
 - if `--from` is omitted, store `sender_endpoint_id = NULL`
 - accept body input from either `--body-file <path>` or `--body-file -` for
   stdin
+- reject empty message bodies
 - persist the message body into the blob store
 - persist the immutable message
 - create one delivery in `queued`

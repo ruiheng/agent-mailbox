@@ -2,7 +2,9 @@ package mailbox
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"os"
@@ -20,6 +22,7 @@ const (
 
 var (
 	ErrNoMessage          = errors.New("no message available")
+	ErrBodyIntegrity      = errors.New("body blob failed integrity check")
 	ErrLeaseExpired       = errors.New("lease expired")
 	ErrLeaseTokenMismatch = errors.New("lease token does not match current lease")
 )
@@ -362,7 +365,7 @@ WHERE delivery_id = ?
 			return ReceivedMessage{}, fmt.Errorf("commit receive transaction: %w", err)
 		}
 
-		body, err := s.readBlob(candidate.BodyBlobRef)
+		body, err := s.readBlob(candidate.BodyBlobRef, candidate.BodySize, candidate.BodySHA256)
 		if err != nil {
 			return ReceivedMessage{}, err
 		}
@@ -593,10 +596,18 @@ VALUES (?, ?, ?, ?, ?, ?, ?)
 	return nil
 }
 
-func (s *Store) readBlob(blobRef string) ([]byte, error) {
+func (s *Store) readBlob(blobRef string, expectedSize int64, expectedSHA256 string) ([]byte, error) {
 	body, err := os.ReadFile(filepath.Join(s.blobDir, blobRef))
 	if err != nil {
 		return nil, fmt.Errorf("read body blob %q: %w", blobRef, err)
+	}
+	if int64(len(body)) != expectedSize {
+		return nil, fmt.Errorf("%w for %q: size=%d want=%d", ErrBodyIntegrity, blobRef, len(body), expectedSize)
+	}
+
+	bodySHA256 := sha256.Sum256(body)
+	if actualSHA256 := hex.EncodeToString(bodySHA256[:]); actualSHA256 != expectedSHA256 {
+		return nil, fmt.Errorf("%w for %q: sha256=%s want=%s", ErrBodyIntegrity, blobRef, actualSHA256, expectedSHA256)
 	}
 	return body, nil
 }

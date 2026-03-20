@@ -103,6 +103,9 @@ agent-mailbox --state-dir /tmp/mailbox-demo \
   --subject "review request" --body-file -
 ```
 
+`send` requires a non-empty message body. Empty stdin and empty files are
+rejected.
+
 Receive the next claimable message:
 
 ```bash

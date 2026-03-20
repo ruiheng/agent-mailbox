@@ -3,7 +3,9 @@ package mailbox
 import (
 	"context"
 	"errors"
+	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -384,6 +386,27 @@ func TestReceiveWaitSeesAddressCreatedByLaterSend(t *testing.T) {
 	}
 	if result.message.RecipientAddress != "workflow/later" {
 		t.Fatalf("Receive(wait unseen) recipient address = %q, want workflow/later", result.message.RecipientAddress)
+	}
+}
+
+func TestReceiveRejectsCorruptBodyBlob(t *testing.T) {
+	t.Parallel()
+
+	runtime, store := newLeaseTestStore(t)
+	defer runtime.Close()
+
+	sent := mustSendMessage(t, store, "workflow/corrupt", "agent/sender", "corrupt", "expected body")
+	blobPath := filepath.Join(runtime.BlobDir(), sent.BodyBlobRef)
+	if err := os.WriteFile(blobPath, []byte{}, 0o600); err != nil {
+		t.Fatalf("os.WriteFile(corrupt blob) error = %v", err)
+	}
+
+	_, err := store.Receive(context.Background(), ReceiveParams{Address: "workflow/corrupt"})
+	if !errors.Is(err, ErrBodyIntegrity) {
+		t.Fatalf("Receive(corrupt blob) error = %v, want ErrBodyIntegrity", err)
+	}
+	if !strings.Contains(err.Error(), sent.BodyBlobRef) {
+		t.Fatalf("Receive(corrupt blob) error = %q, want blob ref %q", err, sent.BodyBlobRef)
 	}
 }
 
