@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestOpenRuntimeInitializesStateAndSchema(t *testing.T) {
@@ -117,6 +118,109 @@ WHERE event_type = 'endpoint_registered'
 	}
 	if registrationEvents != 2 {
 		t.Fatalf("endpoint_registered event count = %d, want 2", registrationEvents)
+	}
+}
+
+func TestSendImplicitAddressCreationIsConcurrentSafe(t *testing.T) {
+	t.Parallel()
+
+	runtime, err := OpenRuntime(context.Background(), filepath.Join(t.TempDir(), "mailbox-state"))
+	if err != nil {
+		t.Fatalf("OpenRuntime() error = %v", err)
+	}
+	defer runtime.Close()
+	runtime.DB().SetMaxOpenConns(16)
+	runtime.DB().SetMaxIdleConns(16)
+
+	store := runtime.Store()
+
+	type sendResult struct {
+		result SendResult
+		err    error
+	}
+	const workers = 16
+	results := make(chan sendResult, workers)
+	start := make(chan struct{})
+	for range workers {
+		go func() {
+			<-start
+			result, err := store.Send(context.Background(), SendParams{
+				ToAddress:     "workflow/concurrent",
+				Subject:       "race-safe send",
+				ContentType:   "text/plain",
+				SchemaVersion: "v1",
+				Body:          []byte("hello"),
+			})
+			results <- sendResult{result: result, err: err}
+		}()
+	}
+	close(start)
+
+	var sendResults []sendResult
+	for i := 0; i < workers; i++ {
+		select {
+		case result := <-results:
+			sendResults = append(sendResults, result)
+		case <-time.After(2 * time.Second):
+			t.Fatal("timed out waiting for concurrent send results")
+		}
+	}
+	for i, result := range sendResults {
+		if result.err != nil {
+			t.Fatalf("Send(%d) error = %v", i, result.err)
+		}
+	}
+	seenDeliveryIDs := make(map[string]struct{}, workers)
+	for _, result := range sendResults {
+		if _, exists := seenDeliveryIDs[result.result.DeliveryID]; exists {
+			t.Fatalf("concurrent sends reused delivery id %q", result.result.DeliveryID)
+		}
+		seenDeliveryIDs[result.result.DeliveryID] = struct{}{}
+	}
+
+	deliveries, err := store.List(context.Background(), ListParams{Address: "workflow/concurrent", State: "queued"})
+	if err != nil {
+		t.Fatalf("List(concurrent queued) error = %v", err)
+	}
+	if len(deliveries) != workers {
+		t.Fatalf("len(concurrent queued) = %d, want %d", len(deliveries), workers)
+	}
+
+	var endpointAddressCount int
+	if err := runtime.DB().QueryRow(`SELECT COUNT(*) FROM endpoint_addresses WHERE address = ?`, "workflow/concurrent").Scan(&endpointAddressCount); err != nil {
+		t.Fatalf("count workflow/concurrent addresses error = %v", err)
+	}
+	if endpointAddressCount != 1 {
+		t.Fatalf("workflow/concurrent address count = %d, want 1", endpointAddressCount)
+	}
+
+	var endpointCount int
+	if err := runtime.DB().QueryRow(`
+SELECT COUNT(*)
+FROM endpoints
+WHERE endpoint_id IN (
+  SELECT endpoint_id
+  FROM endpoint_addresses
+  WHERE address = ?
+)
+`, "workflow/concurrent").Scan(&endpointCount); err != nil {
+		t.Fatalf("count endpoints error = %v", err)
+	}
+	if endpointCount != 1 {
+		t.Fatalf("endpoint count = %d, want 1", endpointCount)
+	}
+
+	for i, delivery := range deliveries {
+		if delivery.RecipientAddress != "workflow/concurrent" {
+			t.Fatalf("deliveries[%d] recipient address = %q, want workflow/concurrent", i, delivery.RecipientAddress)
+		}
+		if delivery.Subject != "race-safe send" {
+			t.Fatalf("deliveries[%d] subject = %q, want race-safe send", i, delivery.Subject)
+		}
+	}
+
+	if got := len(seenDeliveryIDs); got != workers {
+		t.Fatalf("unique delivery id count = %d, want %d", got, workers)
 	}
 }
 

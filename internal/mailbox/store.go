@@ -294,10 +294,6 @@ func (s *Store) ensureEndpointAddress(ctx context.Context, tx *sql.Tx, address s
 	if err != nil {
 		return EndpointRegistration{}, err
 	}
-	eventID, err := newPrefixedID("evt")
-	if err != nil {
-		return EndpointRegistration{}, err
-	}
 
 	if _, err := tx.ExecContext(ctx, `
 INSERT INTO endpoints (endpoint_id, created_at, metadata_json)
@@ -306,13 +302,42 @@ VALUES (?, ?, '{}')
 		return EndpointRegistration{}, fmt.Errorf("insert endpoint: %w", err)
 	}
 
-	if _, err := tx.ExecContext(ctx, `
-INSERT INTO endpoint_addresses (address, endpoint_id, created_at)
+	result, err := tx.ExecContext(ctx, `
+INSERT OR IGNORE INTO endpoint_addresses (address, endpoint_id, created_at)
 VALUES (?, ?, ?)
-`, address, endpointID, timestamp); err != nil {
+`, address, endpointID, timestamp)
+	if err != nil {
 		return EndpointRegistration{}, fmt.Errorf("insert endpoint address: %w", err)
 	}
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return EndpointRegistration{}, fmt.Errorf("read endpoint address insert rows affected: %w", err)
+	}
+	if rowsAffected == 0 {
+		if _, err := tx.ExecContext(ctx, `
+DELETE FROM endpoints
+WHERE endpoint_id = ?
+`, endpointID); err != nil {
+			return EndpointRegistration{}, fmt.Errorf("delete unused endpoint: %w", err)
+		}
+		existingEndpointID, found, err := s.lookupEndpointID(ctx, tx, address)
+		if err != nil {
+			return EndpointRegistration{}, fmt.Errorf("reload existing endpoint address: %w", err)
+		}
+		if !found {
+			return EndpointRegistration{}, fmt.Errorf("reload existing endpoint address %q: not found after conflict", address)
+		}
+		return EndpointRegistration{
+			EndpointID: existingEndpointID,
+			Address:    address,
+			Created:    false,
+		}, nil
+	}
 
+	eventID, err := newPrefixedID("evt")
+	if err != nil {
+		return EndpointRegistration{}, err
+	}
 	detailJSON, err := marshalDetail(map[string]string{
 		"address": address,
 	})
