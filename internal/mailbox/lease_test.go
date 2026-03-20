@@ -19,9 +19,6 @@ func TestReceiveReclaimsExpiredLeaseAndRejectsStaleToken(t *testing.T) {
 		return current
 	}
 
-	mustRegisterEndpoint(t, store, "workflow/reviewer/task-123")
-	mustRegisterEndpoint(t, store, "agent/sender")
-
 	sent := mustSendMessage(t, store, "workflow/reviewer/task-123", "agent/sender", "review request", "hello reviewer")
 
 	first, err := store.Receive(context.Background(), ReceiveParams{Address: "workflow/reviewer/task-123"})
@@ -76,9 +73,6 @@ func TestReleaseDeferAndReceiveTimeout(t *testing.T) {
 		return current
 	}
 
-	mustRegisterEndpoint(t, store, "workflow/reviewer/task-123")
-	mustRegisterEndpoint(t, store, "workflow/empty")
-	mustRegisterEndpoint(t, store, "agent/sender")
 	mustSendMessage(t, store, "workflow/reviewer/task-123", "agent/sender", "review request", "hello reviewer")
 
 	first, err := store.Receive(context.Background(), ReceiveParams{Address: "workflow/reviewer/task-123"})
@@ -147,10 +141,6 @@ func TestReceiveMultipleAddressesOrdersUnionOldestFirst(t *testing.T) {
 		return current
 	}
 
-	mustRegisterEndpoint(t, store, "workflow/older")
-	mustRegisterEndpoint(t, store, "workflow/newer")
-	mustRegisterEndpoint(t, store, "agent/sender")
-
 	older := mustSendMessage(t, store, "workflow/older", "agent/sender", "older", "older body")
 	current = current.Add(time.Second)
 	newer := mustSendMessage(t, store, "workflow/newer", "agent/sender", "newer", "newer body")
@@ -197,10 +187,6 @@ func TestReceiveMultipleAddressesUsesDeliveryIDTiebreak(t *testing.T) {
 		return current
 	}
 
-	mustRegisterEndpoint(t, store, "workflow/alpha")
-	mustRegisterEndpoint(t, store, "workflow/beta")
-	mustRegisterEndpoint(t, store, "agent/sender")
-
 	alpha := mustSendMessage(t, store, "workflow/alpha", "agent/sender", "alpha", "alpha body")
 	beta := mustSendMessage(t, store, "workflow/beta", "agent/sender", "beta", "beta body")
 
@@ -235,10 +221,6 @@ func TestReceiveMultipleAddressesReclaimsExpiredLeaseAcrossUnion(t *testing.T) {
 	store.now = func() time.Time {
 		return current
 	}
-
-	mustRegisterEndpoint(t, store, "workflow/reclaim")
-	mustRegisterEndpoint(t, store, "workflow/fresh")
-	mustRegisterEndpoint(t, store, "agent/sender")
 
 	reclaimed := mustSendMessage(t, store, "workflow/reclaim", "agent/sender", "reclaim me", "reclaim body")
 	first, err := store.Receive(context.Background(), ReceiveParams{Address: "workflow/reclaim"})
@@ -290,9 +272,6 @@ func TestFailRetryPolicyDeadLettersAfterThirdFailure(t *testing.T) {
 	store.now = func() time.Time {
 		return current
 	}
-
-	mustRegisterEndpoint(t, store, "workflow/reviewer/task-123")
-	mustRegisterEndpoint(t, store, "agent/sender")
 
 	sent := mustSendMessage(t, store, "workflow/reviewer/task-123", "agent/sender", "review request", "hello reviewer")
 
@@ -356,14 +335,6 @@ func newLeaseTestStore(t *testing.T) (*Runtime, *Store) {
 	return runtime, runtime.Store()
 }
 
-func mustRegisterEndpoint(t *testing.T, store *Store, address string) {
-	t.Helper()
-
-	if _, err := store.RegisterEndpoint(context.Background(), address); err != nil {
-		t.Fatalf("RegisterEndpoint(%q) error = %v", address, err)
-	}
-}
-
 func mustSendMessage(t *testing.T, store *Store, toAddress, fromAddress, subject, body string) SendResult {
 	t.Helper()
 
@@ -379,6 +350,58 @@ func mustSendMessage(t *testing.T, store *Store, toAddress, fromAddress, subject
 		t.Fatalf("Send() error = %v", err)
 	}
 	return result
+}
+
+func TestReceiveWaitSeesAddressCreatedByLaterSend(t *testing.T) {
+	t.Parallel()
+
+	_, store := newLeaseTestStore(t)
+
+	type receiveResult struct {
+		message ReceivedMessage
+		err     error
+	}
+
+	resultCh := make(chan receiveResult, 1)
+	go func() {
+		message, err := store.Receive(context.Background(), ReceiveParams{
+			Address: "workflow/later",
+			Wait:    true,
+			Timeout: 500 * time.Millisecond,
+		})
+		resultCh <- receiveResult{message: message, err: err}
+	}()
+
+	time.Sleep(75 * time.Millisecond)
+	sent := mustSendMessage(t, store, "workflow/later", "agent/sender", "later", "later body")
+
+	result := <-resultCh
+	if result.err != nil {
+		t.Fatalf("Receive(wait unseen) error = %v", result.err)
+	}
+	if result.message.DeliveryID != sent.DeliveryID {
+		t.Fatalf("Receive(wait unseen) delivery id = %q, want %q", result.message.DeliveryID, sent.DeliveryID)
+	}
+	if result.message.RecipientAddress != "workflow/later" {
+		t.Fatalf("Receive(wait unseen) recipient address = %q, want workflow/later", result.message.RecipientAddress)
+	}
+}
+
+func TestListUnseenAddressReturnsEmpty(t *testing.T) {
+	t.Parallel()
+
+	_, store := newLeaseTestStore(t)
+
+	deliveries, err := store.List(context.Background(), ListParams{Address: "workflow/unseen"})
+	if err != nil {
+		t.Fatalf("List(unseen) error = %v", err)
+	}
+	if len(deliveries) != 0 {
+		t.Fatalf("len(List unseen) = %d, want 0", len(deliveries))
+	}
+	if deliveries == nil {
+		t.Fatal("List(unseen) returned nil slice, want empty slice")
+	}
 }
 
 func readDeliveryEventTypes(t *testing.T, runtime *Runtime, deliveryID string) []string {

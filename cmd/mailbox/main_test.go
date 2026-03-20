@@ -13,30 +13,8 @@ import (
 	"github.com/ruiheng/agent-mailbox/internal/mailbox"
 )
 
-func TestCLIRegisterSendRecvAckFlow(t *testing.T) {
+func TestCLISendRecvAckFlow(t *testing.T) {
 	stateDir := filepath.Join(t.TempDir(), "mailbox-state")
-
-	registerRecipient := runCLI(t, "", "--state-dir", stateDir,
-		"endpoint", "register",
-		"--address", "workflow/reviewer/task-123",
-	)
-	if registerRecipient.exitCode != 0 {
-		t.Fatalf("register recipient exit code = %d, stderr = %q", registerRecipient.exitCode, registerRecipient.stderr)
-	}
-	if !strings.Contains(registerRecipient.stdout, "endpoint_id=") {
-		t.Fatalf("register recipient stdout = %q, want endpoint_id", registerRecipient.stdout)
-	}
-	if strings.Contains(registerRecipient.stdout, "kind=") {
-		t.Fatalf("register recipient stdout = %q, should not include kind", registerRecipient.stdout)
-	}
-
-	registerSender := runCLI(t, "", "--state-dir", stateDir,
-		"endpoint", "register",
-		"--address", "agent/sender",
-	)
-	if registerSender.exitCode != 0 {
-		t.Fatalf("register sender exit code = %d, stderr = %q", registerSender.exitCode, registerSender.stderr)
-	}
 
 	send := runCLI(t, "hello reviewer\n", "--state-dir", stateDir,
 		"send",
@@ -91,21 +69,6 @@ func TestCLIRegisterSendRecvAckFlow(t *testing.T) {
 func TestCLIRecvNoMessageExitCodeAndSilence(t *testing.T) {
 	stateDir := filepath.Join(t.TempDir(), "mailbox-state")
 
-	register := runCLI(t, "", "--state-dir", stateDir,
-		"endpoint", "register",
-		"--address", "workflow/empty",
-	)
-	if register.exitCode != 0 {
-		t.Fatalf("register exit code = %d, stderr = %q", register.exitCode, register.stderr)
-	}
-	registerSecond := runCLI(t, "", "--state-dir", stateDir,
-		"endpoint", "register",
-		"--address", "workflow/empty-2",
-	)
-	if registerSecond.exitCode != 0 {
-		t.Fatalf("register second exit code = %d, stderr = %q", registerSecond.exitCode, registerSecond.stderr)
-	}
-
 	immediate := runCLI(t, "", "--state-dir", stateDir,
 		"recv",
 		"--for", "workflow/empty",
@@ -157,23 +120,6 @@ func TestCLIRecvNoMessageExitCodeAndSilence(t *testing.T) {
 func TestCLIRecvMultipleAddressesPlainTextIncludesRecipientAddress(t *testing.T) {
 	stateDir := filepath.Join(t.TempDir(), "mailbox-state")
 
-	for _, address := range []string{"workflow/older", "workflow/newer"} {
-		register := runCLI(t, "", "--state-dir", stateDir,
-			"endpoint", "register",
-			"--address", address,
-		)
-		if register.exitCode != 0 {
-			t.Fatalf("register %s exit code = %d, stderr = %q", address, register.exitCode, register.stderr)
-		}
-	}
-	registerSender := runCLI(t, "", "--state-dir", stateDir,
-		"endpoint", "register",
-		"--address", "agent/sender",
-	)
-	if registerSender.exitCode != 0 {
-		t.Fatalf("register sender exit code = %d, stderr = %q", registerSender.exitCode, registerSender.stderr)
-	}
-
 	sendOlder := runCLI(t, "older body\n", "--state-dir", stateDir,
 		"send",
 		"--to", "workflow/older",
@@ -211,15 +157,18 @@ func TestCLIRecvMultipleAddressesPlainTextIncludesRecipientAddress(t *testing.T)
 	}
 }
 
-func TestCLIRecvMultipleAddressesUnknownAddressFails(t *testing.T) {
+func TestCLIRecvMultipleAddressesIgnoresUnknownAddress(t *testing.T) {
 	stateDir := filepath.Join(t.TempDir(), "mailbox-state")
 
-	register := runCLI(t, "", "--state-dir", stateDir,
-		"endpoint", "register",
-		"--address", "workflow/known",
+	send := runCLI(t, "known body\n", "--state-dir", stateDir,
+		"send",
+		"--to", "workflow/known",
+		"--from", "agent/sender",
+		"--subject", "known",
+		"--body-file", "-",
 	)
-	if register.exitCode != 0 {
-		t.Fatalf("register exit code = %d, stderr = %q", register.exitCode, register.stderr)
+	if send.exitCode != 0 {
+		t.Fatalf("send exit code = %d, stderr = %q", send.exitCode, send.stderr)
 	}
 
 	recv := runCLI(t, "", "--state-dir", stateDir,
@@ -227,26 +176,16 @@ func TestCLIRecvMultipleAddressesUnknownAddressFails(t *testing.T) {
 		"--for", "workflow/known",
 		"--for", "workflow/missing",
 	)
-	if recv.exitCode != 1 {
-		t.Fatalf("recv unknown address exit code = %d, want 1; stderr = %q", recv.exitCode, recv.stderr)
+	if recv.exitCode != 0 {
+		t.Fatalf("recv mixed known/missing exit code = %d, want 0; stderr = %q", recv.exitCode, recv.stderr)
 	}
-	if !strings.Contains(recv.stderr, `address "workflow/missing" not found`) {
-		t.Fatalf("recv unknown address stderr = %q, want missing address error", recv.stderr)
+	if !strings.Contains(recv.stdout, "recipient_address=workflow/known") {
+		t.Fatalf("recv mixed known/missing stdout = %q, want recipient_address=workflow/known", recv.stdout)
 	}
 }
 
 func TestCLIWatchStreamsNDJSONWithoutClaiming(t *testing.T) {
 	stateDir := filepath.Join(t.TempDir(), "mailbox-state")
-
-	for _, address := range []string{"workflow/watch", "agent/sender"} {
-		register := runCLI(t, "", "--state-dir", stateDir,
-			"endpoint", "register",
-			"--address", address,
-		)
-		if register.exitCode != 0 {
-			t.Fatalf("register %s exit code = %d, stderr = %q", address, register.exitCode, register.stderr)
-		}
-	}
 
 	send := runCLI(t, "watch body\n", "--state-dir", stateDir,
 		"send",
@@ -306,14 +245,6 @@ func TestCLIWatchStreamsNDJSONWithoutClaiming(t *testing.T) {
 
 func TestCLIWatchTimeoutExitsCleanlyWithoutOutput(t *testing.T) {
 	stateDir := filepath.Join(t.TempDir(), "mailbox-state")
-
-	register := runCLI(t, "", "--state-dir", stateDir,
-		"endpoint", "register",
-		"--address", "workflow/empty-watch",
-	)
-	if register.exitCode != 0 {
-		t.Fatalf("register exit code = %d, stderr = %q", register.exitCode, register.stderr)
-	}
 
 	watch := runCLI(t, "", "--state-dir", stateDir,
 		"watch",

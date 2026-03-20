@@ -12,8 +12,6 @@ func TestWatchEmitsQueuedDeliveryWithoutClaiming(t *testing.T) {
 	runtime, store := newLeaseTestStore(t)
 	defer runtime.Close()
 
-	mustRegisterEndpoint(t, store, "workflow/reviewer/task-123")
-	mustRegisterEndpoint(t, store, "agent/sender")
 	sent := mustSendMessage(t, store, "workflow/reviewer/task-123", "agent/sender", "review request", "hello reviewer")
 
 	var deliveries []ListedDelivery
@@ -63,10 +61,6 @@ func TestWatchMultipleAddressesUsesOldestFirstUnion(t *testing.T) {
 		return current
 	}
 
-	mustRegisterEndpoint(t, store, "workflow/older")
-	mustRegisterEndpoint(t, store, "workflow/newer")
-	mustRegisterEndpoint(t, store, "agent/sender")
-
 	older := mustSendMessage(t, store, "workflow/older", "agent/sender", "older", "older body")
 	current = current.Add(time.Second)
 	newer := mustSendMessage(t, store, "workflow/newer", "agent/sender", "newer", "newer body")
@@ -96,5 +90,39 @@ func TestWatchMultipleAddressesUsesOldestFirstUnion(t *testing.T) {
 	}
 	if deliveries[1].RecipientAddress != "workflow/newer" {
 		t.Fatalf("deliveries[1].recipient_address = %q, want workflow/newer", deliveries[1].RecipientAddress)
+	}
+}
+
+func TestWatchSeesAddressCreatedByLaterSend(t *testing.T) {
+	t.Parallel()
+
+	_, store := newLeaseTestStore(t)
+
+	var deliveries []ListedDelivery
+	done := make(chan error, 1)
+	go func() {
+		done <- store.Watch(context.Background(), WatchParams{
+			Address: "workflow/later-watch",
+			Timeout: 300 * time.Millisecond,
+		}, func(delivery ListedDelivery) error {
+			deliveries = append(deliveries, delivery)
+			return nil
+		})
+	}()
+
+	time.Sleep(75 * time.Millisecond)
+	sent := mustSendMessage(t, store, "workflow/later-watch", "agent/sender", "watch later", "watch body")
+
+	if err := <-done; err != nil {
+		t.Fatalf("Watch(wait unseen) error = %v", err)
+	}
+	if len(deliveries) != 1 {
+		t.Fatalf("len(deliveries) = %d, want 1", len(deliveries))
+	}
+	if deliveries[0].DeliveryID != sent.DeliveryID {
+		t.Fatalf("watch later delivery id = %q, want %q", deliveries[0].DeliveryID, sent.DeliveryID)
+	}
+	if deliveries[0].RecipientAddress != "workflow/later-watch" {
+		t.Fatalf("watch later recipient address = %q, want workflow/later-watch", deliveries[0].RecipientAddress)
 	}
 }

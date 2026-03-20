@@ -17,7 +17,7 @@ type WatchParams struct {
 }
 
 func (s *Store) Watch(ctx context.Context, params WatchParams, emit func(ListedDelivery) error) error {
-	recipients, err := s.resolveRecipients(ctx, params.Address, params.Addresses, "--for")
+	addresses, err := normalizeAddresses(params.Address, params.Addresses, "--for")
 	if err != nil {
 		return err
 	}
@@ -31,6 +31,11 @@ func (s *Store) Watch(ctx context.Context, params WatchParams, emit func(ListedD
 
 	delay := initialPollDelay
 	for {
+		recipients, err := s.resolveRecipients(ctx, addresses)
+		if err != nil {
+			return err
+		}
+
 		deliveries, err := s.listDeliveriesForRecipients(ctx, recipients, state)
 		if err != nil {
 			return err
@@ -86,7 +91,7 @@ func (s *Store) Watch(ctx context.Context, params WatchParams, emit func(ListedD
 
 func (s *Store) listDeliveriesForRecipients(ctx context.Context, recipients []resolvedRecipient, state string) ([]ListedDelivery, error) {
 	if len(recipients) == 0 {
-		return nil, nil
+		return []ListedDelivery{}, nil
 	}
 
 	addressByEndpointID := make(map[string]string, len(recipients))

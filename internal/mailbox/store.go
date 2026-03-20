@@ -91,73 +91,15 @@ func (s *Store) RegisterEndpoint(ctx context.Context, address string) (EndpointR
 	}
 	defer tx.Rollback()
 
-	var endpointID string
-	row := tx.QueryRowContext(ctx, `
-SELECT endpoint_id
-FROM endpoint_addresses
-WHERE address = ?
-`, address)
-
-	switch err := row.Scan(&endpointID); {
-	case errors.Is(err, sql.ErrNoRows):
-		timestamp := formatTimestamp(s.now())
-		endpointID, err = newPrefixedID("ep")
-		if err != nil {
-			return EndpointRegistration{}, err
-		}
-		eventID, err := newPrefixedID("evt")
-		if err != nil {
-			return EndpointRegistration{}, err
-		}
-
-		if _, err := tx.ExecContext(ctx, `
-INSERT INTO endpoints (endpoint_id, created_at, metadata_json)
-VALUES (?, ?, '{}')
-`, endpointID, timestamp); err != nil {
-			return EndpointRegistration{}, fmt.Errorf("insert endpoint: %w", err)
-		}
-
-		if _, err := tx.ExecContext(ctx, `
-INSERT INTO endpoint_addresses (address, endpoint_id, created_at)
-VALUES (?, ?, ?)
-`, address, endpointID, timestamp); err != nil {
-			return EndpointRegistration{}, fmt.Errorf("insert endpoint address: %w", err)
-		}
-
-		detailJSON, err := marshalDetail(map[string]string{
-			"address": address,
-		})
-		if err != nil {
-			return EndpointRegistration{}, err
-		}
-		if _, err := tx.ExecContext(ctx, `
-INSERT INTO events (event_id, created_at, event_type, endpoint_id, detail_json)
-VALUES (?, ?, ?, ?, ?)
-`, eventID, timestamp, "endpoint_registered", endpointID, detailJSON); err != nil {
-			return EndpointRegistration{}, fmt.Errorf("insert endpoint event: %w", err)
-		}
-
-		if err := tx.Commit(); err != nil {
-			return EndpointRegistration{}, fmt.Errorf("commit endpoint registration transaction: %w", err)
-		}
-
-		return EndpointRegistration{
-			EndpointID: endpointID,
-			Address:    address,
-			Created:    true,
-		}, nil
-	case err != nil:
-		return EndpointRegistration{}, fmt.Errorf("read existing endpoint address: %w", err)
-	default:
-		if err := tx.Commit(); err != nil {
-			return EndpointRegistration{}, fmt.Errorf("commit endpoint lookup transaction: %w", err)
-		}
-		return EndpointRegistration{
-			EndpointID: endpointID,
-			Address:    address,
-			Created:    false,
-		}, nil
+	registration, err := s.ensureEndpointAddress(ctx, tx, address)
+	if err != nil {
+		return EndpointRegistration{}, err
 	}
+
+	if err := tx.Commit(); err != nil {
+		return EndpointRegistration{}, fmt.Errorf("commit endpoint registration transaction: %w", err)
+	}
+	return registration, nil
 }
 
 func (s *Store) Send(ctx context.Context, params SendParams) (SendResult, error) {
@@ -172,24 +114,6 @@ func (s *Store) Send(ctx context.Context, params SendParams) (SendResult, error)
 	schemaVersion := strings.TrimSpace(params.SchemaVersion)
 	if schemaVersion == "" {
 		schemaVersion = "v1"
-	}
-
-	recipientEndpointID, err := s.lookupEndpointID(ctx, s.db, toAddress)
-	if err != nil {
-		return SendResult{}, fmt.Errorf("resolve recipient address: %w", err)
-	}
-
-	var senderEndpointID *string
-	if address := strings.TrimSpace(params.FromAddress); address != "" {
-		id, err := s.lookupEndpointID(ctx, s.db, address)
-		if err != nil {
-			return SendResult{}, fmt.Errorf("resolve sender address: %w", err)
-		}
-		senderEndpointID = &id
-	}
-	var senderEndpointValue any
-	if senderEndpointID != nil {
-		senderEndpointValue = *senderEndpointID
 	}
 
 	blobRef, bodySize, bodySHA256, err := s.writeBlob(params.Body)
@@ -220,6 +144,25 @@ func (s *Store) Send(ctx context.Context, params SendParams) (SendResult, error)
 		return SendResult{}, fmt.Errorf("begin send transaction: %w", err)
 	}
 	defer tx.Rollback()
+
+	recipientRegistration, err := s.ensureEndpointAddress(ctx, tx, toAddress)
+	if err != nil {
+		return SendResult{}, fmt.Errorf("resolve recipient address: %w", err)
+	}
+	recipientEndpointID := recipientRegistration.EndpointID
+
+	var senderEndpointID *string
+	if address := strings.TrimSpace(params.FromAddress); address != "" {
+		registration, err := s.ensureEndpointAddress(ctx, tx, address)
+		if err != nil {
+			return SendResult{}, fmt.Errorf("resolve sender address: %w", err)
+		}
+		senderEndpointID = &registration.EndpointID
+	}
+	var senderEndpointValue any
+	if senderEndpointID != nil {
+		senderEndpointValue = *senderEndpointID
+	}
 
 	if _, err := tx.ExecContext(ctx, `
 INSERT INTO messages (
@@ -308,20 +251,16 @@ func (s *Store) List(ctx context.Context, params ListParams) ([]ListedDelivery, 
 		return nil, errors.New("recipient address is required")
 	}
 
-	recipientEndpointID, err := s.lookupEndpointID(ctx, s.db, address)
+	recipients, err := s.resolveRecipients(ctx, []string{address})
 	if err != nil {
-		return nil, fmt.Errorf("resolve recipient address: %w", err)
+		return nil, err
 	}
-
-	return s.listDeliveriesForRecipients(ctx, []resolvedRecipient{{
-		Address:    address,
-		EndpointID: recipientEndpointID,
-	}}, strings.TrimSpace(params.State))
+	return s.listDeliveriesForRecipients(ctx, recipients, strings.TrimSpace(params.State))
 }
 
 func (s *Store) lookupEndpointID(ctx context.Context, querier interface {
 	QueryRowContext(context.Context, string, ...any) *sql.Row
-}, address string) (string, error) {
+}, address string) (string, bool, error) {
 	var endpointID string
 	err := querier.QueryRowContext(ctx, `
 SELECT endpoint_id
@@ -329,12 +268,69 @@ FROM endpoint_addresses
 WHERE address = ?
 `, address).Scan(&endpointID)
 	if errors.Is(err, sql.ErrNoRows) {
-		return "", fmt.Errorf("address %q not found", address)
+		return "", false, nil
 	}
 	if err != nil {
-		return "", fmt.Errorf("lookup address %q: %w", address, err)
+		return "", false, fmt.Errorf("lookup address %q: %w", address, err)
 	}
-	return endpointID, nil
+	return endpointID, true, nil
+}
+
+func (s *Store) ensureEndpointAddress(ctx context.Context, tx *sql.Tx, address string) (EndpointRegistration, error) {
+	endpointID, found, err := s.lookupEndpointID(ctx, tx, address)
+	if err != nil {
+		return EndpointRegistration{}, fmt.Errorf("read existing endpoint address: %w", err)
+	}
+	if found {
+		return EndpointRegistration{
+			EndpointID: endpointID,
+			Address:    address,
+			Created:    false,
+		}, nil
+	}
+
+	timestamp := formatTimestamp(s.now())
+	endpointID, err = newPrefixedID("ep")
+	if err != nil {
+		return EndpointRegistration{}, err
+	}
+	eventID, err := newPrefixedID("evt")
+	if err != nil {
+		return EndpointRegistration{}, err
+	}
+
+	if _, err := tx.ExecContext(ctx, `
+INSERT INTO endpoints (endpoint_id, created_at, metadata_json)
+VALUES (?, ?, '{}')
+`, endpointID, timestamp); err != nil {
+		return EndpointRegistration{}, fmt.Errorf("insert endpoint: %w", err)
+	}
+
+	if _, err := tx.ExecContext(ctx, `
+INSERT INTO endpoint_addresses (address, endpoint_id, created_at)
+VALUES (?, ?, ?)
+`, address, endpointID, timestamp); err != nil {
+		return EndpointRegistration{}, fmt.Errorf("insert endpoint address: %w", err)
+	}
+
+	detailJSON, err := marshalDetail(map[string]string{
+		"address": address,
+	})
+	if err != nil {
+		return EndpointRegistration{}, err
+	}
+	if _, err := tx.ExecContext(ctx, `
+INSERT INTO events (event_id, created_at, event_type, endpoint_id, detail_json)
+VALUES (?, ?, ?, ?, ?)
+`, eventID, timestamp, "endpoint_registered", endpointID, detailJSON); err != nil {
+		return EndpointRegistration{}, fmt.Errorf("insert endpoint event: %w", err)
+	}
+
+	return EndpointRegistration{
+		EndpointID: endpointID,
+		Address:    address,
+		Created:    true,
+	}, nil
 }
 
 func (s *Store) writeBlob(body []byte) (string, int64, string, error) {

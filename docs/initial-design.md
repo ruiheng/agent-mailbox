@@ -257,9 +257,8 @@ agent-mailbox send --to workflow/reviewer/task-123 --subject "review request" --
 
 Behavior:
 
-- resolve the recipient address
-- fail if the recipient address does not exist
-- do not implicitly create endpoints or addresses during `send`
+- resolve the recipient address, creating it if needed
+- create the optional sender address on first use when `--from` is provided
 - if `--from` is provided, resolve it to `sender_endpoint_id`
 - if `--from` is omitted, store `sender_endpoint_id = NULL`
 - accept body input from either `--body-file <path>` or `--body-file -` for
@@ -276,22 +275,6 @@ That is acceptable in v1 and should be handled by later garbage collection.
 Message row insertion and delivery row insertion must happen atomically in one
 SQLite transaction.
 
-### Endpoint Registration
-
-```text
-agent-mailbox endpoint register --address workflow/reviewer/task-123
-```
-
-Behavior:
-
-- create a new endpoint and bind the address if the address does not exist
-- if the address already exists, return the existing endpoint id and exit success
-- make address creation explicit before first receive
-
-Address prefixes such as `workflow/...` and `agent/...` remain useful naming
-conventions for humans and tooling, but they are not stored as a separate
-endpoint type field in the mailbox state.
-
 ### Receive
 
 ```text
@@ -305,7 +288,7 @@ Behavior:
   optional timeout expires
 - require at least one `--for` address; repeated `--for` flags search the union
   of the requested inboxes
-- if any requested address does not resolve, fail the whole command
+- unseen addresses behave like empty inboxes instead of failing the whole command
 - atomically select the oldest visible queued delivery across the eligible union
 - selection order is `visible_at`, then `message_created_at`, then `delivery_id`
 - transition it to `leased`
@@ -343,7 +326,7 @@ Behavior:
 
 - require at least one `--for` address; repeated `--for` flags watch the union of
   the requested inboxes
-- if any requested address does not resolve, fail the whole command
+- unseen addresses behave like empty inboxes until matching deliveries exist
 - default watch scope is currently visible queued deliveries
 - `--state <state>` may watch another delivery state using the same delivery
   metadata schema as `list`
@@ -549,16 +532,15 @@ Build the smallest complete slice:
 
 1. SQLite schema for `endpoints`, `endpoint_addresses`, `messages`,
    `deliveries`, and `events`
-2. `endpoint register`
-3. address lookup
-4. `send`
-5. `recv --wait`
-6. `watch`
-7. `ack`
-8. `release`
-9. `defer`
-10. `fail`
-11. `list`
+2. address lookup
+3. `send`
+4. `recv --wait`
+5. `watch`
+6. `ack`
+7. `release`
+8. `defer`
+9. `fail`
+10. `list`
 
 Skip for now:
 

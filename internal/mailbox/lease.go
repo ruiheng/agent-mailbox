@@ -106,13 +106,13 @@ type resolvedRecipient struct {
 }
 
 func (s *Store) Receive(ctx context.Context, params ReceiveParams) (ReceivedMessage, error) {
-	recipients, err := s.resolveRecipients(ctx, params.Address, params.Addresses, "--for")
+	addresses, err := normalizeAddresses(params.Address, params.Addresses, "--for")
 	if err != nil {
 		return ReceivedMessage{}, err
 	}
 
 	if !params.Wait {
-		return s.receiveOnce(ctx, recipients)
+		return s.receiveOnce(ctx, addresses)
 	}
 
 	var deadline time.Time
@@ -122,7 +122,7 @@ func (s *Store) Receive(ctx context.Context, params ReceiveParams) (ReceivedMess
 
 	delay := initialPollDelay
 	for {
-		message, err := s.receiveOnce(ctx, recipients)
+		message, err := s.receiveOnce(ctx, addresses)
 		if err == nil {
 			return message, nil
 		}
@@ -158,18 +158,16 @@ func (s *Store) Receive(ctx context.Context, params ReceiveParams) (ReceivedMess
 	}
 }
 
-func (s *Store) resolveRecipients(ctx context.Context, address string, addresses []string, flagName string) ([]resolvedRecipient, error) {
-	normalizedAddresses, err := normalizeAddresses(address, addresses, flagName)
-	if err != nil {
-		return nil, err
-	}
-
-	recipients := make([]resolvedRecipient, 0, len(normalizedAddresses))
-	seenEndpointIDs := make(map[string]struct{}, len(normalizedAddresses))
-	for _, address := range normalizedAddresses {
-		endpointID, err := s.lookupEndpointID(ctx, s.db, address)
+func (s *Store) resolveRecipients(ctx context.Context, addresses []string) ([]resolvedRecipient, error) {
+	recipients := make([]resolvedRecipient, 0, len(addresses))
+	seenEndpointIDs := make(map[string]struct{}, len(addresses))
+	for _, address := range addresses {
+		endpointID, found, err := s.lookupEndpointID(ctx, s.db, address)
 		if err != nil {
 			return nil, fmt.Errorf("resolve recipient address: %w", err)
+		}
+		if !found {
+			continue
 		}
 		// Multiple addresses may resolve to one endpoint. Claim against the union once.
 		if _, exists := seenEndpointIDs[endpointID]; exists {
@@ -280,7 +278,15 @@ func (s *Store) Fail(ctx context.Context, deliveryID, leaseToken, reason string)
 	})
 }
 
-func (s *Store) receiveOnce(ctx context.Context, recipients []resolvedRecipient) (ReceivedMessage, error) {
+func (s *Store) receiveOnce(ctx context.Context, addresses []string) (ReceivedMessage, error) {
+	recipients, err := s.resolveRecipients(ctx, addresses)
+	if err != nil {
+		return ReceivedMessage{}, err
+	}
+	if len(recipients) == 0 {
+		return ReceivedMessage{}, ErrNoMessage
+	}
+
 	nowText := formatTimestamp(s.now())
 	addressByEndpointID := make(map[string]string, len(recipients))
 	recipientEndpointIDs := make([]string, 0, len(recipients))

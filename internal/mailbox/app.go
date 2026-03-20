@@ -51,7 +51,7 @@ func (a *App) Run(ctx context.Context, args []string) error {
 		return ErrHelpRequested
 	}
 	if len(rest) == 0 {
-		return errors.New("expected a command: endpoint, send, recv, watch, ack, release, defer, fail, or list")
+		return errors.New("expected a command: send, recv, watch, ack, release, defer, fail, or list")
 	}
 
 	command, err := a.prepareCommand(rest)
@@ -70,12 +70,10 @@ func (a *App) Run(ctx context.Context, args []string) error {
 
 func (a *App) prepareCommand(args []string) (preparedCommand, error) {
 	if len(args) == 0 {
-		return nil, errors.New("expected a command: endpoint, send, recv, watch, ack, release, defer, fail, or list")
+		return nil, errors.New("expected a command: send, recv, watch, ack, release, defer, fail, or list")
 	}
 
 	switch args[0] {
-	case "endpoint":
-		return a.prepareEndpointCommand(args[1:])
 	case "send":
 		return a.prepareSendCommand(args[1:])
 	case "recv":
@@ -111,47 +109,6 @@ func parseGlobalArgs(args []string) (string, []string, bool, error) {
 		return "", nil, false, err
 	}
 	return stateDir, fs.Args(), false, nil
-}
-
-func (a *App) prepareEndpointCommand(args []string) (preparedCommand, error) {
-	if len(args) == 0 {
-		return nil, errors.New("expected endpoint subcommand")
-	}
-	if len(args) == 1 && isHelpArg(args[0]) {
-		a.writeEndpointHelp()
-		return nil, ErrHelpRequested
-	}
-	switch args[0] {
-	case "register":
-		return a.prepareEndpointRegister(args[1:])
-	default:
-		return nil, fmt.Errorf("unknown endpoint subcommand %q", args[0])
-	}
-}
-
-func (a *App) prepareEndpointRegister(args []string) (preparedCommand, error) {
-	fs := flag.NewFlagSet("agent-mailbox endpoint register", flag.ContinueOnError)
-	fs.SetOutput(io.Discard)
-
-	var address string
-	fs.StringVar(&address, "address", "", "endpoint address")
-
-	if err := a.parseCommandFlags(fs, args, a.writeEndpointRegisterHelp); err != nil {
-		return nil, err
-	}
-	if err := requireFlag(address, "--address"); err != nil {
-		return nil, err
-	}
-
-	return func(ctx context.Context, store *Store) error {
-		result, err := store.RegisterEndpoint(ctx, address)
-		if err != nil {
-			return err
-		}
-
-		fmt.Fprintf(a.stdout, "endpoint_id=%s address=%s created=%t\n", result.EndpointID, result.Address, result.Created)
-		return nil
-	}, nil
 }
 
 func (a *App) prepareSendCommand(args []string) (preparedCommand, error) {
@@ -561,7 +518,6 @@ func (a *App) writeRootHelp() {
 		"  agent-mailbox [--state-dir PATH] <command> [options]",
 		"",
 		"Commands:",
-		"  endpoint register   Register an endpoint address",
 		"  send                Send a message to an address",
 		"  recv                Claim the next delivery",
 		"  watch               Observe deliveries without claiming",
@@ -576,28 +532,6 @@ func (a *App) writeRootHelp() {
 		"  --help              Show help",
 		"",
 		"Use \"agent-mailbox <command> --help\" for command-specific details.",
-	})
-}
-
-func (a *App) writeEndpointHelp() {
-	writeHelp(a.stdout, []string{
-		"Usage:",
-		"  agent-mailbox endpoint <subcommand> [options]",
-		"",
-		"Subcommands:",
-		"  register            Register an endpoint address",
-		"",
-		"Use \"agent-mailbox endpoint register --help\" for details.",
-	})
-}
-
-func (a *App) writeEndpointRegisterHelp() {
-	writeHelp(a.stdout, []string{
-		"Usage:",
-		"  agent-mailbox endpoint register --address ADDRESS",
-		"",
-		"Options:",
-		"  --address ADDRESS   Endpoint address to register",
 	})
 }
 

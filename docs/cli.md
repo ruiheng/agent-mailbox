@@ -33,20 +33,6 @@ agent-mailbox --state-dir /tmp/mailbox-demo list --for workflow/reviewer/task-12
 
 ## Typical Flow
 
-Register the recipient:
-
-```bash
-agent-mailbox endpoint register \
-  --address workflow/reviewer/task-123
-```
-
-Optionally register the sender:
-
-```bash
-agent-mailbox endpoint register \
-  --address agent/sender
-```
-
 Send a message:
 
 ```bash
@@ -128,8 +114,8 @@ Rules:
 - selection is global oldest-first by `visible_at`, then `message_created_at`,
   then `delivery_id`
 - v1 does not guarantee fairness or address rotation while waiting
-- if any requested address is unknown, `recv` fails instead of partially
-  succeeding
+- unseen addresses behave like empty inboxes
+- `recv --wait` can start before the first message is ever sent to an address
 
 ## Watch
 
@@ -152,23 +138,9 @@ Rules:
 - `--timeout` is an idle timeout; if no newly matching delivery appears during
   that interval, `watch` exits successfully
 - duplicate polling cycles do not reprint the same unchanged delivery snapshot
+- unseen addresses behave like empty inboxes until matching deliveries exist
 
 ## Commands
-
-### `endpoint register`
-
-Create an endpoint address.
-
-```bash
-agent-mailbox endpoint register --address <address>
-```
-
-Notes:
-
-- the address is the full registration contract
-- registering the same address again is a safe retry
-- address prefixes such as `workflow/...` or `agent/...` are conventions, not a
-  stored type field
 
 ### `send`
 
@@ -188,7 +160,8 @@ Common options:
 Notes:
 
 - `--body-file -` reads from stdin
-- sending to an unknown address fails
+- `send` creates the recipient address automatically on first use
+- `send` also creates the optional `--from` address automatically on first use
 - `--from` is optional
 
 ### `recv`
@@ -207,6 +180,7 @@ Notes:
 - duplicate `--for` values are ignored after the first occurrence
 - plain-text output includes `recipient_address=...` so the matched inbox is clear
 - `--json` keeps the existing schema and still includes `recipient_address`
+- unseen addresses are ignored until a matching delivery exists
 
 ### `watch`
 
@@ -283,6 +257,7 @@ Notes:
 - `--state dead_letter` shows dead-lettered deliveries
 - `list` is a snapshot; use `watch` for a stream
 - use `--json` for scripts and agents
+- unseen addresses return an empty result
 
 ## Exit Codes
 

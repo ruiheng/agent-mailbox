@@ -76,7 +76,7 @@ WHERE type = 'table' AND name = ?
 	}
 }
 
-func TestRegisterEndpointAddressOnlyIdempotency(t *testing.T) {
+func TestSendImplicitlyCreatesAddressesOnce(t *testing.T) {
 	t.Parallel()
 
 	runtime, err := OpenRuntime(context.Background(), filepath.Join(t.TempDir(), "mailbox-state"))
@@ -86,44 +86,37 @@ func TestRegisterEndpointAddressOnlyIdempotency(t *testing.T) {
 	defer runtime.Close()
 
 	store := runtime.Store()
-	first, err := store.RegisterEndpoint(context.Background(), "workflow/reviewer/task-123")
-	if err != nil {
-		t.Fatalf("RegisterEndpoint(first) error = %v", err)
-	}
-	if !first.Created {
-		t.Fatalf("first registration Created = false, want true")
-	}
-
-	second, err := store.RegisterEndpoint(context.Background(), "workflow/reviewer/task-123")
-	if err != nil {
-		t.Fatalf("RegisterEndpoint(second) error = %v", err)
-	}
-	if second.Created {
-		t.Fatalf("second registration Created = true, want false")
-	}
-	if second.EndpointID != first.EndpointID {
-		t.Fatalf("endpoint id changed on idempotent registration: got %q want %q", second.EndpointID, first.EndpointID)
+	for attempt := 0; attempt < 2; attempt++ {
+		if _, err := store.Send(context.Background(), SendParams{
+			ToAddress:     "workflow/reviewer/task-123",
+			FromAddress:   "agent/sender",
+			Subject:       "review request",
+			ContentType:   "text/plain",
+			SchemaVersion: "v1",
+			Body:          []byte("hello reviewer"),
+		}); err != nil {
+			t.Fatalf("Send(attempt %d) error = %v", attempt+1, err)
+		}
 	}
 
-	var detailJSON string
+	var addressCount int
+	if err := runtime.DB().QueryRow(`SELECT COUNT(*) FROM endpoint_addresses`).Scan(&addressCount); err != nil {
+		t.Fatalf("count endpoint_addresses error = %v", err)
+	}
+	if addressCount != 2 {
+		t.Fatalf("endpoint address count = %d, want 2", addressCount)
+	}
+
+	var registrationEvents int
 	if err := runtime.DB().QueryRow(`
-SELECT detail_json
+SELECT COUNT(*)
 FROM events
 WHERE event_type = 'endpoint_registered'
-LIMIT 1
-`).Scan(&detailJSON); err != nil {
-		t.Fatalf("select endpoint_registered detail_json error = %v", err)
+`).Scan(&registrationEvents); err != nil {
+		t.Fatalf("count endpoint_registered events error = %v", err)
 	}
-
-	var detail map[string]string
-	if err := json.Unmarshal([]byte(detailJSON), &detail); err != nil {
-		t.Fatalf("json.Unmarshal(detail_json) error = %v", err)
-	}
-	if detail["address"] != "workflow/reviewer/task-123" {
-		t.Fatalf("detail address = %q, want workflow/reviewer/task-123", detail["address"])
-	}
-	if _, ok := detail["kind"]; ok {
-		t.Fatalf("detail_json unexpectedly contains kind: %v", detail)
+	if registrationEvents != 2 {
+		t.Fatalf("endpoint_registered event count = %d, want 2", registrationEvents)
 	}
 }
 
@@ -151,21 +144,6 @@ func TestSendAndListHappyPath(t *testing.T) {
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
 			stateDir := filepath.Join(t.TempDir(), "mailbox-state")
-			registerApp := NewApp(strings.NewReader(""), &bytes.Buffer{}, &bytes.Buffer{})
-			if err := registerApp.Run(context.Background(), []string{
-				"--state-dir", stateDir,
-				"endpoint", "register",
-				"--address", "workflow/reviewer/task-123",
-			}); err != nil {
-				t.Fatalf("register recipient error = %v", err)
-			}
-			if err := registerApp.Run(context.Background(), []string{
-				"--state-dir", stateDir,
-				"endpoint", "register",
-				"--address", "agent/sender",
-			}); err != nil {
-				t.Fatalf("register sender error = %v", err)
-			}
 
 			bodyFile := tc.bodyFile
 			if bodyFile == "" {
@@ -277,20 +255,12 @@ func TestInvalidCLIPathsDoNotCreateRuntimeState(t *testing.T) {
 			args: []string{"unknown"},
 		},
 		{
-			name: "unknown endpoint subcommand",
-			args: []string{"endpoint", "unknown"},
-		},
-		{
 			name: "send missing body file",
 			args: []string{"send", "--to", "workflow/reviewer/task-123"},
 		},
 		{
 			name: "send invalid flag",
 			args: []string{"send", "--bogus"},
-		},
-		{
-			name: "endpoint register missing address",
-			args: []string{"endpoint", "register"},
 		},
 		{
 			name: "send missing to",
@@ -396,16 +366,6 @@ func TestHelpCLIPathsDoNotCreateRuntimeState(t *testing.T) {
 			name:         "root help",
 			args:         []string{"--help"},
 			wantContains: "Usage:\n  agent-mailbox [--state-dir PATH] <command> [options]",
-		},
-		{
-			name:         "endpoint help",
-			args:         []string{"endpoint", "--help"},
-			wantContains: "Usage:\n  agent-mailbox endpoint <subcommand> [options]",
-		},
-		{
-			name:         "endpoint register help",
-			args:         []string{"endpoint", "register", "--help"},
-			wantContains: "Usage:\n  agent-mailbox endpoint register --address ADDRESS",
 		},
 		{
 			name:         "send help",

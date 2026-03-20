@@ -78,11 +78,7 @@ reference, see [`docs/cli.md`](docs/cli.md).
 Use `--state-dir` for demos and tests so mailbox state stays isolated:
 
 ```bash
-MAILBOX_STATE_DIR=/tmp/mailbox-demo agent-mailbox endpoint register \
-  --address workflow/reviewer/task-123
-
-MAILBOX_STATE_DIR=/tmp/mailbox-demo agent-mailbox endpoint register \
-  --address agent/sender
+export MAILBOX_STATE_DIR=/tmp/mailbox-demo
 ```
 
 Address prefixes such as `workflow/...` or `agent/...` are naming conventions for
@@ -140,7 +136,7 @@ For the full command reference, see [`docs/cli.md`](docs/cli.md).
 `recv` v1 contract for multiple `--for` flags:
 
 - repeated `--for` searches the union of the requested inboxes
-- unknown addresses fail the whole command
+- unseen addresses behave like empty inboxes
 - selection is deterministic global oldest-first by `visible_at`, then
   `message_created_at`, then `delivery_id`
 - no fairness or address rotation guarantee is made while waiting
