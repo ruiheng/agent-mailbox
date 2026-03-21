@@ -21,6 +21,8 @@ type Runtime struct {
 	dbPath   string
 	blobDir  string
 	db       *sql.DB
+	readDB   *sql.DB
+	claimDB  *sql.DB
 	store    *Store
 }
 
@@ -39,28 +41,54 @@ func OpenRuntime(ctx context.Context, overrideStateDir string) (*Runtime, error)
 	}
 
 	dbPath := filepath.Join(stateDir, databaseFilename)
-	db, err := openDatabase(ctx, dbPath)
+	db, err := openDatabase(ctx, dbPath, "immediate", 5000)
 	if err != nil {
 		return nil, err
 	}
-
-	store := NewStore(db, blobDir)
 	if err := initSchema(ctx, db); err != nil {
 		db.Close()
 		return nil, err
 	}
+	readDB, err := openDatabase(ctx, dbPath, "", 5000)
+	if err != nil {
+		db.Close()
+		return nil, err
+	}
+	claimDB, err := openDatabase(ctx, dbPath, "immediate", 0)
+	if err != nil {
+		readDB.Close()
+		db.Close()
+		return nil, err
+	}
+
+	store := NewStore(readDB, db, claimDB, blobDir)
 
 	return &Runtime{
 		stateDir: stateDir,
 		dbPath:   dbPath,
 		blobDir:  blobDir,
 		db:       db,
+		readDB:   readDB,
+		claimDB:  claimDB,
 		store:    store,
 	}, nil
 }
 
 func (r *Runtime) Close() error {
-	if r == nil || r.db == nil {
+	if r == nil {
+		return nil
+	}
+	if r.readDB != nil {
+		if err := r.readDB.Close(); err != nil && r.claimDB == nil && r.db == nil {
+			return err
+		}
+	}
+	if r.claimDB != nil {
+		if err := r.claimDB.Close(); err != nil && r.db == nil {
+			return err
+		}
+	}
+	if r.db == nil {
 		return nil
 	}
 	return r.db.Close()
@@ -114,8 +142,11 @@ func ensureDir(path string) error {
 	return nil
 }
 
-func openDatabase(ctx context.Context, path string) (*sql.DB, error) {
-	dsn := fmt.Sprintf("file:%s?_busy_timeout=5000&_foreign_keys=on&_txlock=immediate", filepath.ToSlash(path))
+func openDatabase(ctx context.Context, path, txLock string, busyTimeoutMS int) (*sql.DB, error) {
+	dsn := fmt.Sprintf("file:%s?_busy_timeout=%d&_foreign_keys=on", filepath.ToSlash(path), busyTimeoutMS)
+	if txLock != "" {
+		dsn += "&_txlock=" + txLock
+	}
 	db, err := sql.Open("sqlite3", dsn)
 	if err != nil {
 		return nil, fmt.Errorf("open sqlite database: %w", err)

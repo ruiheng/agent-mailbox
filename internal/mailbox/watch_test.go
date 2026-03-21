@@ -2,6 +2,7 @@ package mailbox
 
 import (
 	"context"
+	"path/filepath"
 	"testing"
 	"time"
 )
@@ -124,5 +125,47 @@ func TestWatchSeesAddressCreatedByLaterSend(t *testing.T) {
 	}
 	if deliveries[0].RecipientAddress != "workflow/later-watch" {
 		t.Fatalf("watch later recipient address = %q, want workflow/later-watch", deliveries[0].RecipientAddress)
+	}
+}
+
+func TestListReadsQueuedDeliveryWhileAnotherRuntimeHoldsWriterLock(t *testing.T) {
+	t.Parallel()
+
+	stateDir := filepath.Join(t.TempDir(), "mailbox-state")
+	lockerRuntime, err := OpenRuntime(context.Background(), stateDir)
+	if err != nil {
+		t.Fatalf("OpenRuntime(locker) error = %v", err)
+	}
+	defer lockerRuntime.Close()
+
+	readerRuntime, err := OpenRuntime(context.Background(), stateDir)
+	if err != nil {
+		t.Fatalf("OpenRuntime(reader) error = %v", err)
+	}
+	defer readerRuntime.Close()
+
+	const address = "workflow/list-under-lock"
+	sent := mustSendMessage(t, lockerRuntime.Store(), address, "agent/sender", "queued", "queued body")
+
+	lockTx, err := lockerRuntime.DB().BeginTx(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("BeginTx(writer lock) error = %v", err)
+	}
+	defer lockTx.Rollback()
+
+	start := time.Now()
+	deliveries, err := readerRuntime.Store().List(context.Background(), ListParams{Address: address, State: "queued"})
+	elapsed := time.Since(start)
+	if err != nil {
+		t.Fatalf("List(queued under writer lock) error = %v", err)
+	}
+	if elapsed > time.Second {
+		t.Fatalf("List(queued under writer lock) took %v, want under 1s", elapsed)
+	}
+	if len(deliveries) != 1 {
+		t.Fatalf("len(deliveries) = %d, want 1", len(deliveries))
+	}
+	if deliveries[0].DeliveryID != sent.DeliveryID {
+		t.Fatalf("list delivery id = %q, want %q", deliveries[0].DeliveryID, sent.DeliveryID)
 	}
 }

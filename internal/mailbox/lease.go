@@ -11,6 +11,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	sqlite3 "github.com/mattn/go-sqlite3"
 )
 
 const (
@@ -115,7 +117,7 @@ func (s *Store) Receive(ctx context.Context, params ReceiveParams) (ReceivedMess
 	}
 
 	if !params.Wait {
-		return s.receiveOnce(ctx, addresses)
+		return s.receiveOnce(ctx, addresses, s.writeDB)
 	}
 
 	var deadline time.Time
@@ -125,9 +127,21 @@ func (s *Store) Receive(ctx context.Context, params ReceiveParams) (ReceivedMess
 
 	delay := initialPollDelay
 	for {
-		message, err := s.receiveOnce(ctx, addresses)
+		attemptCtx := ctx
+		cancel := func() {}
+		if !deadline.IsZero() {
+			attemptCtx, cancel = context.WithDeadline(ctx, deadline)
+		}
+		message, err := s.receiveOnce(attemptCtx, addresses, s.claimDB)
+		cancel()
 		if err == nil {
 			return message, nil
+		}
+		if isSQLiteBusy(err) {
+			err = ErrNoMessage
+		}
+		if !deadline.IsZero() && errors.Is(err, context.DeadlineExceeded) && ctx.Err() == nil {
+			return ReceivedMessage{}, ErrNoMessage
 		}
 		if !errors.Is(err, ErrNoMessage) {
 			return ReceivedMessage{}, err
@@ -165,7 +179,7 @@ func (s *Store) resolveRecipients(ctx context.Context, addresses []string) ([]re
 	recipients := make([]resolvedRecipient, 0, len(addresses))
 	seenEndpointIDs := make(map[string]struct{}, len(addresses))
 	for _, address := range addresses {
-		endpointID, found, err := s.lookupEndpointID(ctx, s.db, address)
+		endpointID, found, err := s.lookupEndpointID(ctx, s.readDB, address)
 		if err != nil {
 			return nil, fmt.Errorf("resolve recipient address: %w", err)
 		}
@@ -281,7 +295,7 @@ func (s *Store) Fail(ctx context.Context, deliveryID, leaseToken, reason string)
 	})
 }
 
-func (s *Store) receiveOnce(ctx context.Context, addresses []string) (ReceivedMessage, error) {
+func (s *Store) receiveOnce(ctx context.Context, addresses []string, claimDB *sql.DB) (ReceivedMessage, error) {
 	recipients, err := s.resolveRecipients(ctx, addresses)
 	if err != nil {
 		return ReceivedMessage{}, err
@@ -290,7 +304,6 @@ func (s *Store) receiveOnce(ctx context.Context, addresses []string) (ReceivedMe
 		return ReceivedMessage{}, ErrNoMessage
 	}
 
-	nowText := formatTimestamp(s.now())
 	addressByEndpointID := make(map[string]string, len(recipients))
 	recipientEndpointIDs := make([]string, 0, len(recipients))
 	for _, recipient := range recipients {
@@ -299,7 +312,14 @@ func (s *Store) receiveOnce(ctx context.Context, addresses []string) (ReceivedMe
 	}
 
 	for {
-		tx, err := s.db.BeginTx(ctx, nil)
+		nowText := formatTimestamp(s.now())
+		if _, err := loadClaimCandidate(ctx, s.readDB, recipientEndpointIDs, nowText); errors.Is(err, sql.ErrNoRows) {
+			return ReceivedMessage{}, ErrNoMessage
+		} else if err != nil {
+			return ReceivedMessage{}, fmt.Errorf("query claimable delivery: %w", err)
+		}
+
+		tx, err := claimDB.BeginTx(ctx, nil)
 		if err != nil {
 			return ReceivedMessage{}, fmt.Errorf("begin receive transaction: %w", err)
 		}
@@ -407,7 +427,7 @@ func (s *Store) transitionLeasedDelivery(ctx context.Context, deliveryID, leaseT
 	}
 
 	now := s.now()
-	tx, err := s.db.BeginTx(ctx, nil)
+	tx, err := s.writeDB.BeginTx(ctx, nil)
 	if err != nil {
 		return DeliveryTransitionResult{}, fmt.Errorf("begin delivery transition transaction: %w", err)
 	}
@@ -495,7 +515,9 @@ WHERE delivery_id = ?
 	return resultSummary, nil
 }
 
-func loadClaimCandidate(ctx context.Context, tx *sql.Tx, recipientEndpointIDs []string, nowText string) (claimCandidate, error) {
+func loadClaimCandidate(ctx context.Context, querier interface {
+	QueryRowContext(context.Context, string, ...any) *sql.Row
+}, recipientEndpointIDs []string, nowText string) (claimCandidate, error) {
 	if len(recipientEndpointIDs) == 0 {
 		return claimCandidate{}, sql.ErrNoRows
 	}
@@ -508,7 +530,7 @@ func loadClaimCandidate(ctx context.Context, tx *sql.Tx, recipientEndpointIDs []
 	args = append(args, nowText, nowText)
 
 	var candidate claimCandidate
-	err := tx.QueryRowContext(ctx, fmt.Sprintf(`
+	err := querier.QueryRowContext(ctx, fmt.Sprintf(`
 SELECT
   d.delivery_id,
   d.message_id,
@@ -554,6 +576,14 @@ LIMIT 1
 		return claimCandidate{}, err
 	}
 	return candidate, nil
+}
+
+func isSQLiteBusy(err error) bool {
+	var sqliteErr sqlite3.Error
+	if !errors.As(err, &sqliteErr) {
+		return false
+	}
+	return sqliteErr.Code == sqlite3.ErrBusy || sqliteErr.Code == sqlite3.ErrLocked
 }
 
 func loadLeasedDeliveryRecord(ctx context.Context, tx *sql.Tx, deliveryID string) (leasedDeliveryRecord, error) {

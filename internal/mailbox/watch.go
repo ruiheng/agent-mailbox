@@ -142,7 +142,7 @@ WHERE d.recipient_endpoint_id IN (%s)
 ORDER BY d.visible_at ASC, m.created_at ASC, d.delivery_id ASC
 `
 
-	rows, err := s.db.QueryContext(ctx, query, args...)
+	rows, err := s.readDB.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("query deliveries: %w", err)
 	}

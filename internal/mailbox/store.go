@@ -18,7 +18,9 @@ import (
 var ErrEmptyBody = errors.New("message body must not be empty")
 
 type Store struct {
-	db      *sql.DB
+	readDB  *sql.DB
+	writeDB *sql.DB
+	claimDB *sql.DB
 	blobDir string
 	now     func() time.Time
 }
@@ -71,9 +73,20 @@ type ListedDelivery struct {
 	BodySHA256          string  `json:"body_sha256"`
 }
 
-func NewStore(db *sql.DB, blobDir string) *Store {
+func NewStore(readDB, writeDB, claimDB *sql.DB, blobDir string) *Store {
+	if readDB == nil {
+		readDB = writeDB
+	}
+	if writeDB == nil {
+		writeDB = readDB
+	}
+	if claimDB == nil {
+		claimDB = writeDB
+	}
 	return &Store{
-		db:      db,
+		readDB:  readDB,
+		writeDB: writeDB,
+		claimDB: claimDB,
 		blobDir: blobDir,
 		now: func() time.Time {
 			return time.Now().UTC()
@@ -87,7 +100,7 @@ func (s *Store) RegisterEndpoint(ctx context.Context, address string) (EndpointR
 		return EndpointRegistration{}, errors.New("endpoint address is required")
 	}
 
-	tx, err := s.db.BeginTx(ctx, nil)
+	tx, err := s.writeDB.BeginTx(ctx, nil)
 	if err != nil {
 		return EndpointRegistration{}, fmt.Errorf("begin endpoint registration transaction: %w", err)
 	}
@@ -144,7 +157,7 @@ func (s *Store) Send(ctx context.Context, params SendParams) (SendResult, error)
 		return SendResult{}, err
 	}
 
-	tx, err := s.db.BeginTx(ctx, nil)
+	tx, err := s.writeDB.BeginTx(ctx, nil)
 	if err != nil {
 		return SendResult{}, fmt.Errorf("begin send transaction: %w", err)
 	}
