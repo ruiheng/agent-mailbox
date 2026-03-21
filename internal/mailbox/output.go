@@ -52,21 +52,23 @@ func (a *App) writeStructuredOutput(format outputFormat, value any) error {
 	}
 }
 
+func (a *App) writeListedDeliveryText(delivery ListedDelivery) error {
+	_, err := fmt.Fprintf(
+		a.stdout,
+		"delivery_id=%s recipient_address=%s state=%s visible_at=%s subject=%q\n",
+		delivery.DeliveryID,
+		delivery.RecipientAddress,
+		delivery.State,
+		delivery.VisibleAt,
+		delivery.Subject,
+	)
+	return err
+}
+
 func (a *App) newWatchEmitter(format outputFormat) (func(ListedDelivery) error, error) {
 	switch format {
 	case outputFormatText:
-		return func(delivery ListedDelivery) error {
-			fmt.Fprintf(
-				a.stdout,
-				"delivery_id=%s recipient_address=%s state=%s visible_at=%s subject=%q\n",
-				delivery.DeliveryID,
-				delivery.RecipientAddress,
-				delivery.State,
-				delivery.VisibleAt,
-				delivery.Subject,
-			)
-			return nil
-		}, nil
+		return a.writeListedDeliveryText, nil
 	case outputFormatJSON:
 		encoder := json.NewEncoder(a.stdout)
 		return func(delivery ListedDelivery) error {

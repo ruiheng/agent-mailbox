@@ -387,6 +387,126 @@ func TestCLIWatchStreamsNDJSONWithoutClaiming(t *testing.T) {
 	}
 }
 
+func TestCLIWaitReturnsOneJSONDeliveryWithoutClaiming(t *testing.T) {
+	stateDir := filepath.Join(t.TempDir(), "mailbox-state")
+
+	send := runCLI(t, "wait body\n", "--state-dir", stateDir,
+		"send",
+		"--to", "workflow/wait",
+		"--from", "agent/sender",
+		"--subject", "wait for me",
+		"--body-file", "-",
+	)
+	if send.exitCode != 0 {
+		t.Fatalf("send exit code = %d, stderr = %q", send.exitCode, send.stderr)
+	}
+
+	wait := runCLI(t, "", "--state-dir", stateDir,
+		"wait",
+		"--for", "workflow/wait",
+		"--json",
+	)
+	if wait.exitCode != 0 {
+		t.Fatalf("wait exit code = %d, stderr = %q", wait.exitCode, wait.stderr)
+	}
+	if wait.stderr != "" {
+		t.Fatalf("wait stderr = %q, want empty", wait.stderr)
+	}
+
+	var delivery map[string]any
+	if err := json.Unmarshal([]byte(wait.stdout), &delivery); err != nil {
+		t.Fatalf("json.Unmarshal(wait stdout) error = %v; stdout = %q", err, wait.stdout)
+	}
+	if delivery["recipient_address"] != "workflow/wait" {
+		t.Fatalf("wait recipient_address = %v, want workflow/wait", delivery["recipient_address"])
+	}
+	if delivery["subject"] != "wait for me" {
+		t.Fatalf("wait subject = %v, want wait for me", delivery["subject"])
+	}
+	if _, ok := delivery["lease_token"]; ok {
+		t.Fatalf("wait payload unexpectedly contains lease_token: %v", delivery)
+	}
+	if _, ok := delivery["body"]; ok {
+		t.Fatalf("wait payload unexpectedly contains body: %v", delivery)
+	}
+
+	recv := runCLI(t, "", "--state-dir", stateDir,
+		"recv",
+		"--for", "workflow/wait",
+		"--json",
+	)
+	if recv.exitCode != 0 {
+		t.Fatalf("recv after wait exit code = %d, stderr = %q", recv.exitCode, recv.stderr)
+	}
+}
+
+func TestCLIWaitReturnsYAMLWithoutClaiming(t *testing.T) {
+	stateDir := filepath.Join(t.TempDir(), "mailbox-state")
+
+	send := runCLI(t, "wait body\n", "--state-dir", stateDir,
+		"send",
+		"--to", "workflow/wait",
+		"--from", "agent/sender",
+		"--subject", "wait for me",
+		"--body-file", "-",
+	)
+	if send.exitCode != 0 {
+		t.Fatalf("send exit code = %d, stderr = %q", send.exitCode, send.stderr)
+	}
+
+	wait := runCLI(t, "", "--state-dir", stateDir,
+		"wait",
+		"--for", "workflow/wait",
+		"--yaml",
+	)
+	if wait.exitCode != 0 {
+		t.Fatalf("wait exit code = %d, stderr = %q", wait.exitCode, wait.stderr)
+	}
+	if wait.stderr != "" {
+		t.Fatalf("wait stderr = %q, want empty", wait.stderr)
+	}
+	if !strings.HasPrefix(wait.stdout, "delivery_id: ") {
+		t.Fatalf("wait stdout = %q, want YAML mapping", wait.stdout)
+	}
+	if !strings.Contains(wait.stdout, "recipient_address: \"workflow/wait\"\n") {
+		t.Fatalf("wait stdout = %q, want recipient_address field", wait.stdout)
+	}
+	if strings.Contains(wait.stdout, "lease_token: ") {
+		t.Fatalf("wait stdout unexpectedly contains lease_token: %q", wait.stdout)
+	}
+	if strings.Contains(wait.stdout, "body: ") {
+		t.Fatalf("wait stdout unexpectedly contains body: %q", wait.stdout)
+	}
+
+	recv := runCLI(t, "", "--state-dir", stateDir,
+		"recv",
+		"--for", "workflow/wait",
+		"--json",
+	)
+	if recv.exitCode != 0 {
+		t.Fatalf("recv after wait exit code = %d, stderr = %q", recv.exitCode, recv.stderr)
+	}
+}
+
+func TestCLIWaitTimeoutReturnsExitCodeTwoWithoutOutput(t *testing.T) {
+	stateDir := filepath.Join(t.TempDir(), "mailbox-state")
+
+	wait := runCLI(t, "", "--state-dir", stateDir,
+		"wait",
+		"--for", "workflow/empty-wait",
+		"--timeout", "30ms",
+	)
+	if wait.exitCode != 2 {
+		t.Fatalf("wait timeout exit code = %d, want 2; stderr = %q", wait.exitCode, wait.stderr)
+	}
+	if wait.stdout != "" {
+		t.Fatalf("wait timeout stdout = %q, want empty", wait.stdout)
+	}
+	if wait.stderr != "" {
+		t.Fatalf("wait timeout stderr = %q, want empty", wait.stderr)
+	}
+}
+
 func TestCLIWatchStreamsYAMLDocumentsWithoutClaiming(t *testing.T) {
 	stateDir := filepath.Join(t.TempDir(), "mailbox-state")
 
@@ -475,6 +595,11 @@ func TestCLIHelpExitsZeroAndPrintsUsage(t *testing.T) {
 			name:         "watch help",
 			args:         []string{"watch", "--help"},
 			wantContains: "Usage:\n  agent-mailbox watch --for ADDRESS [--for ADDRESS ...] [--state STATE] [--timeout DURATION] [--json | --yaml]",
+		},
+		{
+			name:         "wait help",
+			args:         []string{"wait", "--help"},
+			wantContains: "Usage:\n  agent-mailbox wait --for ADDRESS [--for ADDRESS ...] [--timeout DURATION] [--json | --yaml]",
 		},
 	}
 

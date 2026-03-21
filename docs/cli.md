@@ -6,7 +6,7 @@ This guide is intentionally short. It covers what a user needs to run the CLI:
 
 - where state lives
 - the normal send/receive flow
-- how blocking receive and observe-only watch work
+- how blocking receive, observe-only wait, and observe-only watch work
 - what each command is for
 
 ## State Directory
@@ -69,6 +69,18 @@ need them for follow-up actions.
 Observe deliveries without claiming them:
 
 ```bash
+agent-mailbox wait \
+  --for workflow/reviewer/task-123 \
+  --timeout 30s \
+  --json
+```
+
+`wait` emits one delivery metadata object and exits. It never returns message
+bodies or lease tokens, and it does not reserve the delivery.
+
+Observe deliveries continuously without claiming them:
+
+```bash
 agent-mailbox watch \
   --for workflow/reviewer/task-123 \
   --timeout 30s \
@@ -119,6 +131,30 @@ Rules:
 - v1 does not guarantee fairness or address rotation while waiting
 - unseen addresses behave like empty inboxes
 - `recv --wait` can start before the first message is ever sent to an address
+
+## Wait
+
+`wait` is the one-shot observe-only companion to `recv --wait`.
+
+```bash
+agent-mailbox wait --for <address> [--for <address> ...] [--timeout 30s] [--json | --yaml]
+```
+
+Rules:
+
+- `wait` is observe-only; it does not claim deliveries, create lease tokens, or
+  reserve the result
+- repeated `--for` flags search the union of the requested inboxes
+- duplicate `--for` values are ignored after the first occurrence
+- default wait scope is currently visible queued deliveries
+- `--json` emits one delivery metadata object
+- `--yaml` emits the same metadata as one YAML mapping
+- without `--timeout`, `wait` blocks until the first matching delivery exists
+- `--timeout` is an absolute wait deadline; if no matching delivery appears
+  before it expires, `wait` exits with code `2`
+- selection is deterministic global oldest-first by `visible_at`, then
+  `message_created_at`, then `delivery_id`
+- unseen addresses behave like empty inboxes until a matching delivery exists
 
 ## Watch
 
@@ -187,6 +223,24 @@ Notes:
 - `--json` keeps the existing schema and still includes `recipient_address`
 - `--yaml` emits the same fields as `--json`, using YAML instead of JSON
 - unseen addresses are ignored until a matching delivery exists
+
+### `wait`
+
+Observe until one matching queued delivery exists, then exit without claiming it.
+
+```bash
+agent-mailbox wait --for <address> [--for <address> ...] [--timeout 30s] [--json | --yaml]
+```
+
+Use `--json` or `--yaml` for scripts and agents.
+
+Notes:
+
+- repeat `--for` to search multiple inboxes with one wait
+- duplicate `--for` values are ignored after the first occurrence
+- plain-text output includes `recipient_address=...`
+- `wait` returns the same delivery metadata schema as `list` and `watch`
+- `wait` does not claim or reserve the returned delivery; use `recv` to claim work
 
 ### `watch`
 
@@ -263,12 +317,13 @@ Notes:
 
 - default output shows currently claimable queued deliveries
 - `--state dead_letter` shows dead-lettered deliveries
-- `list` is a snapshot; use `watch` for a stream
+- `list` is a snapshot; use `wait` for one-shot blocking or `watch` for a stream
 - use `--json` or `--yaml` for scripts and agents
 - unseen addresses return an empty result
 
 ## Exit Codes
 
 - `0`: success
-- `2`: `recv` found no message, or `recv --wait --timeout ...` timed out
+- `2`: `recv` found no message, `recv --wait --timeout ...` timed out, or
+  `wait --timeout ...` found no matching delivery
 - other non-zero: usage error or operational failure

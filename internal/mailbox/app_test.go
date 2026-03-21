@@ -532,6 +532,22 @@ func TestInvalidCLIPathsDoNotCreateRuntimeState(t *testing.T) {
 			args: []string{"watch", "--for", "workflow/reviewer/task-123", "--json", "--yaml"},
 		},
 		{
+			name: "wait missing for",
+			args: []string{"wait", "--json"},
+		},
+		{
+			name: "wait empty for",
+			args: []string{"wait", "--for", "   "},
+		},
+		{
+			name: "wait negative timeout",
+			args: []string{"wait", "--for", "workflow/reviewer/task-123", "--timeout", "-1s"},
+		},
+		{
+			name: "wait conflicting formats",
+			args: []string{"wait", "--for", "workflow/reviewer/task-123", "--json", "--yaml"},
+		},
+		{
 			name: "ack missing delivery",
 			args: []string{"ack", "--lease-token", "lease_token"},
 		},
@@ -614,6 +630,11 @@ func TestHelpCLIPathsDoNotCreateRuntimeState(t *testing.T) {
 			name:         "watch help",
 			args:         []string{"watch", "--help"},
 			wantContains: "Usage:\n  agent-mailbox watch --for ADDRESS [--for ADDRESS ...] [--state STATE] [--timeout DURATION] [--json | --yaml]",
+		},
+		{
+			name:         "wait help",
+			args:         []string{"wait", "--help"},
+			wantContains: "Usage:\n  agent-mailbox wait --for ADDRESS [--for ADDRESS ...] [--timeout DURATION] [--json | --yaml]",
 		},
 	}
 

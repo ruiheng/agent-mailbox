@@ -50,7 +50,7 @@ func (a *App) Run(ctx context.Context, args []string) error {
 		return ErrHelpRequested
 	}
 	if len(rest) == 0 {
-		return errors.New("expected a command: send, recv, watch, ack, release, defer, fail, or list")
+		return errors.New("expected a command: send, recv, wait, watch, ack, release, defer, fail, or list")
 	}
 
 	command, err := a.prepareCommand(rest)
@@ -69,7 +69,7 @@ func (a *App) Run(ctx context.Context, args []string) error {
 
 func (a *App) prepareCommand(args []string) (preparedCommand, error) {
 	if len(args) == 0 {
-		return nil, errors.New("expected a command: send, recv, watch, ack, release, defer, fail, or list")
+		return nil, errors.New("expected a command: send, recv, wait, watch, ack, release, defer, fail, or list")
 	}
 
 	switch args[0] {
@@ -77,6 +77,8 @@ func (a *App) prepareCommand(args []string) (preparedCommand, error) {
 		return a.prepareSendCommand(args[1:])
 	case "recv":
 		return a.prepareRecvCommand(args[1:])
+	case "wait":
+		return a.prepareWaitCommand(args[1:])
 	case "watch":
 		return a.prepareWatchCommand(args[1:])
 	case "ack":
@@ -327,6 +329,50 @@ func (a *App) prepareWatchCommand(args []string) (preparedCommand, error) {
 	}, nil
 }
 
+func (a *App) prepareWaitCommand(args []string) (preparedCommand, error) {
+	fs := flag.NewFlagSet("agent-mailbox wait", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+
+	var addresses stringListFlag
+	var timeout time.Duration
+	var formats outputFlags
+
+	fs.Var(&addresses, "for", "recipient address (repeatable)")
+	fs.DurationVar(&timeout, "timeout", 0, "maximum time to wait for a matching delivery")
+	formats.register(fs, "emit JSON", "emit YAML")
+
+	if err := a.parseCommandFlags(fs, args, a.writeWaitHelp); err != nil {
+		return nil, err
+	}
+	normalizedAddresses, err := normalizeAddresses("", []string(addresses), "--for")
+	if err != nil {
+		return nil, err
+	}
+	if timeout < 0 {
+		return nil, errors.New("--timeout must be greater than or equal to 0")
+	}
+	format, err := formats.resolve()
+	if err != nil {
+		return nil, err
+	}
+
+	params := WaitParams{
+		Addresses: normalizedAddresses,
+		Timeout:   timeout,
+	}
+
+	return func(ctx context.Context, store *Store) error {
+		delivery, err := store.Wait(ctx, params)
+		if err != nil {
+			return err
+		}
+		if format != outputFormatText {
+			return a.writeStructuredOutput(format, delivery)
+		}
+		return a.writeListedDeliveryText(delivery)
+	}, nil
+}
+
 func (a *App) prepareAckCommand(args []string) (preparedCommand, error) {
 	fs := flag.NewFlagSet("agent-mailbox ack", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
@@ -514,6 +560,7 @@ func (a *App) writeRootHelp() {
 		"Commands:",
 		"  send                Send a message to an address",
 		"  recv                Claim the next delivery",
+		"  wait                Wait for one delivery without claiming",
 		"  watch               Observe deliveries without claiming",
 		"  list                List deliveries",
 		"  ack                 Acknowledge a leased delivery",
@@ -582,6 +629,19 @@ func (a *App) writeWatchHelp() {
 		"  --timeout DURATION   Maximum idle time before watch exits",
 		"  --json               Emit NDJSON",
 		"  --yaml               Emit a YAML document stream",
+	})
+}
+
+func (a *App) writeWaitHelp() {
+	writeHelp(a.stdout, []string{
+		"Usage:",
+		"  agent-mailbox wait --for ADDRESS [--for ADDRESS ...] [--timeout DURATION] [--json | --yaml]",
+		"",
+		"Options:",
+		"  --for ADDRESS        Recipient address (repeatable)",
+		"  --timeout DURATION   Maximum time to wait for a matching delivery",
+		"  --json               Emit JSON",
+		"  --yaml               Emit YAML",
 	})
 }
 

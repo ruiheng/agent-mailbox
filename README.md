@@ -9,7 +9,7 @@ The current MVP is intentionally narrow:
 - one local Unix user on one machine
 - direct mailbox delivery by endpoint address
 - SQLite metadata plus blob-backed message bodies
-- explicit `send`, `recv`, `watch`, `ack`, `release`, `defer`, `fail`, and `list`
+- explicit `send`, `recv`, `wait`, `watch`, `ack`, `release`, `defer`, `fail`, and `list`
 - no daemon, no network transport, no adapter-specific correctness dependency
 
 ## Status
@@ -91,8 +91,8 @@ The default state directory is:
 - otherwise `~/.local/state/ai-agent/mailbox`
 
 You can set `MAILBOX_STATE_DIR` once, or pass `--state-dir` per command.
-Read-style commands (`list`, `recv`, and `watch`) accept either `--json` or
-`--yaml`, but not both together.
+Read-style commands (`list`, `recv`, `wait`, and `watch`) accept either
+`--json` or `--yaml`, but not both together.
 
 ## Minimal Example
 
@@ -126,12 +126,19 @@ Observe matching queued deliveries without claiming them:
 
 ```bash
 agent-mailbox --state-dir /tmp/mailbox-demo \
+  wait --for workflow/reviewer/task-123 --timeout 30s --json
+```
+
+Stream matching queued deliveries without claiming them:
+
+```bash
+agent-mailbox --state-dir /tmp/mailbox-demo \
   watch --for workflow/reviewer/task-123 --timeout 30s --json
 ```
 
-Use `--yaml` when you want the same `list`, `recv`, or `watch` payloads in YAML.
-For `watch`, YAML output is a document stream with one delivery per `---`
-document.
+Use `--yaml` when you want the same `list`, `recv`, `wait`, or `watch`
+payloads in YAML. `wait` returns one YAML mapping. `watch` returns a YAML
+document stream with one delivery per `---` document.
 
 Ack the leased delivery using the returned `delivery_id` and `lease_token`:
 
@@ -150,8 +157,9 @@ For the full command reference, see [`docs/cli.md`](docs/cli.md).
   `message_created_at`, then `delivery_id`
 - no fairness or address rotation guarantee is made while waiting
 
-Use `list` for a one-shot snapshot, `watch` for observe-only streaming metadata,
-and `recv` when the consumer is ready to claim work and receive a lease token.
+Use `list` for a one-shot snapshot, `wait` for a one-shot observe-only block,
+`watch` for observe-only streaming metadata, and `recv` when the consumer is
+ready to claim work and receive a lease token.
 
 ## Local State Layout
 

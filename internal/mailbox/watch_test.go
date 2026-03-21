@@ -52,6 +52,43 @@ func TestWatchEmitsQueuedDeliveryWithoutClaiming(t *testing.T) {
 	assertStringSlicesEqual(t, eventTypes, want)
 }
 
+func TestWaitReturnsQueuedDeliveryWithoutClaiming(t *testing.T) {
+	t.Parallel()
+
+	runtime, store := newLeaseTestStore(t)
+	defer runtime.Close()
+
+	sent := mustSendMessage(t, store, "workflow/reviewer/task-123", "agent/sender", "review request", "hello reviewer")
+
+	delivery, err := store.Wait(context.Background(), WaitParams{
+		Addresses: []string{"workflow/reviewer/task-123"},
+	})
+	if err != nil {
+		t.Fatalf("Wait() error = %v", err)
+	}
+	if delivery.DeliveryID != sent.DeliveryID {
+		t.Fatalf("wait delivery id = %q, want %q", delivery.DeliveryID, sent.DeliveryID)
+	}
+	if delivery.RecipientAddress != "workflow/reviewer/task-123" {
+		t.Fatalf("wait recipient address = %q, want workflow/reviewer/task-123", delivery.RecipientAddress)
+	}
+
+	queued, err := store.List(context.Background(), ListParams{Address: "workflow/reviewer/task-123"})
+	if err != nil {
+		t.Fatalf("List() error = %v", err)
+	}
+	if len(queued) != 1 {
+		t.Fatalf("len(queued) = %d, want 1", len(queued))
+	}
+	if queued[0].DeliveryID != sent.DeliveryID {
+		t.Fatalf("queued delivery id = %q, want %q", queued[0].DeliveryID, sent.DeliveryID)
+	}
+
+	eventTypes := readDeliveryEventTypes(t, runtime, sent.DeliveryID)
+	want := []string{"delivery_queued"}
+	assertStringSlicesEqual(t, eventTypes, want)
+}
+
 func TestWatchMultipleAddressesUsesOldestFirstUnion(t *testing.T) {
 	t.Parallel()
 
@@ -94,6 +131,34 @@ func TestWatchMultipleAddressesUsesOldestFirstUnion(t *testing.T) {
 	}
 }
 
+func TestWaitMultipleAddressesUsesOldestFirstUnion(t *testing.T) {
+	t.Parallel()
+
+	_, store := newLeaseTestStore(t)
+
+	current := time.Date(2026, 3, 18, 15, 0, 0, 0, time.UTC)
+	store.now = func() time.Time {
+		return current
+	}
+
+	older := mustSendMessage(t, store, "workflow/older", "agent/sender", "older", "older body")
+	current = current.Add(time.Second)
+	mustSendMessage(t, store, "workflow/newer", "agent/sender", "newer", "newer body")
+
+	delivery, err := store.Wait(context.Background(), WaitParams{
+		Addresses: []string{"workflow/newer", "workflow/older", "workflow/newer"},
+	})
+	if err != nil {
+		t.Fatalf("Wait(multi) error = %v", err)
+	}
+	if delivery.DeliveryID != older.DeliveryID {
+		t.Fatalf("wait delivery id = %q, want %q", delivery.DeliveryID, older.DeliveryID)
+	}
+	if delivery.RecipientAddress != "workflow/older" {
+		t.Fatalf("wait recipient_address = %q, want workflow/older", delivery.RecipientAddress)
+	}
+}
+
 func TestWatchSeesAddressCreatedByLaterSend(t *testing.T) {
 	t.Parallel()
 
@@ -125,6 +190,40 @@ func TestWatchSeesAddressCreatedByLaterSend(t *testing.T) {
 	}
 	if deliveries[0].RecipientAddress != "workflow/later-watch" {
 		t.Fatalf("watch later recipient address = %q, want workflow/later-watch", deliveries[0].RecipientAddress)
+	}
+}
+
+func TestWaitSeesAddressCreatedByLaterSend(t *testing.T) {
+	t.Parallel()
+
+	_, store := newLeaseTestStore(t)
+
+	type waitResult struct {
+		delivery ListedDelivery
+		err      error
+	}
+
+	resultCh := make(chan waitResult, 1)
+	go func() {
+		delivery, err := store.Wait(context.Background(), WaitParams{
+			Address: "workflow/later-wait",
+			Timeout: 300 * time.Millisecond,
+		})
+		resultCh <- waitResult{delivery: delivery, err: err}
+	}()
+
+	time.Sleep(75 * time.Millisecond)
+	sent := mustSendMessage(t, store, "workflow/later-wait", "agent/sender", "wait later", "wait body")
+
+	result := <-resultCh
+	if result.err != nil {
+		t.Fatalf("Wait(wait unseen) error = %v", result.err)
+	}
+	if result.delivery.DeliveryID != sent.DeliveryID {
+		t.Fatalf("wait later delivery id = %q, want %q", result.delivery.DeliveryID, sent.DeliveryID)
+	}
+	if result.delivery.RecipientAddress != "workflow/later-wait" {
+		t.Fatalf("wait later recipient address = %q, want workflow/later-wait", result.delivery.RecipientAddress)
 	}
 }
 
