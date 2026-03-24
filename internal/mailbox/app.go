@@ -230,13 +230,9 @@ func (a *App) prepareRecvCommand(args []string) (preparedCommand, error) {
 	fs.SetOutput(io.Discard)
 
 	var addresses stringListFlag
-	var wait bool
-	var timeout time.Duration
 	var formats outputFlags
 
 	fs.Var(&addresses, "for", "recipient address (repeatable)")
-	fs.BoolVar(&wait, "wait", false, "wait for a claimable delivery")
-	fs.DurationVar(&timeout, "timeout", 0, "maximum time to wait when --wait is set")
 	formats.register(fs, "emit JSON", "emit YAML")
 
 	if err := a.parseCommandFlags(fs, args, a.writeRecvHelp); err != nil {
@@ -246,12 +242,6 @@ func (a *App) prepareRecvCommand(args []string) (preparedCommand, error) {
 	if err != nil {
 		return nil, err
 	}
-	if timeout < 0 {
-		return nil, errors.New("--timeout must be greater than or equal to 0")
-	}
-	if flagWasProvided(fs, "timeout") && !wait {
-		return nil, errors.New("--timeout requires --wait")
-	}
 	format, err := formats.resolve()
 	if err != nil {
 		return nil, err
@@ -259,8 +249,6 @@ func (a *App) prepareRecvCommand(args []string) (preparedCommand, error) {
 
 	params := ReceiveParams{
 		Addresses: normalizedAddresses,
-		Wait:      wait,
-		Timeout:   timeout,
 	}
 
 	return func(ctx context.Context, store *Store) error {
@@ -607,12 +595,10 @@ func (a *App) writeListHelp() {
 func (a *App) writeRecvHelp() {
 	writeHelp(a.stdout, []string{
 		"Usage:",
-		"  agent-mailbox recv --for ADDRESS [--for ADDRESS ...] [--wait] [--timeout DURATION] [--json | --yaml]",
+		"  agent-mailbox recv --for ADDRESS [--for ADDRESS ...] [--json | --yaml]",
 		"",
 		"Options:",
 		"  --for ADDRESS        Recipient address (repeatable)",
-		"  --wait               Wait for a claimable delivery",
-		"  --timeout DURATION   Maximum time to wait when --wait is set",
 		"  --json               Emit JSON",
 		"  --yaml               Emit YAML",
 	})
@@ -677,14 +663,4 @@ func writeHelp(w io.Writer, lines []string) {
 	for _, line := range lines {
 		fmt.Fprintln(w, line)
 	}
-}
-
-func flagWasProvided(fs *flag.FlagSet, name string) bool {
-	provided := false
-	fs.Visit(func(current *flag.Flag) {
-		if current.Name == name {
-			provided = true
-		}
-	})
-	return provided
 }

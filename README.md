@@ -70,7 +70,7 @@ If you use a user-local prefix, make sure `"$HOME/.local/bin"` is in your
 
 ## User Guide
 
-For day-to-day CLI usage, examples, blocking receive, exit codes, and command
+For day-to-day CLI usage, examples, receive semantics, exit codes, and command
 reference, see [`docs/cli.md`](docs/cli.md).
 
 ## Quick Start
@@ -155,7 +155,6 @@ For the full command reference, see [`docs/cli.md`](docs/cli.md).
 - unseen addresses behave like empty inboxes
 - selection is deterministic global oldest-first by `visible_at`, then
   `message_created_at`, then `delivery_id`
-- no fairness or address rotation guarantee is made while waiting
 
 Use `list` for a one-shot snapshot, `wait` for a one-shot observe-only block,
 `watch` for observe-only streaming metadata, and `recv` when the consumer is

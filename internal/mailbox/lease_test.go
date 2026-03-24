@@ -125,10 +125,8 @@ func TestReleaseDeferAndReceiveTimeout(t *testing.T) {
 
 	if _, err := store.Receive(context.Background(), ReceiveParams{
 		Address: "workflow/empty",
-		Wait:    true,
-		Timeout: 30 * time.Millisecond,
 	}); !errors.Is(err, ErrNoMessage) {
-		t.Fatalf("Receive(timeout) error = %v, want ErrNoMessage", err)
+		t.Fatalf("Receive(empty) error = %v, want ErrNoMessage", err)
 	}
 }
 
@@ -354,41 +352,6 @@ func mustSendMessage(t *testing.T, store *Store, toAddress, fromAddress, subject
 	return result
 }
 
-func TestReceiveWaitSeesAddressCreatedByLaterSend(t *testing.T) {
-	t.Parallel()
-
-	_, store := newLeaseTestStore(t)
-
-	type receiveResult struct {
-		message ReceivedMessage
-		err     error
-	}
-
-	resultCh := make(chan receiveResult, 1)
-	go func() {
-		message, err := store.Receive(context.Background(), ReceiveParams{
-			Address: "workflow/later",
-			Wait:    true,
-			Timeout: 500 * time.Millisecond,
-		})
-		resultCh <- receiveResult{message: message, err: err}
-	}()
-
-	time.Sleep(75 * time.Millisecond)
-	sent := mustSendMessage(t, store, "workflow/later", "agent/sender", "later", "later body")
-
-	result := <-resultCh
-	if result.err != nil {
-		t.Fatalf("Receive(wait unseen) error = %v", result.err)
-	}
-	if result.message.DeliveryID != sent.DeliveryID {
-		t.Fatalf("Receive(wait unseen) delivery id = %q, want %q", result.message.DeliveryID, sent.DeliveryID)
-	}
-	if result.message.RecipientAddress != "workflow/later" {
-		t.Fatalf("Receive(wait unseen) recipient address = %q, want workflow/later", result.message.RecipientAddress)
-	}
-}
-
 func TestReceiveRejectsCorruptBodyBlob(t *testing.T) {
 	t.Parallel()
 
@@ -407,104 +370,6 @@ func TestReceiveRejectsCorruptBodyBlob(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), sent.BodyBlobRef) {
 		t.Fatalf("Receive(corrupt blob) error = %q, want blob ref %q", err, sent.BodyBlobRef)
-	}
-}
-
-func TestReceiveWaitTimeoutStaysBoundedWithNoClaimableDeliveryUnderWriterLock(t *testing.T) {
-	t.Parallel()
-
-	stateDir := filepath.Join(t.TempDir(), "mailbox-state")
-	lockerRuntime, err := OpenRuntime(context.Background(), stateDir)
-	if err != nil {
-		t.Fatalf("OpenRuntime(locker) error = %v", err)
-	}
-	defer lockerRuntime.Close()
-
-	waiterRuntime, err := OpenRuntime(context.Background(), stateDir)
-	if err != nil {
-		t.Fatalf("OpenRuntime(waiter) error = %v", err)
-	}
-	defer waiterRuntime.Close()
-
-	const address = "workflow/blocked-empty"
-	mustSendMessage(t, lockerRuntime.Store(), address, "agent/sender", "held lease", "blocked body")
-	leased, err := lockerRuntime.Store().Receive(context.Background(), ReceiveParams{Address: address})
-	if err != nil {
-		t.Fatalf("Receive(initial lease) error = %v", err)
-	}
-	if leased.RecipientAddress != address {
-		t.Fatalf("Receive(initial lease) recipient address = %q, want %q", leased.RecipientAddress, address)
-	}
-
-	lockTx, err := lockerRuntime.DB().BeginTx(context.Background(), nil)
-	if err != nil {
-		t.Fatalf("BeginTx(writer lock) error = %v", err)
-	}
-	defer lockTx.Rollback()
-
-	start := time.Now()
-	_, err = waiterRuntime.Store().Receive(context.Background(), ReceiveParams{
-		Address: address,
-		Wait:    true,
-		Timeout: 150 * time.Millisecond,
-	})
-	elapsed := time.Since(start)
-	if !errors.Is(err, ErrNoMessage) {
-		t.Fatalf("Receive(wait under writer lock) error = %v, want ErrNoMessage", err)
-	}
-	if elapsed > time.Second {
-		t.Fatalf("Receive(wait under writer lock) took %v, want under 1s", elapsed)
-	}
-}
-
-func TestReceiveWaitTimeoutStaysBoundedWithQueuedDeliveryUnderWriterLock(t *testing.T) {
-	t.Parallel()
-
-	stateDir := filepath.Join(t.TempDir(), "mailbox-state")
-	lockerRuntime, err := OpenRuntime(context.Background(), stateDir)
-	if err != nil {
-		t.Fatalf("OpenRuntime(locker) error = %v", err)
-	}
-	defer lockerRuntime.Close()
-
-	waiterRuntime, err := OpenRuntime(context.Background(), stateDir)
-	if err != nil {
-		t.Fatalf("OpenRuntime(waiter) error = %v", err)
-	}
-	defer waiterRuntime.Close()
-
-	const address = "workflow/blocked-queued"
-	sent := mustSendMessage(t, lockerRuntime.Store(), address, "agent/sender", "queued", "queued body")
-
-	lockTx, err := lockerRuntime.DB().BeginTx(context.Background(), nil)
-	if err != nil {
-		t.Fatalf("BeginTx(writer lock) error = %v", err)
-	}
-	defer lockTx.Rollback()
-
-	start := time.Now()
-	_, err = waiterRuntime.Store().Receive(context.Background(), ReceiveParams{
-		Address: address,
-		Wait:    true,
-		Timeout: 150 * time.Millisecond,
-	})
-	elapsed := time.Since(start)
-	if !errors.Is(err, ErrNoMessage) {
-		t.Fatalf("Receive(wait queued under writer lock) error = %v, want ErrNoMessage", err)
-	}
-	if elapsed > time.Second {
-		t.Fatalf("Receive(wait queued under writer lock) took %v, want under 1s", elapsed)
-	}
-
-	deliveries, err := lockerRuntime.Store().List(context.Background(), ListParams{Address: address, State: "queued"})
-	if err != nil {
-		t.Fatalf("List(queued after timeout) error = %v", err)
-	}
-	if len(deliveries) != 1 {
-		t.Fatalf("len(queued after timeout) = %d, want 1", len(deliveries))
-	}
-	if deliveries[0].DeliveryID != sent.DeliveryID {
-		t.Fatalf("queued delivery id = %q, want %q", deliveries[0].DeliveryID, sent.DeliveryID)
 	}
 }
 

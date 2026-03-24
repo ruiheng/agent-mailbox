@@ -6,7 +6,7 @@ This guide is intentionally short. It covers what a user needs to run the CLI:
 
 - where state lives
 - the normal send/receive flow
-- how blocking receive, observe-only wait, and observe-only watch work
+- how immediate receive, observe-only wait, and observe-only watch work
 - what each command is for
 
 ## State Directory
@@ -98,43 +98,23 @@ agent-mailbox ack \
   --lease-token <lease_token>
 ```
 
-## Blocking Receive
+## Receive
 
-Wait until a message becomes claimable:
-
-```bash
-agent-mailbox recv \
-  --for workflow/reviewer/task-123 \
-  --wait \
-  --json
-```
-
-Wait with a timeout:
-
-```bash
-agent-mailbox recv \
-  --for workflow/reviewer/task-123 \
-  --wait \
-  --timeout 30s \
-  --json
-```
+`recv` is always an immediate claim attempt.
 
 Rules:
 
-- without `--wait`, `recv` returns immediately
-- `--timeout` requires `--wait`
+- `recv` returns immediately
 - `--json` and `--yaml` are mutually exclusive
-- timeout or no-message returns exit code `2`
+- no-message returns exit code `2`
 - repeated `--for` flags search the union of the requested inboxes
 - selection is global oldest-first by `visible_at`, then `message_created_at`,
   then `delivery_id`
-- v1 does not guarantee fairness or address rotation while waiting
 - unseen addresses behave like empty inboxes
-- `recv --wait` can start before the first message is ever sent to an address
 
 ## Wait
 
-`wait` is the one-shot observe-only companion to `recv --wait`.
+`wait` is the one-shot observe-only companion to `recv`.
 
 ```bash
 agent-mailbox wait --for <address> [--for <address> ...] [--timeout 30s] [--json | --yaml]
@@ -210,7 +190,7 @@ Notes:
 Claim the next delivery for one or more recipient addresses.
 
 ```bash
-agent-mailbox recv --for <address> [--for <address> ...] [--wait] [--timeout 30s] [--json | --yaml]
+agent-mailbox recv --for <address> [--for <address> ...] [--json | --yaml]
 ```
 
 Use `--json` or `--yaml` for scripts and agents.
@@ -223,6 +203,7 @@ Notes:
 - `--json` keeps the existing schema and still includes `recipient_address`
 - `--yaml` emits the same fields as `--json`, using YAML instead of JSON
 - unseen addresses are ignored until a matching delivery exists
+- `recv` does not wait; use `wait` if you need to block until work appears
 
 ### `wait`
 
@@ -324,6 +305,6 @@ Notes:
 ## Exit Codes
 
 - `0`: success
-- `2`: `recv` found no message, `recv --wait --timeout ...` timed out, or
-  `wait --timeout ...` found no matching delivery
+- `2`: `recv` found no message, or `wait --timeout ...` found no matching
+  delivery
 - other non-zero: usage error or operational failure

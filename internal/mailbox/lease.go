@@ -32,8 +32,6 @@ var (
 type ReceiveParams struct {
 	Address   string
 	Addresses []string
-	Wait      bool
-	Timeout   time.Duration
 }
 
 type ReceivedMessage struct {
@@ -116,63 +114,7 @@ func (s *Store) Receive(ctx context.Context, params ReceiveParams) (ReceivedMess
 		return ReceivedMessage{}, err
 	}
 
-	if !params.Wait {
-		return s.receiveOnce(ctx, addresses, s.writeDB)
-	}
-
-	var deadline time.Time
-	if params.Timeout > 0 {
-		deadline = time.Now().Add(params.Timeout)
-	}
-
-	delay := initialPollDelay
-	for {
-		attemptCtx := ctx
-		cancel := func() {}
-		if !deadline.IsZero() {
-			attemptCtx, cancel = context.WithDeadline(ctx, deadline)
-		}
-		message, err := s.receiveOnce(attemptCtx, addresses, s.claimDB)
-		cancel()
-		if err == nil {
-			return message, nil
-		}
-		if isSQLiteBusy(err) {
-			err = ErrNoMessage
-		}
-		if !deadline.IsZero() && errors.Is(err, context.DeadlineExceeded) && ctx.Err() == nil {
-			return ReceivedMessage{}, ErrNoMessage
-		}
-		if !errors.Is(err, ErrNoMessage) {
-			return ReceivedMessage{}, err
-		}
-		if !deadline.IsZero() {
-			remaining := time.Until(deadline)
-			if remaining <= 0 {
-				return ReceivedMessage{}, ErrNoMessage
-			}
-			if delay > remaining {
-				delay = remaining
-			}
-		}
-
-		timer := time.NewTimer(delay)
-		select {
-		case <-ctx.Done():
-			if !timer.Stop() {
-				<-timer.C
-			}
-			return ReceivedMessage{}, ctx.Err()
-		case <-timer.C:
-		}
-
-		if delay < maxPollDelay {
-			delay *= 2
-			if delay > maxPollDelay {
-				delay = maxPollDelay
-			}
-		}
-	}
+	return s.receiveOnce(ctx, addresses, s.writeDB)
 }
 
 func (s *Store) resolveRecipients(ctx context.Context, addresses []string) ([]resolvedRecipient, error) {

@@ -118,39 +118,6 @@ func TestCLIRecvNoMessageExitCodeAndSilence(t *testing.T) {
 	if immediate.stderr != "" {
 		t.Fatalf("immediate recv stderr = %q, want empty", immediate.stderr)
 	}
-
-	timedOut := runCLI(t, "", "--state-dir", stateDir,
-		"recv",
-		"--for", "workflow/empty",
-		"--wait",
-		"--timeout", "20ms",
-	)
-	if timedOut.exitCode != 2 {
-		t.Fatalf("timed recv exit code = %d, want 2; stderr = %q", timedOut.exitCode, timedOut.stderr)
-	}
-	if timedOut.stdout != "" {
-		t.Fatalf("timed recv stdout = %q, want empty", timedOut.stdout)
-	}
-	if timedOut.stderr != "" {
-		t.Fatalf("timed recv stderr = %q, want empty", timedOut.stderr)
-	}
-
-	multiTimedOut := runCLI(t, "", "--state-dir", stateDir,
-		"recv",
-		"--for", "workflow/empty",
-		"--for", "workflow/empty-2",
-		"--wait",
-		"--timeout", "20ms",
-	)
-	if multiTimedOut.exitCode != 2 {
-		t.Fatalf("multi timed recv exit code = %d, want 2; stderr = %q", multiTimedOut.exitCode, multiTimedOut.stderr)
-	}
-	if multiTimedOut.stdout != "" {
-		t.Fatalf("multi timed recv stdout = %q, want empty", multiTimedOut.stdout)
-	}
-	if multiTimedOut.stderr != "" {
-		t.Fatalf("multi timed recv stderr = %q, want empty", multiTimedOut.stderr)
-	}
 }
 
 func TestCLISendRejectsEmptyBody(t *testing.T) {
@@ -589,7 +556,7 @@ func TestCLIHelpExitsZeroAndPrintsUsage(t *testing.T) {
 		{
 			name:         "recv help",
 			args:         []string{"recv", "--help"},
-			wantContains: "Usage:\n  agent-mailbox recv --for ADDRESS [--for ADDRESS ...] [--wait] [--timeout DURATION] [--json | --yaml]",
+			wantContains: "Usage:\n  agent-mailbox recv --for ADDRESS [--for ADDRESS ...] [--json | --yaml]",
 		},
 		{
 			name:         "watch help",

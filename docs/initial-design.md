@@ -425,7 +425,8 @@ The core system must work even if there are no adapters.
 
 That means:
 
-- `recv --wait` is a first-class operation
+- `recv` is a first-class claim operation
+- `wait` is a first-class observe-only blocking operation
 - `watch` is a first-class observe-only operation
 - no receiver is forced to accept pushed full-body content
 - transport failures do not redefine mailbox correctness
@@ -543,13 +544,14 @@ Build the smallest complete slice:
    `deliveries`, and `events`
 2. implicit address ensure and lookup
 3. `send`
-4. `recv --wait`
-5. `watch`
-6. `ack`
-7. `release`
-8. `defer`
-9. `fail`
-10. `list`
+4. `recv`
+5. `wait`
+6. `watch`
+7. `ack`
+8. `release`
+9. `defer`
+10. `fail`
+11. `list`
 
 Skip for now:
 
