@@ -39,10 +39,7 @@ func TestCLISendRecvAckFlow(t *testing.T) {
 		t.Fatalf("recv exit code = %d, stderr = %q", recv.exitCode, recv.stderr)
 	}
 
-	var message mailbox.ReceivedMessage
-	if err := json.Unmarshal([]byte(recv.stdout), &message); err != nil {
-		t.Fatalf("json.Unmarshal(recv stdout) error = %v; stdout = %q", err, recv.stdout)
-	}
+	message := decodeReceivedMessage(t, recv.stdout)
 	if message.Subject != "review request" {
 		t.Fatalf("recv subject = %q, want review request", message.Subject)
 	}
@@ -178,6 +175,78 @@ func TestCLIRecvMultipleAddressesPlainTextIncludesRecipientAddress(t *testing.T)
 	}
 	if !strings.Contains(recv.stdout, "older body\n") {
 		t.Fatalf("recv multi plain text stdout = %q, want older body", recv.stdout)
+	}
+}
+
+func TestCLIRecvHonorsMaxAndReportsMoreAvailable(t *testing.T) {
+	stateDir := filepath.Join(t.TempDir(), "mailbox-state")
+
+	for _, mailboxName := range []string{"workflow/one", "workflow/two", "workflow/three"} {
+		send := runCLI(t, "batch body\n", "--state-dir", stateDir,
+			"send",
+			"--to", mailboxName,
+			"--from", "agent/sender",
+			"--subject", mailboxName,
+			"--body-file", "-",
+		)
+		if send.exitCode != 0 {
+			t.Fatalf("send %s exit code = %d, stderr = %q", mailboxName, send.exitCode, send.stderr)
+		}
+	}
+
+	recv := runCLI(t, "", "--state-dir", stateDir,
+		"recv",
+		"--for", "workflow/one",
+		"--for", "workflow/two",
+		"--for", "workflow/three",
+		"--max", "2",
+		"--json",
+	)
+	if recv.exitCode != 0 {
+		t.Fatalf("recv exit code = %d, stderr = %q", recv.exitCode, recv.stderr)
+	}
+
+	result := decodeReceiveResult(t, recv.stdout)
+	if len(result.Messages) != 2 {
+		t.Fatalf("len(recv messages) = %d, want 2", len(result.Messages))
+	}
+	if !result.HasMore {
+		t.Fatal("recv has_more = false, want true")
+	}
+	if result.Messages[0].RecipientAddress != "workflow/one" {
+		t.Fatalf("recv messages[0].recipient_address = %q, want workflow/one", result.Messages[0].RecipientAddress)
+	}
+	if result.Messages[1].RecipientAddress != "workflow/two" {
+		t.Fatalf("recv messages[1].recipient_address = %q, want workflow/two", result.Messages[1].RecipientAddress)
+	}
+}
+
+func TestCLIRecvDefaultTextDoesNotAppendMoreNotice(t *testing.T) {
+	stateDir := filepath.Join(t.TempDir(), "mailbox-state")
+
+	for _, mailboxName := range []string{"workflow/one", "workflow/two"} {
+		send := runCLI(t, "payload\n", "--state-dir", stateDir,
+			"send",
+			"--to", mailboxName,
+			"--from", "agent/sender",
+			"--subject", mailboxName,
+			"--body-file", "-",
+		)
+		if send.exitCode != 0 {
+			t.Fatalf("send %s exit code = %d, stderr = %q", mailboxName, send.exitCode, send.stderr)
+		}
+	}
+
+	recv := runCLI(t, "", "--state-dir", stateDir,
+		"recv",
+		"--for", "workflow/one",
+		"--for", "workflow/two",
+	)
+	if recv.exitCode != 0 {
+		t.Fatalf("recv exit code = %d, stderr = %q", recv.exitCode, recv.stderr)
+	}
+	if strings.Contains(recv.stdout, "notice=more_messages_available") {
+		t.Fatalf("recv stdout = %q, want no notice suffix in default text mode", recv.stdout)
 	}
 }
 
@@ -556,7 +625,7 @@ func TestCLIHelpExitsZeroAndPrintsUsage(t *testing.T) {
 		{
 			name:         "recv help",
 			args:         []string{"recv", "--help"},
-			wantContains: "Usage:\n  agent-mailbox recv --for ADDRESS [--for ADDRESS ...] [--json | --yaml]",
+			wantContains: "Usage:\n  agent-mailbox recv --for ADDRESS [--for ADDRESS ...] [--max COUNT] [--json | --yaml]",
 		},
 		{
 			name:         "watch help",
@@ -662,4 +731,24 @@ func runCLI(t *testing.T, stdin string, args ...string) cliResult {
 		stderr:   stderr.String(),
 		exitCode: exitCode,
 	}
+}
+
+func decodeReceiveResult(t *testing.T, raw string) mailbox.ReceiveResult {
+	t.Helper()
+
+	var result mailbox.ReceiveResult
+	if err := json.Unmarshal([]byte(raw), &result); err != nil {
+		t.Fatalf("json.Unmarshal(recv stdout) error = %v; stdout = %q", err, raw)
+	}
+	return result
+}
+
+func decodeReceivedMessage(t *testing.T, raw string) mailbox.ReceivedMessage {
+	t.Helper()
+
+	var message mailbox.ReceivedMessage
+	if err := json.Unmarshal([]byte(raw), &message); err != nil {
+		t.Fatalf("json.Unmarshal(recv stdout) error = %v; stdout = %q", err, raw)
+	}
+	return message
 }

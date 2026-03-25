@@ -504,6 +504,18 @@ func TestInvalidCLIPathsDoNotCreateRuntimeState(t *testing.T) {
 			args: []string{"recv", "--for", "   "},
 		},
 		{
+			name: "recv zero max",
+			args: []string{"recv", "--for", "workflow/reviewer/task-123", "--max", "0"},
+		},
+		{
+			name: "recv negative max",
+			args: []string{"recv", "--for", "workflow/reviewer/task-123", "--max", "-1"},
+		},
+		{
+			name: "recv too large max",
+			args: []string{"recv", "--for", "workflow/reviewer/task-123", "--max", "11"},
+		},
+		{
 			name: "recv conflicting formats",
 			args: []string{"recv", "--for", "workflow/reviewer/task-123", "--json", "--yaml"},
 		},
@@ -616,7 +628,7 @@ func TestHelpCLIPathsDoNotCreateRuntimeState(t *testing.T) {
 		{
 			name:         "recv help",
 			args:         []string{"recv", "--help"},
-			wantContains: "Usage:\n  agent-mailbox recv --for ADDRESS [--for ADDRESS ...] [--json | --yaml]",
+			wantContains: "Usage:\n  agent-mailbox recv --for ADDRESS [--for ADDRESS ...] [--max COUNT] [--json | --yaml]",
 		},
 		{
 			name:         "watch help",

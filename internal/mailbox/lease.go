@@ -20,6 +20,7 @@ const (
 	initialPollDelay        = 50 * time.Millisecond
 	maxPollDelay            = time.Second
 	maxDeliveryAttemptCount = 3
+	maxReceiveBatchSize     = 10
 )
 
 var (
@@ -32,6 +33,12 @@ var (
 type ReceiveParams struct {
 	Address   string
 	Addresses []string
+}
+
+type ReceiveBatchParams struct {
+	Address   string
+	Addresses []string
+	Max       int
 }
 
 type ReceivedMessage struct {
@@ -53,6 +60,11 @@ type ReceivedMessage struct {
 	BodySize            int64   `json:"body_size"`
 	BodySHA256          string  `json:"body_sha256"`
 	Body                string  `json:"body"`
+}
+
+type ReceiveResult struct {
+	Messages []ReceivedMessage `json:"messages"`
+	HasMore  bool              `json:"has_more"`
 }
 
 type DeliveryTransitionResult struct {
@@ -115,6 +127,51 @@ func (s *Store) Receive(ctx context.Context, params ReceiveParams) (ReceivedMess
 	}
 
 	return s.receiveOnce(ctx, addresses, s.writeDB)
+}
+
+func (s *Store) ReceiveBatch(ctx context.Context, params ReceiveBatchParams) (ReceiveResult, error) {
+	addresses, err := normalizeAddresses(params.Address, params.Addresses, "--for")
+	if err != nil {
+		return ReceiveResult{}, err
+	}
+
+	maxMessages := params.Max
+	if maxMessages < 1 || maxMessages > maxReceiveBatchSize {
+		return ReceiveResult{}, fmt.Errorf("--max must be between 1 and %d", maxReceiveBatchSize)
+	}
+
+	messages := make([]ReceivedMessage, 0, maxMessages)
+	for len(messages) < maxMessages {
+		message, err := s.receiveOnce(ctx, addresses, s.writeDB)
+		if err == nil {
+			messages = append(messages, message)
+			continue
+		}
+		if errors.Is(err, ErrNoMessage) {
+			break
+		}
+		if len(messages) > 0 {
+			break
+		}
+		return ReceiveResult{}, err
+	}
+
+	if len(messages) == 0 {
+		return ReceiveResult{}, ErrNoMessage
+	}
+
+	hasMore := false
+	if len(messages) == maxMessages {
+		hasMore, err = s.hasClaimableDelivery(ctx, addresses)
+		if err != nil {
+			return ReceiveResult{}, err
+		}
+	}
+
+	return ReceiveResult{
+		Messages: messages,
+		HasMore:  hasMore,
+	}, nil
 }
 
 func (s *Store) resolveRecipients(ctx context.Context, addresses []string) ([]resolvedRecipient, error) {
@@ -356,6 +413,30 @@ WHERE delivery_id = ?
 		}
 		return message, nil
 	}
+}
+
+func (s *Store) hasClaimableDelivery(ctx context.Context, addresses []string) (bool, error) {
+	recipients, err := s.resolveRecipients(ctx, addresses)
+	if err != nil {
+		return false, err
+	}
+	if len(recipients) == 0 {
+		return false, nil
+	}
+
+	recipientEndpointIDs := make([]string, 0, len(recipients))
+	for _, recipient := range recipients {
+		recipientEndpointIDs = append(recipientEndpointIDs, recipient.EndpointID)
+	}
+
+	nowText := formatTimestamp(s.now())
+	if _, err := loadClaimCandidate(ctx, s.readDB, recipientEndpointIDs, nowText); errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	} else if err != nil {
+		return false, fmt.Errorf("query claimable delivery: %w", err)
+	}
+
+	return true, nil
 }
 
 func (s *Store) transitionLeasedDelivery(ctx context.Context, deliveryID, leaseToken string, build func(time.Time, leasedDeliveryRecord) (deliveryTransitionSpec, error)) (DeliveryTransitionResult, error) {

@@ -63,8 +63,19 @@ agent-mailbox recv \
   --json
 ```
 
-The receive result includes `delivery_id` and `lease_token`. Keep both. You
-need them for follow-up actions.
+Claim multiple messages in one call:
+
+```bash
+agent-mailbox recv \
+  --for workflow/reviewer/task-123 \
+  --max 10 \
+  --json
+```
+
+Without `--max`, `recv` returns one leased message in the legacy single-message
+shape. With `--max`, the receive result becomes an object with `messages` and
+`has_more`. Each message entry includes its own `delivery_id` and `lease_token`.
+Keep those for follow-up actions.
 
 Observe deliveries without claiming them:
 
@@ -105,12 +116,14 @@ agent-mailbox ack \
 Rules:
 
 - `recv` returns immediately
+- `--max` defaults to `1` and may not exceed `10`
 - `--json` and `--yaml` are mutually exclusive
 - no-message returns exit code `2`
 - repeated `--for` flags search the union of the requested inboxes
 - selection is global oldest-first by `visible_at`, then `message_created_at`,
   then `delivery_id`
 - unseen addresses behave like empty inboxes
+- `has_more=true` means the batch hit the requested max and more claimable mail remains
 
 ## Wait
 
@@ -187,21 +200,23 @@ Notes:
 
 ### `recv`
 
-Claim the next delivery for one or more recipient addresses.
+Claim one or more deliveries for one or more recipient addresses.
 
 ```bash
-agent-mailbox recv --for <address> [--for <address> ...] [--json | --yaml]
+agent-mailbox recv --for <address> [--for <address> ...] [--max 10] [--json | --yaml]
 ```
 
 Use `--json` or `--yaml` for scripts and agents.
 
 Notes:
 
-- repeat `--for` to search multiple inboxes with one claim attempt
+- repeat `--for` to search multiple inboxes with one batch claim
+- `--max <n>` limits how many deliveries one invocation can lease and may not exceed `10`
 - duplicate `--for` values are ignored after the first occurrence
-- plain-text output includes `recipient_address=...` so the matched inbox is clear
-- `--json` keeps the existing schema and still includes `recipient_address`
-- `--yaml` emits the same fields as `--json`, using YAML instead of JSON
+- without `--max`, plain-text and structured output preserve the single-message form
+- with `--max`, plain-text output prints each claimed message and appends
+  `notice=more_messages_available` when additional claimable mail remains
+- with `--max`, `--json` and `--yaml` emit a result object with `messages` and `has_more`
 - unseen addresses are ignored until a matching delivery exists
 - `recv` does not wait; use `wait` if you need to block until work appears
 

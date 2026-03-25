@@ -176,6 +176,78 @@ func TestReceiveMultipleAddressesOrdersUnionOldestFirst(t *testing.T) {
 	}
 }
 
+func TestReceiveBatchClaimsUpToMaxAndReportsHasMore(t *testing.T) {
+	t.Parallel()
+
+	runtime, store := newLeaseTestStore(t)
+	defer runtime.Close()
+
+	current := time.Date(2026, 3, 18, 13, 35, 0, 0, time.UTC)
+	store.now = func() time.Time {
+		return current
+	}
+
+	firstSent := mustSendMessage(t, store, "workflow/batch", "agent/sender", "first", "first body")
+	current = current.Add(time.Second)
+	secondSent := mustSendMessage(t, store, "workflow/batch", "agent/sender", "second", "second body")
+	current = current.Add(time.Second)
+	thirdSent := mustSendMessage(t, store, "workflow/batch", "agent/sender", "third", "third body")
+
+	result, err := store.ReceiveBatch(context.Background(), ReceiveBatchParams{
+		Address: "workflow/batch",
+		Max:     2,
+	})
+	if err != nil {
+		t.Fatalf("ReceiveBatch(first) error = %v", err)
+	}
+	if len(result.Messages) != 2 {
+		t.Fatalf("len(ReceiveBatch(first).Messages) = %d, want 2", len(result.Messages))
+	}
+	if !result.HasMore {
+		t.Fatal("ReceiveBatch(first).HasMore = false, want true")
+	}
+	if result.Messages[0].DeliveryID != firstSent.DeliveryID {
+		t.Fatalf("ReceiveBatch(first).Messages[0].delivery_id = %q, want %q", result.Messages[0].DeliveryID, firstSent.DeliveryID)
+	}
+	if result.Messages[1].DeliveryID != secondSent.DeliveryID {
+		t.Fatalf("ReceiveBatch(first).Messages[1].delivery_id = %q, want %q", result.Messages[1].DeliveryID, secondSent.DeliveryID)
+	}
+
+	last, err := store.ReceiveBatch(context.Background(), ReceiveBatchParams{
+		Address: "workflow/batch",
+		Max:     2,
+	})
+	if err != nil {
+		t.Fatalf("ReceiveBatch(second) error = %v", err)
+	}
+	if len(last.Messages) != 1 {
+		t.Fatalf("len(ReceiveBatch(second).Messages) = %d, want 1", len(last.Messages))
+	}
+	if last.HasMore {
+		t.Fatal("ReceiveBatch(second).HasMore = true, want false")
+	}
+	if last.Messages[0].DeliveryID != thirdSent.DeliveryID {
+		t.Fatalf("ReceiveBatch(second).Messages[0].delivery_id = %q, want %q", last.Messages[0].DeliveryID, thirdSent.DeliveryID)
+	}
+}
+
+func TestReceiveBatchRejectsTooLargeMax(t *testing.T) {
+	t.Parallel()
+
+	_, store := newLeaseTestStore(t)
+
+	_, err := store.ReceiveBatch(context.Background(), ReceiveBatchParams{
+		Address: "workflow/batch",
+		Max:     maxReceiveBatchSize + 1,
+	})
+	if err == nil {
+		t.Fatal("ReceiveBatch(too large max) error = nil, want non-nil")
+	}
+	if !strings.Contains(err.Error(), "--max must be between 1 and 10") {
+		t.Fatalf("ReceiveBatch(too large max) error = %q, want max range message", err)
+	}
+}
+
 func TestReceiveMultipleAddressesUsesDeliveryIDTiebreak(t *testing.T) {
 	t.Parallel()
 

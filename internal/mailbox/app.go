@@ -230,9 +230,11 @@ func (a *App) prepareRecvCommand(args []string) (preparedCommand, error) {
 	fs.SetOutput(io.Discard)
 
 	var addresses stringListFlag
+	var maxMessages int
 	var formats outputFlags
 
 	fs.Var(&addresses, "for", "recipient address (repeatable)")
+	fs.IntVar(&maxMessages, "max", 1, "maximum number of deliveries to claim")
 	formats.register(fs, "emit JSON", "emit YAML")
 
 	if err := a.parseCommandFlags(fs, args, a.writeRecvHelp); err != nil {
@@ -242,31 +244,43 @@ func (a *App) prepareRecvCommand(args []string) (preparedCommand, error) {
 	if err != nil {
 		return nil, err
 	}
+	if maxMessages < 1 || maxMessages > maxReceiveBatchSize {
+		return nil, fmt.Errorf("--max must be between 1 and %d", maxReceiveBatchSize)
+	}
+	maxProvided := flagWasProvided(fs, "max")
 	format, err := formats.resolve()
 	if err != nil {
 		return nil, err
 	}
 
-	params := ReceiveParams{
+	params := ReceiveBatchParams{
 		Addresses: normalizedAddresses,
+		Max:       maxMessages,
 	}
 
 	return func(ctx context.Context, store *Store) error {
-		message, err := store.Receive(ctx, params)
+		if !maxProvided {
+			message, err := store.Receive(ctx, ReceiveParams{Addresses: normalizedAddresses})
+			if err != nil {
+				return err
+			}
+
+			if format != outputFormatText {
+				return a.writeStructuredOutput(format, message)
+			}
+			return a.writeReceivedMessageText(message)
+		}
+
+		result, err := store.ReceiveBatch(ctx, params)
 		if err != nil {
 			return err
 		}
 
 		if format != outputFormatText {
-			return a.writeStructuredOutput(format, message)
+			return a.writeStructuredOutput(format, result)
 		}
 
-		fmt.Fprintf(a.stdout, "delivery_id=%s message_id=%s recipient_address=%s lease_token=%s lease_expires_at=%s subject=%q\n", message.DeliveryID, message.MessageID, message.RecipientAddress, message.LeaseToken, message.LeaseExpiresAt, message.Subject)
-		fmt.Fprint(a.stdout, message.Body)
-		if !strings.HasSuffix(message.Body, "\n") {
-			fmt.Fprintln(a.stdout)
-		}
-		return nil
+		return a.writeReceiveResultText(result)
 	}, nil
 }
 
@@ -595,10 +609,11 @@ func (a *App) writeListHelp() {
 func (a *App) writeRecvHelp() {
 	writeHelp(a.stdout, []string{
 		"Usage:",
-		"  agent-mailbox recv --for ADDRESS [--for ADDRESS ...] [--json | --yaml]",
+		"  agent-mailbox recv --for ADDRESS [--for ADDRESS ...] [--max COUNT] [--json | --yaml]",
 		"",
 		"Options:",
 		"  --for ADDRESS        Recipient address (repeatable)",
+		"  --max COUNT          Maximum number of deliveries to claim (up to 10)",
 		"  --json               Emit JSON",
 		"  --yaml               Emit YAML",
 	})
@@ -663,4 +678,14 @@ func writeHelp(w io.Writer, lines []string) {
 	for _, line := range lines {
 		fmt.Fprintln(w, line)
 	}
+}
+
+func flagWasProvided(fs *flag.FlagSet, name string) bool {
+	provided := false
+	fs.Visit(func(current *flag.Flag) {
+		if current.Name == name {
+			provided = true
+		}
+	})
+	return provided
 }

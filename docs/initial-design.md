@@ -233,7 +233,7 @@ This rule is required for lazy lease expiry recovery to work without a daemon.
 `delivery_id` alone is not sufficient authorization for `ack`, `release`,
 `defer`, or `fail`.
 
-`recv` must return:
+Each claimed message returned by `recv` must include:
 
 - `delivery_id`
 - `lease_token`
@@ -287,29 +287,27 @@ SQLite transaction.
 ### Receive
 
 ```text
-agent-mailbox recv --for workflow/reviewer/task-123 --for workflow/reviewer/task-456 --wait --timeout 30s --json
+agent-mailbox recv --for workflow/reviewer/task-123 --for workflow/reviewer/task-456 --max 10 --json
 ```
 
 Behavior:
 
-- if `--wait` is not provided, attempt one immediate claim
-- if `--wait` is provided, block until a message becomes claimable or until an
-  optional timeout expires
+- attempt an immediate batch claim
 - require at least one `--for` address; repeated `--for` flags search the union
   of the requested inboxes
+- support `--max <n>` to bound how many deliveries can be leased in one command;
+  default to `1`
 - unseen addresses behave like empty inboxes instead of failing the whole command
-- atomically select the oldest visible queued delivery across the eligible union
+- repeatedly select the oldest visible queued delivery across the eligible union
 - selection order is `visible_at`, then `message_created_at`, then `delivery_id`
-- transition it to `leased`
-- assign a fresh lease token and lease timeout
-- return the message envelope and identifiers
+- transition each claimed delivery to `leased`
+- assign a fresh lease token and lease timeout to each claimed delivery
+- when `--max` is omitted, return one message envelope and identifiers
+- when `--max` is provided, return a result object with `messages` and `has_more`
 
 If no claimable message exists:
 
-- without `--wait`, return exit code `2` immediately
-- with `--wait` and `--timeout <duration>`, return exit code `2` when the
-  timeout expires
-- with `--wait` and no timeout, block until success or cancellation
+- return exit code `2` immediately
 
 The claim operation must be atomic.
 Two receivers must not be able to lease the same delivery.
@@ -317,13 +315,6 @@ Two receivers must not be able to lease the same delivery.
 The default lease timeout in v1 is `5m`.
 `recv` may later accept an optional override such as `--lease-timeout`, but the
 default timeout is part of the base contract and must be stable.
-
-Blocking wait in v1 is implemented by polling SQLite with adaptive backoff.
-The recommended schedule starts around `50ms`, grows up to about `1s`, and
-resets after a successful claim.
-This avoids a daemon dependency while keeping latency acceptable for local use.
-No fairness or address rotation guarantee is made in v1 while waiting across
-multiple addresses.
 
 ### Watch
 

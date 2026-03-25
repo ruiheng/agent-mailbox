@@ -122,6 +122,13 @@ agent-mailbox --state-dir /tmp/mailbox-demo \
   recv --for workflow/reviewer/task-123 --for workflow/reviewer/task-456 --json
 ```
 
+Claim up to 10 messages in one call:
+
+```bash
+agent-mailbox --state-dir /tmp/mailbox-demo \
+  recv --for workflow/reviewer/task-123 --max 10 --json
+```
+
 Observe matching queued deliveries without claiming them:
 
 ```bash
@@ -152,6 +159,10 @@ For the full command reference, see [`docs/cli.md`](docs/cli.md).
 `recv` v1 contract for multiple `--for` flags:
 
 - repeated `--for` searches the union of the requested inboxes
+- `--max` limits how many deliveries one command will claim, up to `10`
+- default output still returns one leased message
+- when `--max` is provided, structured output returns `messages` plus `has_more`
+- when `has_more=true`, additional claimable deliveries still remain after this batch
 - unseen addresses behave like empty inboxes
 - selection is deterministic global oldest-first by `visible_at`, then
   `message_created_at`, then `delivery_id`
