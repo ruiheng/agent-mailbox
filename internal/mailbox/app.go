@@ -627,7 +627,7 @@ func (a *App) writeWatchHelp() {
 		"Options:",
 		"  --for ADDRESS        Recipient address (repeatable)",
 		"  --state STATE        Filter by delivery state",
-		"  --timeout DURATION   Maximum idle time before watch exits",
+		"  --timeout DURATION   Maximum idle time before watch exits (for example 30s, 5m, 120ms, 1m30s)",
 		"  --json               Emit NDJSON",
 		"  --yaml               Emit a YAML document stream",
 	})
@@ -640,7 +640,7 @@ func (a *App) writeWaitHelp() {
 		"",
 		"Options:",
 		"  --for ADDRESS        Recipient address (repeatable)",
-		"  --timeout DURATION   Maximum time to wait for a matching delivery",
+		"  --timeout DURATION   Maximum time to wait for a matching delivery (for example 30s, 5m, 120ms, 1m30s)",
 		"  --json               Emit JSON",
 		"  --yaml               Emit YAML",
 	})

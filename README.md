@@ -143,6 +143,8 @@ agent-mailbox --state-dir /tmp/mailbox-demo \
   watch --for workflow/reviewer/task-123 --timeout 30s --json
 ```
 
+`--timeout` uses Go duration syntax such as `30s`, `5m`, `120ms`, or `1m30s`.
+
 Use `--yaml` when you want the same `list`, `recv`, `wait`, or `watch`
 payloads in YAML. `wait` returns one YAML mapping. `watch` returns a YAML
 document stream with one delivery per `---` document.

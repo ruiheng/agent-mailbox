@@ -133,6 +133,8 @@ Rules:
 agent-mailbox wait --for <address> [--for <address> ...] [--timeout 30s] [--json | --yaml]
 ```
 
+`--timeout` uses Go duration syntax such as `30s`, `5m`, `120ms`, or `1m30s`.
+
 Rules:
 
 - `wait` is observe-only; it does not claim deliveries, create lease tokens, or
@@ -156,6 +158,8 @@ Rules:
 ```bash
 agent-mailbox watch --for <address> [--for <address> ...] [--state dead_letter] [--timeout 30s] [--json | --yaml]
 ```
+
+`--timeout` uses Go duration syntax such as `30s`, `5m`, `120ms`, or `1m30s`.
 
 Rules:
 
@@ -232,6 +236,7 @@ Use `--json` or `--yaml` for scripts and agents.
 
 Notes:
 
+- `--timeout` uses Go duration syntax such as `30s`, `5m`, `120ms`, or `1m30s`
 - repeat `--for` to search multiple inboxes with one wait
 - duplicate `--for` values are ignored after the first occurrence
 - plain-text output includes `recipient_address=...`
@@ -253,6 +258,7 @@ Use `--json` or `--yaml` for streaming consumers.
 
 Notes:
 
+- `--timeout` uses Go duration syntax such as `30s`, `5m`, `120ms`, or `1m30s`
 - default watch scope is visible queued deliveries
 - `--state` lets you watch another delivery state with the same metadata schema
 - plain-text output includes `recipient_address=...`
