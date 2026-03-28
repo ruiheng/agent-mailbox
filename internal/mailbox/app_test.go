@@ -231,6 +231,45 @@ func TestSendAbortsBeforeMetadataCommitWhenBlobDirectorySyncFails(t *testing.T) 
 	}
 }
 
+func TestSendContinuesWhenBlobDirectorySyncIsUnsupported(t *testing.T) {
+	t.Parallel()
+
+	runtime, err := OpenRuntime(context.Background(), filepath.Join(t.TempDir(), "mailbox-state"))
+	if err != nil {
+		t.Fatalf("OpenRuntime() error = %v", err)
+	}
+	defer runtime.Close()
+
+	store := runtime.Store()
+	store.syncDir = func(path string) error {
+		return errors.ErrUnsupported
+	}
+
+	result, err := store.Send(context.Background(), SendParams{
+		ToAddress:     "workflow/reviewer/task-123",
+		FromAddress:   "agent/sender",
+		Subject:       "review request",
+		ContentType:   "text/plain",
+		SchemaVersion: "v1",
+		Body:          []byte("hello reviewer"),
+	})
+	if err != nil {
+		t.Fatalf("Send() error = %v, want nil", err)
+	}
+
+	var state string
+	if err := runtime.DB().QueryRow(`
+SELECT state
+FROM deliveries
+WHERE delivery_id = ?
+`, result.DeliveryID).Scan(&state); err != nil {
+		t.Fatalf("QueryRow(delivery state) error = %v", err)
+	}
+	if state != "queued" {
+		t.Fatalf("delivery state = %q, want queued", state)
+	}
+}
+
 func TestSendImplicitAddressCreationIsConcurrentSafe(t *testing.T) {
 	t.Parallel()
 

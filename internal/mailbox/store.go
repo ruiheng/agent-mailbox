@@ -11,7 +11,9 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
+	"syscall"
 	"time"
 )
 
@@ -447,7 +449,9 @@ func (s *Store) persistBlob(blobPath string, body []byte) error {
 	cleanupTemp = false
 
 	if err := s.syncDir(s.blobDir); err != nil {
-		return fmt.Errorf("sync blob directory: %w", err)
+		if !errors.Is(err, errors.ErrUnsupported) {
+			return fmt.Errorf("sync blob directory: %w", err)
+		}
 	}
 	return nil
 }
@@ -460,9 +464,19 @@ func syncDirPath(path string) error {
 	defer dir.Close()
 
 	if err := dir.Sync(); err != nil {
+		if isUnsupportedDirectorySyncError(err) {
+			return fmt.Errorf("sync directory %q: %w", path, errors.ErrUnsupported)
+		}
 		return fmt.Errorf("sync directory %q: %w", path, err)
 	}
 	return nil
+}
+
+func isUnsupportedDirectorySyncError(err error) bool {
+	if runtime.GOOS == "windows" {
+		return true
+	}
+	return errors.Is(err, syscall.EINVAL)
 }
 
 func marshalDetail(value any) (string, error) {

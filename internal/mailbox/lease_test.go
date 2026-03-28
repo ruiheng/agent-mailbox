@@ -276,6 +276,10 @@ func TestReceiveBatchReturnsRecoveryFailureAndReleasesEarlierClaims(t *testing.T
 	if firstAttempts != 0 {
 		t.Fatalf("first delivery attempt_count after batch recovery failure = %d, want 0", firstAttempts)
 	}
+	firstVisibleAt := readDeliveryVisibleAt(t, runtime, firstSent.DeliveryID)
+	if firstVisibleAt != firstSent.VisibleAtUTC {
+		t.Fatalf("first delivery visible_at after batch recovery failure = %q, want %q", firstVisibleAt, firstSent.VisibleAtUTC)
+	}
 
 	secondState, secondAttempts := readDeliveryStateAndAttemptCount(t, runtime, secondSent.DeliveryID)
 	if secondState != "leased" {
@@ -704,6 +708,10 @@ func TestReceiveBatchReturnsClaimContentionWhenLockRetriesExhausted(t *testing.T
 	if firstAttemptCount != 0 {
 		t.Fatalf("first delivery attempt_count after contention exhaustion = %d, want 0", firstAttemptCount)
 	}
+	firstVisibleAt := readDeliveryVisibleAt(t, lockerRuntime, firstSent.DeliveryID)
+	if firstVisibleAt != firstSent.VisibleAtUTC {
+		t.Fatalf("first delivery visible_at after contention exhaustion = %q, want %q", firstVisibleAt, firstSent.VisibleAtUTC)
+	}
 
 	secondState, secondAttemptCount := readDeliveryStateAndAttemptCount(t, lockerRuntime, secondSent.DeliveryID)
 	if secondState != "queued" {
@@ -712,14 +720,40 @@ func TestReceiveBatchReturnsClaimContentionWhenLockRetriesExhausted(t *testing.T
 	if secondAttemptCount != 0 {
 		t.Fatalf("second delivery attempt_count after contention exhaustion = %d, want 0", secondAttemptCount)
 	}
+	secondVisibleAt := readDeliveryVisibleAt(t, lockerRuntime, secondSent.DeliveryID)
+	if secondVisibleAt != secondSent.VisibleAtUTC {
+		t.Fatalf("second delivery visible_at after contention exhaustion = %q, want %q", secondVisibleAt, secondSent.VisibleAtUTC)
+	}
+
+	firstMessage, err := receiverStore.Receive(context.Background(), ReceiveParams{Address: address})
+	if err != nil {
+		t.Fatalf("Receive(first after contention rollback) error = %v", err)
+	}
+	if firstMessage.DeliveryID != firstSent.DeliveryID {
+		t.Fatalf("Receive(first after contention rollback) delivery id = %q, want %q", firstMessage.DeliveryID, firstSent.DeliveryID)
+	}
+	if _, err := receiverStore.Ack(context.Background(), firstMessage.DeliveryID, firstMessage.LeaseToken); err != nil {
+		t.Fatalf("Ack(first after contention rollback) error = %v", err)
+	}
+
+	secondMessage, err := receiverStore.Receive(context.Background(), ReceiveParams{Address: address})
+	if err != nil {
+		t.Fatalf("Receive(second after contention rollback) error = %v", err)
+	}
+	if secondMessage.DeliveryID != secondSent.DeliveryID {
+		t.Fatalf("Receive(second after contention rollback) delivery id = %q, want %q", secondMessage.DeliveryID, secondSent.DeliveryID)
+	}
 
 	assertStringSlicesEqual(t, readDeliveryEventTypes(t, lockerRuntime, firstSent.DeliveryID), []string{
 		"delivery_queued",
 		"delivery_leased",
 		"delivery_released",
+		"delivery_leased",
+		"delivery_acked",
 	})
 	assertStringSlicesEqual(t, readDeliveryEventTypes(t, lockerRuntime, secondSent.DeliveryID), []string{
 		"delivery_queued",
+		"delivery_leased",
 	})
 }
 
@@ -847,6 +881,20 @@ WHERE delivery_id = ?
 		t.Fatalf("QueryRow(delivery state/attempt_count) error = %v", err)
 	}
 	return state, attemptCount
+}
+
+func readDeliveryVisibleAt(t *testing.T, runtime *Runtime, deliveryID string) string {
+	t.Helper()
+
+	var visibleAt string
+	if err := runtime.DB().QueryRow(`
+SELECT visible_at
+FROM deliveries
+WHERE delivery_id = ?
+`, deliveryID).Scan(&visibleAt); err != nil {
+		t.Fatalf("QueryRow(delivery visible_at) error = %v", err)
+	}
+	return visibleAt
 }
 
 func assertStringSlicesEqual(t *testing.T, got, want []string) {

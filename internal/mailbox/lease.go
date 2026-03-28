@@ -182,7 +182,7 @@ func (s *Store) ReceiveBatch(ctx context.Context, params ReceiveBatchParams) (Re
 			break
 		}
 		if errors.Is(err, ErrReceiveRecovery) || errors.Is(err, ErrClaimContention) {
-			if releaseErr := s.releaseReceivedBatchMessages(ctx, messages); releaseErr != nil {
+			if releaseErr := s.rollbackReceivedBatchMessages(ctx, messages); releaseErr != nil {
 				return ReceiveResult{}, errors.Join(err, releaseErr)
 			}
 			return ReceiveResult{}, err
@@ -490,18 +490,32 @@ func waitForClaimRetry(ctx context.Context) error {
 	}
 }
 
-func (s *Store) releaseReceivedBatchMessages(ctx context.Context, messages []ReceivedMessage) error {
-	var releaseErrs []error
+func (s *Store) rollbackReceivedBatchMessages(ctx context.Context, messages []ReceivedMessage) error {
+	var rollbackErrs []error
 	for i := len(messages) - 1; i >= 0; i-- {
 		message := messages[i]
-		if _, err := s.Release(ctx, message.DeliveryID, message.LeaseToken); err != nil {
-			releaseErrs = append(releaseErrs, fmt.Errorf("release received batch delivery %q: %w", message.DeliveryID, err))
+		if _, err := s.transitionLeasedDelivery(ctx, message.DeliveryID, message.LeaseToken, func(_ time.Time, delivery leasedDeliveryRecord) (deliveryTransitionSpec, error) {
+			return deliveryTransitionSpec{
+				State:            "queued",
+				VisibleAt:        message.VisibleAt,
+				AckedAt:          nil,
+				AttemptCount:     delivery.AttemptCount,
+				LastErrorText:    nil,
+				PrimaryEventType: "delivery_released",
+				PrimaryEventDetail: map[string]any{
+					"previous_state": delivery.State,
+					"state":          "queued",
+					"visible_at":     message.VisibleAt,
+				},
+			}, nil
+		}); err != nil {
+			rollbackErrs = append(rollbackErrs, fmt.Errorf("rollback received batch delivery %q: %w", message.DeliveryID, err))
 		}
 	}
-	if len(releaseErrs) == 0 {
+	if len(rollbackErrs) == 0 {
 		return nil
 	}
-	return errors.Join(releaseErrs...)
+	return errors.Join(rollbackErrs...)
 }
 
 func (s *Store) recoverReceiveFailure(ctx context.Context, deliveryID, leaseToken string, readErr error) error {
