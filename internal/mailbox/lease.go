@@ -165,6 +165,12 @@ func (s *Store) ReceiveBatch(ctx context.Context, params ReceiveBatchParams) (Re
 		if errors.Is(err, ErrNoMessage) {
 			break
 		}
+		if errors.Is(err, ErrReceiveRecovery) {
+			if releaseErr := s.releaseReceivedBatchMessages(ctx, messages); releaseErr != nil {
+				return ReceiveResult{}, errors.Join(err, releaseErr)
+			}
+			return ReceiveResult{}, err
+		}
 		if len(messages) > 0 {
 			break
 		}
@@ -428,6 +434,20 @@ WHERE delivery_id = ?
 		}
 		return message, nil
 	}
+}
+
+func (s *Store) releaseReceivedBatchMessages(ctx context.Context, messages []ReceivedMessage) error {
+	var releaseErrs []error
+	for i := len(messages) - 1; i >= 0; i-- {
+		message := messages[i]
+		if _, err := s.Release(ctx, message.DeliveryID, message.LeaseToken); err != nil {
+			releaseErrs = append(releaseErrs, fmt.Errorf("release received batch delivery %q: %w", message.DeliveryID, err))
+		}
+	}
+	if len(releaseErrs) == 0 {
+		return nil
+	}
+	return errors.Join(releaseErrs...)
 }
 
 func (s *Store) recoverReceiveFailure(ctx context.Context, deliveryID, leaseToken string, readErr error) error {

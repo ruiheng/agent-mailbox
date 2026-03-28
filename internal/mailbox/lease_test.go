@@ -231,6 +231,71 @@ func TestReceiveBatchClaimsUpToMaxAndReportsHasMore(t *testing.T) {
 	}
 }
 
+func TestReceiveBatchReturnsRecoveryFailureAndReleasesEarlierClaims(t *testing.T) {
+	t.Parallel()
+
+	runtime, store := newLeaseTestStore(t)
+	defer runtime.Close()
+
+	current := time.Date(2026, 3, 18, 13, 40, 0, 0, time.UTC)
+	store.now = func() time.Time { return current }
+
+	firstSent := mustSendMessage(t, store, "workflow/batch-recovery", "agent/sender", "first", "first body")
+	current = current.Add(time.Second)
+	secondSent := mustSendMessage(t, store, "workflow/batch-recovery", "agent/sender", "second", "second body")
+
+	blobPath := filepath.Join(runtime.BlobDir(), secondSent.BodyBlobRef)
+	if err := os.WriteFile(blobPath, []byte{}, 0o600); err != nil {
+		t.Fatalf("os.WriteFile(corrupt blob) error = %v", err)
+	}
+
+	nowCalls := 0
+	store.now = func() time.Time {
+		nowCalls++
+		if nowCalls == 5 {
+			return current.Add(defaultLeaseTimeout + time.Second)
+		}
+		return current
+	}
+
+	_, err := store.ReceiveBatch(context.Background(), ReceiveBatchParams{
+		Address: "workflow/batch-recovery",
+		Max:     2,
+	})
+	if !errors.Is(err, ErrReceiveRecovery) {
+		t.Fatalf("ReceiveBatch(recovery failure) error = %v, want ErrReceiveRecovery", err)
+	}
+	if !errors.Is(err, ErrBodyIntegrity) {
+		t.Fatalf("ReceiveBatch(recovery failure) error = %v, want ErrBodyIntegrity", err)
+	}
+
+	firstState, firstAttempts := readDeliveryStateAndAttemptCount(t, runtime, firstSent.DeliveryID)
+	if firstState != "queued" {
+		t.Fatalf("first delivery state after batch recovery failure = %q, want queued", firstState)
+	}
+	if firstAttempts != 0 {
+		t.Fatalf("first delivery attempt_count after batch recovery failure = %d, want 0", firstAttempts)
+	}
+
+	secondState, secondAttempts := readDeliveryStateAndAttemptCount(t, runtime, secondSent.DeliveryID)
+	if secondState != "leased" {
+		t.Fatalf("second delivery state after batch recovery failure = %q, want leased", secondState)
+	}
+	if secondAttempts != 0 {
+		t.Fatalf("second delivery attempt_count after batch recovery failure = %d, want 0", secondAttempts)
+	}
+
+	assertStringSlicesEqual(t, readDeliveryEventTypes(t, runtime, firstSent.DeliveryID), []string{
+		"delivery_queued",
+		"delivery_leased",
+		"delivery_released",
+	})
+	assertStringSlicesEqual(t, readDeliveryEventTypes(t, runtime, secondSent.DeliveryID), []string{
+		"delivery_queued",
+		"delivery_leased",
+	})
+}
+
 func TestReceiveBatchRejectsTooLargeMax(t *testing.T) {
 	t.Parallel()
 
