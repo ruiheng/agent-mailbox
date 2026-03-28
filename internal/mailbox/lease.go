@@ -181,7 +181,7 @@ func (s *Store) ReceiveBatch(ctx context.Context, params ReceiveBatchParams) (Re
 		if errors.Is(err, ErrNoMessage) {
 			break
 		}
-		if errors.Is(err, ErrReceiveRecovery) {
+		if errors.Is(err, ErrReceiveRecovery) || errors.Is(err, ErrClaimContention) {
 			if releaseErr := s.releaseReceivedBatchMessages(ctx, messages); releaseErr != nil {
 				return ReceiveResult{}, errors.Join(err, releaseErr)
 			}

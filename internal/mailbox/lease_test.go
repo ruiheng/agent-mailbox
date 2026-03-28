@@ -645,28 +645,48 @@ func TestReceiveBatchReturnsClaimContentionWhenLockRetriesExhausted(t *testing.T
 	defer receiverRuntime.Close()
 
 	const address = "workflow/claim-contention"
-	sent := mustSendMessage(t, lockerRuntime.Store(), address, "agent/sender", "contention", "contention body")
+	sendTime := time.Date(2026, 3, 18, 16, 0, 0, 0, time.UTC)
+	lockerRuntime.Store().now = func() time.Time { return sendTime }
+	firstSent := mustSendMessage(t, lockerRuntime.Store(), address, "agent/sender", "first", "first body")
+	sendTime = sendTime.Add(time.Second)
+	secondSent := mustSendMessage(t, lockerRuntime.Store(), address, "agent/sender", "second", "second body")
 
-	lockTx, err := lockerRuntime.DB().BeginTx(context.Background(), nil)
-	if err != nil {
-		t.Fatalf("BeginTx(writer lock) error = %v", err)
-	}
-	lockReleased := false
-	defer func() {
-		if !lockReleased {
-			_ = lockTx.Rollback()
+	receiverStore := receiverRuntime.Store()
+	receiveTime := sendTime.Add(time.Second)
+	nowCalls := 0
+	var lockBeginErr error
+	releaseDone := make(chan error, 1)
+	receiverStore.now = func() time.Time {
+		nowCalls++
+		if nowCalls == 3 {
+			lockTx, err := lockerRuntime.DB().BeginTx(context.Background(), nil)
+			if err != nil {
+				lockBeginErr = err
+				return receiveTime
+			}
+			go func() {
+				time.Sleep(time.Duration(maxClaimRetryCount+2) * claimRetryDelay)
+				releaseDone <- lockTx.Rollback()
+			}()
 		}
-	}()
+		return receiveTime
+	}
 
-	_, err = receiverRuntime.Store().ReceiveBatch(context.Background(), ReceiveBatchParams{
+	_, err = receiverStore.ReceiveBatch(context.Background(), ReceiveBatchParams{
 		Address: address,
-		Max:     1,
+		Max:     2,
 	})
 	if !errors.Is(err, ErrClaimContention) {
 		t.Fatalf("ReceiveBatch(contention exhaustion) error = %v, want ErrClaimContention", err)
 	}
 	if errors.Is(err, ErrNoMessage) {
 		t.Fatalf("ReceiveBatch(contention exhaustion) error = %v, must not look like ErrNoMessage", err)
+	}
+	if lockBeginErr != nil {
+		t.Fatalf("BeginTx(writer lock during batch) error = %v", lockBeginErr)
+	}
+	if rollbackErr := <-releaseDone; rollbackErr != nil {
+		t.Fatalf("Rollback(writer lock) error = %v", rollbackErr)
 	}
 
 	var contentionErr *ClaimContentionError
@@ -676,20 +696,29 @@ func TestReceiveBatchReturnsClaimContentionWhenLockRetriesExhausted(t *testing.T
 	if contentionErr.Attempts != maxClaimRetryCount+1 {
 		t.Fatalf("ReceiveBatch(contention exhaustion) attempts = %d, want %d", contentionErr.Attempts, maxClaimRetryCount+1)
 	}
-	if err := lockTx.Rollback(); err != nil {
-		t.Fatalf("Rollback(writer lock) error = %v", err)
-	}
-	lockReleased = true
 
-	state, attemptCount := readDeliveryStateAndAttemptCount(t, lockerRuntime, sent.DeliveryID)
-	if state != "queued" {
-		t.Fatalf("delivery state after contention exhaustion = %q, want queued", state)
+	firstState, firstAttemptCount := readDeliveryStateAndAttemptCount(t, lockerRuntime, firstSent.DeliveryID)
+	if firstState != "queued" {
+		t.Fatalf("first delivery state after contention exhaustion = %q, want queued", firstState)
 	}
-	if attemptCount != 0 {
-		t.Fatalf("delivery attempt_count after contention exhaustion = %d, want 0", attemptCount)
+	if firstAttemptCount != 0 {
+		t.Fatalf("first delivery attempt_count after contention exhaustion = %d, want 0", firstAttemptCount)
 	}
 
-	assertStringSlicesEqual(t, readDeliveryEventTypes(t, lockerRuntime, sent.DeliveryID), []string{
+	secondState, secondAttemptCount := readDeliveryStateAndAttemptCount(t, lockerRuntime, secondSent.DeliveryID)
+	if secondState != "queued" {
+		t.Fatalf("second delivery state after contention exhaustion = %q, want queued", secondState)
+	}
+	if secondAttemptCount != 0 {
+		t.Fatalf("second delivery attempt_count after contention exhaustion = %d, want 0", secondAttemptCount)
+	}
+
+	assertStringSlicesEqual(t, readDeliveryEventTypes(t, lockerRuntime, firstSent.DeliveryID), []string{
+		"delivery_queued",
+		"delivery_leased",
+		"delivery_released",
+	})
+	assertStringSlicesEqual(t, readDeliveryEventTypes(t, lockerRuntime, secondSent.DeliveryID), []string{
 		"delivery_queued",
 	})
 }
