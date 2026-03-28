@@ -200,7 +200,13 @@ What it does not do yet:
 - transport adapters such as `agent-deck`
 - background garbage collection
 
-One v1 trade-off is explicit: a crash after the blob write but before the SQLite
-transaction commit can leave an orphaned blob. That is acceptable for the MVP
-and should be handled by a later GC command rather than hidden behind implicit
-cleanup.
+`send` now makes the blob durable before it starts the SQLite write transaction:
+it writes a temp file in `blobs/`, fsyncs that file, renames it into place, and
+fsyncs the `blobs/` directory. That narrows the success window so committed
+metadata does not rely on an unflushed blob filename or payload.
+
+The remaining v1 trade-off is explicit: there is still no cross-store atomic
+commit between the filesystem blob and the SQLite transaction. A crash after the
+blob is durable but before the SQLite transaction commit can still leave an
+orphaned blob. That is acceptable for the MVP and should be handled by a later
+GC command rather than hidden behind implicit cleanup.

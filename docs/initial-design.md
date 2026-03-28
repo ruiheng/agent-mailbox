@@ -272,14 +272,18 @@ Behavior:
 - accept body input from either `--body-file <path>` or `--body-file -` for
   stdin
 - reject empty message bodies
-- persist the message body into the blob store
+- persist the message body into the blob store by writing a temp file in
+  `blobs/`, fsyncing that file, renaming it into place, and fsyncing the
+  `blobs/` directory before the SQLite transaction begins
 - persist the immutable message
 - create one delivery in `queued`
 - set `visible_at = now`
 - return immediately with identifiers
 
-The blob write may happen before the SQLite transaction and can leave an orphaned
-blob if the process crashes at the wrong time.
+The blob write still happens before the SQLite transaction, so v1 does not
+provide a cross-store atomic commit between the filesystem and SQLite.
+A crash after the durable blob write but before the SQLite transaction commit can
+still leave an orphaned blob.
 That is acceptable in v1 and should be handled by later garbage collection.
 Message row insertion and delivery row insertion must happen atomically in one
 SQLite transaction.

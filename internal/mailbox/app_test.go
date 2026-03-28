@@ -121,6 +121,116 @@ WHERE event_type = 'endpoint_registered'
 	}
 }
 
+func TestWriteBlobSyncsFileBeforeRenameAndDirectoryAfter(t *testing.T) {
+	t.Parallel()
+
+	blobDir := filepath.Join(t.TempDir(), "blobs")
+	if err := os.MkdirAll(blobDir, 0o700); err != nil {
+		t.Fatalf("os.MkdirAll(blobDir) error = %v", err)
+	}
+
+	store := NewStore(nil, nil, nil, blobDir)
+	var ops []string
+	store.createBlobTemp = func(dir, pattern string) (blobTempFile, error) {
+		ops = append(ops, "create:"+dir)
+		return &recordingBlobTempFile{
+			name: filepath.Join(dir, "blob.tmp"),
+			ops:  &ops,
+		}, nil
+	}
+	store.renameFile = func(oldPath, newPath string) error {
+		ops = append(ops, "rename:"+filepath.Base(oldPath)+"->"+filepath.Base(newPath))
+		return nil
+	}
+	store.removeFile = func(path string) error {
+		ops = append(ops, "remove:"+filepath.Base(path))
+		return nil
+	}
+	store.syncDir = func(path string) error {
+		ops = append(ops, "dir-sync:"+path)
+		return nil
+	}
+
+	blobRef, bodySize, _, err := store.writeBlob([]byte("hello"))
+	if err != nil {
+		t.Fatalf("writeBlob() error = %v", err)
+	}
+	if !strings.HasPrefix(blobRef, "blob_") {
+		t.Fatalf("blobRef = %q, want blob_ prefix", blobRef)
+	}
+	if bodySize != 5 {
+		t.Fatalf("bodySize = %d, want 5", bodySize)
+	}
+
+	wantOps := []string{
+		"create:" + blobDir,
+		"write:hello",
+		"file-sync",
+		"close",
+		"rename:blob.tmp->" + blobRef,
+		"dir-sync:" + blobDir,
+	}
+	if len(ops) != len(wantOps) {
+		t.Fatalf("len(ops) = %d, want %d; ops=%v", len(ops), len(wantOps), ops)
+	}
+	for i, want := range wantOps {
+		if ops[i] != want {
+			t.Fatalf("ops[%d] = %q, want %q (ops=%v)", i, ops[i], want, ops)
+		}
+	}
+}
+
+func TestSendAbortsBeforeMetadataCommitWhenBlobDirectorySyncFails(t *testing.T) {
+	t.Parallel()
+
+	runtime, err := OpenRuntime(context.Background(), filepath.Join(t.TempDir(), "mailbox-state"))
+	if err != nil {
+		t.Fatalf("OpenRuntime() error = %v", err)
+	}
+	defer runtime.Close()
+
+	store := runtime.Store()
+	store.syncDir = func(path string) error {
+		return errors.New("dir sync failed")
+	}
+
+	_, err = store.Send(context.Background(), SendParams{
+		ToAddress:     "workflow/reviewer/task-123",
+		FromAddress:   "agent/sender",
+		Subject:       "review request",
+		ContentType:   "text/plain",
+		SchemaVersion: "v1",
+		Body:          []byte("hello reviewer"),
+	})
+	if err == nil || !strings.Contains(err.Error(), "sync blob directory") {
+		t.Fatalf("Send() error = %v, want sync blob directory failure", err)
+	}
+
+	var messageCount int
+	if err := runtime.DB().QueryRow(`SELECT COUNT(*) FROM messages`).Scan(&messageCount); err != nil {
+		t.Fatalf("count messages error = %v", err)
+	}
+	if messageCount != 0 {
+		t.Fatalf("message count = %d, want 0", messageCount)
+	}
+
+	var deliveryCount int
+	if err := runtime.DB().QueryRow(`SELECT COUNT(*) FROM deliveries`).Scan(&deliveryCount); err != nil {
+		t.Fatalf("count deliveries error = %v", err)
+	}
+	if deliveryCount != 0 {
+		t.Fatalf("delivery count = %d, want 0", deliveryCount)
+	}
+
+	var endpointAddressCount int
+	if err := runtime.DB().QueryRow(`SELECT COUNT(*) FROM endpoint_addresses`).Scan(&endpointAddressCount); err != nil {
+		t.Fatalf("count endpoint_addresses error = %v", err)
+	}
+	if endpointAddressCount != 0 {
+		t.Fatalf("endpoint address count = %d, want 0", endpointAddressCount)
+	}
+}
+
 func TestSendImplicitAddressCreationIsConcurrentSafe(t *testing.T) {
 	t.Parallel()
 
@@ -675,4 +785,28 @@ func assertPathMissing(t *testing.T, path string) {
 	if _, err := os.Stat(path); !os.IsNotExist(err) {
 		t.Fatalf("path %q exists or returned unexpected error: %v", path, err)
 	}
+}
+
+type recordingBlobTempFile struct {
+	name string
+	ops  *[]string
+}
+
+func (f *recordingBlobTempFile) Write(data []byte) (int, error) {
+	*f.ops = append(*f.ops, "write:"+string(data))
+	return len(data), nil
+}
+
+func (f *recordingBlobTempFile) Sync() error {
+	*f.ops = append(*f.ops, "file-sync")
+	return nil
+}
+
+func (f *recordingBlobTempFile) Close() error {
+	*f.ops = append(*f.ops, "close")
+	return nil
+}
+
+func (f *recordingBlobTempFile) Name() string {
+	return f.name
 }

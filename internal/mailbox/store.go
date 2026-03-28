@@ -17,12 +17,23 @@ import (
 
 var ErrEmptyBody = errors.New("message body must not be empty")
 
+type blobTempFile interface {
+	Write([]byte) (int, error)
+	Sync() error
+	Close() error
+	Name() string
+}
+
 type Store struct {
-	readDB  *sql.DB
-	writeDB *sql.DB
-	claimDB *sql.DB
-	blobDir string
-	now     func() time.Time
+	readDB         *sql.DB
+	writeDB        *sql.DB
+	claimDB        *sql.DB
+	blobDir        string
+	now            func() time.Time
+	createBlobTemp func(dir, pattern string) (blobTempFile, error)
+	renameFile     func(oldPath, newPath string) error
+	removeFile     func(path string) error
+	syncDir        func(path string) error
 }
 
 type EndpointRegistration struct {
@@ -91,6 +102,12 @@ func NewStore(readDB, writeDB, claimDB *sql.DB, blobDir string) *Store {
 		now: func() time.Time {
 			return time.Now().UTC()
 		},
+		createBlobTemp: func(dir, pattern string) (blobTempFile, error) {
+			return os.CreateTemp(dir, pattern)
+		},
+		renameFile: os.Rename,
+		removeFile: os.Remove,
+		syncDir:    syncDirPath,
 	}
 }
 
@@ -383,16 +400,69 @@ func (s *Store) writeBlob(body []byte) (string, int64, string, error) {
 	}
 	bodySHA256 := sha256.Sum256(body)
 	blobPath := filepath.Join(s.blobDir, blobRef)
-	tmpPath := blobPath + ".tmp"
 
-	if err := os.WriteFile(tmpPath, body, 0o600); err != nil {
-		return "", 0, "", fmt.Errorf("write blob temp file: %w", err)
-	}
-	if err := os.Rename(tmpPath, blobPath); err != nil {
-		return "", 0, "", fmt.Errorf("move blob into place: %w", err)
+	if err := s.persistBlob(blobPath, body); err != nil {
+		return "", 0, "", err
 	}
 
 	return blobRef, int64(len(body)), hex.EncodeToString(bodySHA256[:]), nil
+}
+
+func (s *Store) persistBlob(blobPath string, body []byte) error {
+	tmpFile, err := s.createBlobTemp(s.blobDir, filepath.Base(blobPath)+".tmp-*")
+	if err != nil {
+		return fmt.Errorf("create blob temp file: %w", err)
+	}
+
+	tmpPath := tmpFile.Name()
+	cleanupTemp := true
+	closed := false
+	defer func() {
+		if !closed {
+			_ = tmpFile.Close()
+		}
+		if cleanupTemp {
+			_ = s.removeFile(tmpPath)
+		}
+	}()
+
+	written, err := tmpFile.Write(body)
+	if err != nil {
+		return fmt.Errorf("write blob temp file: %w", err)
+	}
+	if written != len(body) {
+		return fmt.Errorf("write blob temp file: short write %d/%d", written, len(body))
+	}
+	if err := tmpFile.Sync(); err != nil {
+		return fmt.Errorf("sync blob temp file: %w", err)
+	}
+	if err := tmpFile.Close(); err != nil {
+		return fmt.Errorf("close blob temp file: %w", err)
+	}
+	closed = true
+
+	if err := s.renameFile(tmpPath, blobPath); err != nil {
+		return fmt.Errorf("move blob into place: %w", err)
+	}
+	cleanupTemp = false
+
+	if err := s.syncDir(s.blobDir); err != nil {
+		return fmt.Errorf("sync blob directory: %w", err)
+	}
+	return nil
+}
+
+func syncDirPath(path string) error {
+	dir, err := os.Open(path)
+	if err != nil {
+		return fmt.Errorf("open directory %q: %w", path, err)
+	}
+	defer dir.Close()
+
+	if err := dir.Sync(); err != nil {
+		return fmt.Errorf("sync directory %q: %w", path, err)
+	}
+	return nil
 }
 
 func marshalDetail(value any) (string, error) {
