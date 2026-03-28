@@ -91,10 +91,10 @@ The default state directory is:
 - otherwise `~/.local/state/ai-agent/mailbox`
 
 You can set `MAILBOX_STATE_DIR` once, or pass `--state-dir` per command.
-Read-style commands (`list`, `recv`, `wait`, and `watch`) accept either
-`--json` or `--yaml`, but not both together.
-`recv` and `wait` also accept `--full` when you need the full legacy payload
-instead of the default compact view.
+Structured-output commands (`send`, `list`, `recv`, `wait`, and `watch`) accept
+either `--json` or `--yaml`, but not both together.
+`send`, `recv`, and `wait` also accept `--full` when you need the full legacy
+payload instead of the default compact view.
 
 ## Minimal Example
 
@@ -109,6 +109,10 @@ agent-mailbox --state-dir /tmp/mailbox-demo \
 
 `send` requires a non-empty message body. Empty stdin and empty files are
 rejected.
+
+By default, `send` prints only `delivery_id=...`. Add `--full` when you also
+need the legacy `message_id` and `blob_id`, or add `--json` / `--yaml` for the
+same compact or full payloads in structured form.
 
 Receive the next claimable message:
 

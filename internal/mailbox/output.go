@@ -53,6 +53,22 @@ func (a *App) writeStructuredOutput(format outputFormat, value any) error {
 	}
 }
 
+func (a *App) writeSendResultText(result sendResultSummary) error {
+	_, err := fmt.Fprintf(a.stdout, "delivery_id=%s\n", result.DeliveryID)
+	return err
+}
+
+func (a *App) writeSendResultFullText(result sendResultFull) error {
+	_, err := fmt.Fprintf(
+		a.stdout,
+		"message_id=%s delivery_id=%s blob_id=%s\n",
+		result.MessageID,
+		result.DeliveryID,
+		result.BlobID,
+	)
+	return err
+}
+
 func (a *App) writeReceivedMessageText(message receivedMessageSummary) error {
 	if _, err := fmt.Fprintf(
 		a.stdout,

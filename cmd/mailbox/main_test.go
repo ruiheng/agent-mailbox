@@ -26,8 +26,11 @@ func TestCLISendRecvAckFlow(t *testing.T) {
 	if send.exitCode != 0 {
 		t.Fatalf("send exit code = %d, stderr = %q", send.exitCode, send.stderr)
 	}
-	if !strings.Contains(send.stdout, "message_id=") || !strings.Contains(send.stdout, "delivery_id=") {
-		t.Fatalf("send stdout = %q, want message and delivery ids", send.stdout)
+	if !strings.Contains(send.stdout, "delivery_id=") {
+		t.Fatalf("send stdout = %q, want delivery_id", send.stdout)
+	}
+	if strings.Contains(send.stdout, "message_id=") || strings.Contains(send.stdout, "blob_id=") {
+		t.Fatalf("send stdout = %q, want compact default output", send.stdout)
 	}
 
 	recv := runCLI(t, "", "--state-dir", stateDir,
@@ -105,6 +108,67 @@ func TestCLIRecvYAMLOutput(t *testing.T) {
 	}
 }
 
+func TestCLISendJSONOutputIsCompact(t *testing.T) {
+	stateDir := filepath.Join(t.TempDir(), "mailbox-state")
+
+	send := runCLI(t, "hello reviewer\n", "--state-dir", stateDir,
+		"send",
+		"--to", "workflow/reviewer/task-123",
+		"--from", "agent/sender",
+		"--subject", "review request",
+		"--body-file", "-",
+		"--json",
+	)
+	if send.exitCode != 0 {
+		t.Fatalf("send --json exit code = %d, stderr = %q", send.exitCode, send.stderr)
+	}
+	if send.stderr != "" {
+		t.Fatalf("send --json stderr = %q, want empty", send.stderr)
+	}
+
+	var result map[string]any
+	if err := json.Unmarshal([]byte(send.stdout), &result); err != nil {
+		t.Fatalf("json.Unmarshal(send --json stdout) error = %v; stdout = %q", err, send.stdout)
+	}
+	if result["delivery_id"] == "" {
+		t.Fatalf("send --json delivery_id = %v, want non-empty", result["delivery_id"])
+	}
+	if _, ok := result["message_id"]; ok {
+		t.Fatalf("send --json payload unexpectedly contains message_id: %v", result)
+	}
+	if _, ok := result["blob_id"]; ok {
+		t.Fatalf("send --json payload unexpectedly contains blob_id: %v", result)
+	}
+}
+
+func TestCLISendYAMLOutputIsCompact(t *testing.T) {
+	stateDir := filepath.Join(t.TempDir(), "mailbox-state")
+
+	send := runCLI(t, "hello reviewer\n", "--state-dir", stateDir,
+		"send",
+		"--to", "workflow/reviewer/task-123",
+		"--from", "agent/sender",
+		"--subject", "review request",
+		"--body-file", "-",
+		"--yaml",
+	)
+	if send.exitCode != 0 {
+		t.Fatalf("send --yaml exit code = %d, stderr = %q", send.exitCode, send.stderr)
+	}
+	if send.stderr != "" {
+		t.Fatalf("send --yaml stderr = %q, want empty", send.stderr)
+	}
+	if !strings.HasPrefix(send.stdout, "delivery_id: ") {
+		t.Fatalf("send --yaml stdout = %q, want compact YAML mapping", send.stdout)
+	}
+	if strings.Contains(send.stdout, "message_id: ") {
+		t.Fatalf("send --yaml stdout unexpectedly contains message_id: %q", send.stdout)
+	}
+	if strings.Contains(send.stdout, "blob_id: ") {
+		t.Fatalf("send --yaml stdout unexpectedly contains blob_id: %q", send.stdout)
+	}
+}
+
 func TestCLIRecvNoMessageExitCodeAndSilence(t *testing.T) {
 	stateDir := filepath.Join(t.TempDir(), "mailbox-state")
 
@@ -141,6 +205,50 @@ func TestCLISendRejectsEmptyBody(t *testing.T) {
 	}
 	if !strings.Contains(send.stderr, mailbox.ErrEmptyBody.Error()) {
 		t.Fatalf("send empty body stderr = %q, want substring %q", send.stderr, mailbox.ErrEmptyBody.Error())
+	}
+}
+
+func TestCLISendFullTextIncludesLegacyFields(t *testing.T) {
+	stateDir := filepath.Join(t.TempDir(), "mailbox-state")
+
+	send := runCLI(t, "hello reviewer\n", "--state-dir", stateDir,
+		"send",
+		"--to", "workflow/reviewer/task-123",
+		"--from", "agent/sender",
+		"--subject", "review request",
+		"--body-file", "-",
+		"--full",
+	)
+	if send.exitCode != 0 {
+		t.Fatalf("send --full exit code = %d, stderr = %q", send.exitCode, send.stderr)
+	}
+	if !strings.Contains(send.stdout, "message_id=") || !strings.Contains(send.stdout, "delivery_id=") || !strings.Contains(send.stdout, "blob_id=") {
+		t.Fatalf("send --full stdout = %q, want legacy full identifiers", send.stdout)
+	}
+}
+
+func TestCLISendFullJSONIncludesLegacyFields(t *testing.T) {
+	stateDir := filepath.Join(t.TempDir(), "mailbox-state")
+
+	send := runCLI(t, "hello reviewer\n", "--state-dir", stateDir,
+		"send",
+		"--to", "workflow/reviewer/task-123",
+		"--from", "agent/sender",
+		"--subject", "review request",
+		"--body-file", "-",
+		"--json",
+		"--full",
+	)
+	if send.exitCode != 0 {
+		t.Fatalf("send --json --full exit code = %d, stderr = %q", send.exitCode, send.stderr)
+	}
+
+	var result map[string]any
+	if err := json.Unmarshal([]byte(send.stdout), &result); err != nil {
+		t.Fatalf("json.Unmarshal(send --json --full stdout) error = %v; stdout = %q", err, send.stdout)
+	}
+	if result["delivery_id"] == "" || result["message_id"] == "" || result["blob_id"] == "" {
+		t.Fatalf("send --json --full payload = %v, want delivery_id, message_id, and blob_id", result)
 	}
 }
 
@@ -719,6 +827,11 @@ func TestCLIHelpExitsZeroAndPrintsUsage(t *testing.T) {
 			wantContains: "Usage:\n  agent-mailbox [--state-dir PATH] <command> [options]",
 		},
 		{
+			name:         "send help",
+			args:         []string{"send", "--help"},
+			wantContains: "Usage:\n  agent-mailbox send --to ADDRESS --body-file PATH [options] [--json | --yaml] [--full]",
+		},
+		{
 			name:         "recv help",
 			args:         []string{"recv", "--help"},
 			wantContains: "Usage:\n  agent-mailbox recv --for ADDRESS [--for ADDRESS ...] [--max COUNT] [--json | --yaml] [--full]",
@@ -754,20 +867,21 @@ func TestCLIHelpExitsZeroAndPrintsUsage(t *testing.T) {
 func TestCLIRejectsJSONAndYAMLTogether(t *testing.T) {
 	stateDir := filepath.Join(t.TempDir(), "mailbox-state")
 
-	recv := runCLI(t, "", "--state-dir", stateDir,
-		"recv",
-		"--for", "workflow/reviewer/task-123",
+	send := runCLI(t, "payload\n", "--state-dir", stateDir,
+		"send",
+		"--to", "workflow/reviewer/task-123",
+		"--body-file", "-",
 		"--json",
 		"--yaml",
 	)
-	if recv.exitCode != 1 {
-		t.Fatalf("recv exit code = %d, want 1; stderr = %q", recv.exitCode, recv.stderr)
+	if send.exitCode != 1 {
+		t.Fatalf("send exit code = %d, want 1; stderr = %q", send.exitCode, send.stderr)
 	}
-	if recv.stdout != "" {
-		t.Fatalf("recv stdout = %q, want empty", recv.stdout)
+	if send.stdout != "" {
+		t.Fatalf("send stdout = %q, want empty", send.stdout)
 	}
-	if !strings.Contains(recv.stderr, "--json and --yaml are mutually exclusive") {
-		t.Fatalf("recv stderr = %q, want mutual exclusion error", recv.stderr)
+	if !strings.Contains(send.stderr, "--json and --yaml are mutually exclusive") {
+		t.Fatalf("send stderr = %q, want mutual exclusion error", send.stderr)
 	}
 }
 

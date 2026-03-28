@@ -189,8 +189,10 @@ Rules:
 Queue one message for a recipient address.
 
 ```bash
-agent-mailbox send --to <address> --body-file <path-or->
+agent-mailbox send --to <address> --body-file <path-or-> [--json | --yaml] [--full]
 ```
+
+Use `--json` or `--yaml` for scripts and agents.
 
 Common options:
 
@@ -203,6 +205,9 @@ Notes:
 
 - `--body-file -` reads from stdin
 - the message body must not be empty
+- default output is a compact acknowledgement with `delivery_id`
+- add `--full` to return the legacy identifier payload with `message_id`,
+  `delivery_id`, and `blob_id`
 - `send` creates the recipient address automatically on first use
 - `send` also creates the optional `--from` address automatically on first use
 - `--from` is optional

@@ -122,6 +122,8 @@ func (a *App) prepareSendCommand(args []string) (preparedCommand, error) {
 	var contentType string
 	var schemaVersion string
 	var bodyFile string
+	var full bool
+	var formats outputFlags
 
 	fs.StringVar(&toAddress, "to", "", "recipient address")
 	fs.StringVar(&fromAddress, "from", "", "sender address")
@@ -129,11 +131,17 @@ func (a *App) prepareSendCommand(args []string) (preparedCommand, error) {
 	fs.StringVar(&contentType, "content-type", "text/plain", "message content type")
 	fs.StringVar(&schemaVersion, "schema-version", "v1", "sender-defined schema version")
 	fs.StringVar(&bodyFile, "body-file", "", "path to message body, or - for stdin")
+	fs.BoolVar(&full, "full", false, "emit the full payload")
+	formats.register(fs, "emit JSON", "emit YAML")
 
 	if err := a.parseCommandFlags(fs, args, a.writeSendHelp); err != nil {
 		return nil, err
 	}
 	if err := requireFlag(toAddress, "--to"); err != nil {
+		return nil, err
+	}
+	format, err := formats.resolve()
+	if err != nil {
 		return nil, err
 	}
 
@@ -157,8 +165,16 @@ func (a *App) prepareSendCommand(args []string) (preparedCommand, error) {
 			return err
 		}
 
-		fmt.Fprintf(a.stdout, "message_id=%s delivery_id=%s blob_id=%s\n", result.MessageID, result.DeliveryID, result.BodyBlobRef)
-		return nil
+		if format != outputFormatText {
+			if full {
+				return a.writeStructuredOutput(format, fullSendResult(result))
+			}
+			return a.writeStructuredOutput(format, summarizeSendResult(result))
+		}
+		if full {
+			return a.writeSendResultFullText(fullSendResult(result))
+		}
+		return a.writeSendResultText(summarizeSendResult(result))
 	}, nil
 }
 
@@ -603,7 +619,7 @@ func (a *App) writeRootHelp() {
 func (a *App) writeSendHelp() {
 	writeHelp(a.stdout, []string{
 		"Usage:",
-		"  agent-mailbox send --to ADDRESS --body-file PATH [options]",
+		"  agent-mailbox send --to ADDRESS --body-file PATH [options] [--json | --yaml] [--full]",
 		"",
 		"Options:",
 		"  --to ADDRESS           Recipient address",
@@ -612,6 +628,9 @@ func (a *App) writeSendHelp() {
 		"  --content-type TYPE    Message content type",
 		"  --schema-version VER   Sender-defined schema version",
 		"  --body-file PATH|-     Read body from a file or stdin",
+		"  --json                 Emit JSON",
+		"  --yaml                 Emit YAML",
+		"  --full                 Emit the full payload",
 	})
 }
 

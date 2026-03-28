@@ -262,7 +262,7 @@ Recommended exit codes:
 ### Send
 
 ```text
-agent-mailbox send --to workflow/reviewer/task-123 --subject "review request" --body-file /abs/path/request.md
+agent-mailbox send --to workflow/reviewer/task-123 --subject "review request" --body-file /abs/path/request.md [--json | --yaml] [--full]
 ```
 
 Behavior:
@@ -280,7 +280,9 @@ Behavior:
 - persist the immutable message
 - create one delivery in `queued`
 - set `visible_at = now`
-- return immediately with identifiers
+- return immediately with a compact acknowledgement containing `delivery_id`
+- when `--full` is set, return the legacy identifier payload with `message_id`,
+  `delivery_id`, and `blob_id`
 
 The blob write still happens before the SQLite transaction, so v1 does not
 provide a cross-store atomic commit between the filesystem and SQLite.

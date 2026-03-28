@@ -419,8 +419,11 @@ func TestSendAndListHappyPath(t *testing.T) {
 			}); err != nil {
 				t.Fatalf("send error = %v", err)
 			}
-			if !strings.Contains(sendStdout.String(), "message_id=") {
-				t.Fatalf("send output = %q, want message_id", sendStdout.String())
+			if !strings.Contains(sendStdout.String(), "delivery_id=") {
+				t.Fatalf("send output = %q, want delivery_id", sendStdout.String())
+			}
+			if strings.Contains(sendStdout.String(), "message_id=") {
+				t.Fatalf("send output = %q, want compact default output", sendStdout.String())
 			}
 
 			listStdout := &bytes.Buffer{}
@@ -633,6 +636,10 @@ func TestInvalidCLIPathsDoNotCreateRuntimeState(t *testing.T) {
 			args: []string{"send", "--bogus"},
 		},
 		{
+			name: "send conflicting formats",
+			args: []string{"send", "--to", "workflow/reviewer/task-123", "--body-file", "-", "--json", "--yaml"},
+		},
+		{
 			name: "send missing to",
 			args: []string{"send", "--body-file", "-"},
 		},
@@ -772,7 +779,7 @@ func TestHelpCLIPathsDoNotCreateRuntimeState(t *testing.T) {
 		{
 			name:         "send help",
 			args:         []string{"send", "--help"},
-			wantContains: "Usage:\n  agent-mailbox send --to ADDRESS --body-file PATH [options]",
+			wantContains: "Usage:\n  agent-mailbox send --to ADDRESS --body-file PATH [options] [--json | --yaml] [--full]",
 		},
 		{
 			name:         "recv help",
