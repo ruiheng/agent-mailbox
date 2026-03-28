@@ -93,6 +93,8 @@ The default state directory is:
 You can set `MAILBOX_STATE_DIR` once, or pass `--state-dir` per command.
 Read-style commands (`list`, `recv`, `wait`, and `watch`) accept either
 `--json` or `--yaml`, but not both together.
+`recv` and `wait` also accept `--full` when you need the full legacy payload
+instead of the default compact view.
 
 ## Minimal Example
 
@@ -129,12 +131,23 @@ agent-mailbox --state-dir /tmp/mailbox-demo \
   recv --for workflow/reviewer/task-123 --max 10 --json
 ```
 
+Ask for the full receive payload only when you need internal metadata such as
+lease expiry or blob references:
+
+```bash
+agent-mailbox --state-dir /tmp/mailbox-demo \
+  recv --for workflow/reviewer/task-123 --json --full
+```
+
 Observe matching queued deliveries without claiming them:
 
 ```bash
 agent-mailbox --state-dir /tmp/mailbox-demo \
   wait --for workflow/reviewer/task-123 --timeout 30s --json
 ```
+
+The default `recv`/`wait` JSON and YAML payloads are intentionally compact.
+Use `--full` to include the full legacy metadata shape.
 
 Stream matching queued deliveries without claiming them:
 
@@ -162,7 +175,8 @@ For the full command reference, see [`docs/cli.md`](docs/cli.md).
 
 - repeated `--for` searches the union of the requested inboxes
 - `--max` limits how many deliveries one command will claim, up to `10`
-- default output still returns one leased message
+- default output returns a compact leased message view
+- `--full` returns the full legacy leased-message payload
 - when `--max` is provided, structured output returns `messages` plus `has_more`
 - when `has_more=true`, additional claimable deliveries still remain after this batch
 - unseen addresses behave like empty inboxes

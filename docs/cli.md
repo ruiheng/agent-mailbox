@@ -53,6 +53,8 @@ agent-mailbox recv \
 ```
 
 Swap `--json` for `--yaml` when you want the same payload in YAML.
+Add `--full` when you need the full legacy payload instead of the default
+compact view.
 
 Search multiple inboxes with one receive:
 
@@ -73,9 +75,11 @@ agent-mailbox recv \
 ```
 
 Without `--max`, `recv` returns one leased message in the legacy single-message
-shape. With `--max`, the receive result becomes an object with `messages` and
-`has_more`. Each message entry includes its own `delivery_id` and `lease_token`.
-Keep those for follow-up actions.
+shape only when `--full` is set. By default it returns a compact single-message
+view with just the fields needed for normal processing. With `--max`, the
+receive result becomes an object with `messages` and `has_more`. Each message
+entry includes its own `delivery_id` and `lease_token`. Keep those for
+follow-up actions.
 
 Observe deliveries without claiming them:
 
@@ -86,8 +90,9 @@ agent-mailbox wait \
   --json
 ```
 
-`wait` emits one delivery metadata object and exits. It never returns message
-bodies or lease tokens, and it does not reserve the delivery.
+`wait` emits one compact delivery metadata object and exits. It never returns
+message bodies or lease tokens, and it does not reserve the delivery. Add
+`--full` when you need the full legacy metadata object.
 
 Observe deliveries continuously without claiming them:
 
@@ -130,7 +135,7 @@ Rules:
 `wait` is the one-shot observe-only companion to `recv`.
 
 ```bash
-agent-mailbox wait --for <address> [--for <address> ...] [--timeout 30s] [--json | --yaml]
+agent-mailbox wait --for <address> [--for <address> ...] [--timeout 30s] [--json | --yaml] [--full]
 ```
 
 `--timeout` uses Go duration syntax such as `30s`, `5m`, `120ms`, or `1m30s`.
@@ -207,7 +212,7 @@ Notes:
 Claim one or more deliveries for one or more recipient addresses.
 
 ```bash
-agent-mailbox recv --for <address> [--for <address> ...] [--max 10] [--json | --yaml]
+agent-mailbox recv --for <address> [--for <address> ...] [--max 10] [--json | --yaml] [--full]
 ```
 
 Use `--json` or `--yaml` for scripts and agents.
@@ -217,10 +222,14 @@ Notes:
 - repeat `--for` to search multiple inboxes with one batch claim
 - `--max <n>` limits how many deliveries one invocation can lease and may not exceed `10`
 - duplicate `--for` values are ignored after the first occurrence
-- without `--max`, plain-text and structured output preserve the single-message form
+- without `--max`, default plain-text and structured output return a compact
+  single-message view with `delivery_id`, `recipient_address`, `lease_token`,
+  `subject`, `content_type`, and `body`
+- add `--full` to return the full legacy single-message payload
 - with `--max`, plain-text output prints each claimed message and appends
   `notice=more_messages_available` when additional claimable mail remains
 - with `--max`, `--json` and `--yaml` emit a result object with `messages` and `has_more`
+- with `--max --full`, each `messages[]` entry uses the full legacy payload
 - unseen addresses are ignored until a matching delivery exists
 - `recv` does not wait; use `wait` if you need to block until work appears
 
@@ -229,7 +238,7 @@ Notes:
 Observe until one matching queued delivery exists, then exit without claiming it.
 
 ```bash
-agent-mailbox wait --for <address> [--for <address> ...] [--timeout 30s] [--json | --yaml]
+agent-mailbox wait --for <address> [--for <address> ...] [--timeout 30s] [--json | --yaml] [--full]
 ```
 
 Use `--json` or `--yaml` for scripts and agents.
@@ -240,7 +249,10 @@ Notes:
 - repeat `--for` to search multiple inboxes with one wait
 - duplicate `--for` values are ignored after the first occurrence
 - plain-text output includes `recipient_address=...`
-- `wait` returns the same delivery metadata schema as `list` and `watch`
+- default `wait` output is a compact metadata view with `delivery_id`,
+  `recipient_address`, `subject`, and `content_type`
+- add `--full` to return the full legacy delivery metadata schema used by `list`
+  and `watch`
 - `wait` does not claim or reserve the returned delivery; use `recv` to claim work
 
 ### `watch`

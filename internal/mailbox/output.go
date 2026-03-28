@@ -53,7 +53,30 @@ func (a *App) writeStructuredOutput(format outputFormat, value any) error {
 	}
 }
 
-func (a *App) writeReceivedMessageText(message ReceivedMessage) error {
+func (a *App) writeReceivedMessageText(message receivedMessageSummary) error {
+	if _, err := fmt.Fprintf(
+		a.stdout,
+		"delivery_id=%s recipient_address=%s lease_token=%s content_type=%s subject=%q\n",
+		message.DeliveryID,
+		message.RecipientAddress,
+		message.LeaseToken,
+		message.ContentType,
+		message.Subject,
+	); err != nil {
+		return err
+	}
+	if _, err := fmt.Fprint(a.stdout, message.Body); err != nil {
+		return err
+	}
+	if !strings.HasSuffix(message.Body, "\n") {
+		if _, err := fmt.Fprintln(a.stdout); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (a *App) writeReceivedMessageFullText(message ReceivedMessage) error {
 	if _, err := fmt.Fprintf(
 		a.stdout,
 		"delivery_id=%s message_id=%s recipient_address=%s lease_token=%s lease_expires_at=%s subject=%q\n",
@@ -77,7 +100,7 @@ func (a *App) writeReceivedMessageText(message ReceivedMessage) error {
 	return nil
 }
 
-func (a *App) writeReceiveResultText(result ReceiveResult) error {
+func (a *App) writeReceiveResultText(result receiveResultSummary) error {
 	for index, message := range result.Messages {
 		if index > 0 {
 			if _, err := io.WriteString(a.stdout, "---\n"); err != nil {
@@ -85,6 +108,25 @@ func (a *App) writeReceiveResultText(result ReceiveResult) error {
 			}
 		}
 		if err := a.writeReceivedMessageText(message); err != nil {
+			return err
+		}
+	}
+	if result.HasMore {
+		if _, err := io.WriteString(a.stdout, "notice=more_messages_available\n"); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (a *App) writeReceiveResultFullText(result ReceiveResult) error {
+	for index, message := range result.Messages {
+		if index > 0 {
+			if _, err := io.WriteString(a.stdout, "---\n"); err != nil {
+				return err
+			}
+		}
+		if err := a.writeReceivedMessageFullText(message); err != nil {
 			return err
 		}
 	}
@@ -104,6 +146,18 @@ func (a *App) writeListedDeliveryText(delivery ListedDelivery) error {
 		delivery.RecipientAddress,
 		delivery.State,
 		delivery.VisibleAt,
+		delivery.Subject,
+	)
+	return err
+}
+
+func (a *App) writeWaitedDeliveryText(delivery listedDeliverySummary) error {
+	_, err := fmt.Fprintf(
+		a.stdout,
+		"delivery_id=%s recipient_address=%s content_type=%s subject=%q\n",
+		delivery.DeliveryID,
+		delivery.RecipientAddress,
+		delivery.ContentType,
 		delivery.Subject,
 	)
 	return err

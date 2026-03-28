@@ -94,6 +94,12 @@ func TestCLIRecvYAMLOutput(t *testing.T) {
 	if !strings.Contains(recv.stdout, "lease_token: \"") {
 		t.Fatalf("recv stdout = %q, want lease_token field", recv.stdout)
 	}
+	if strings.Contains(recv.stdout, "lease_expires_at: ") {
+		t.Fatalf("recv stdout unexpectedly contains lease_expires_at: %q", recv.stdout)
+	}
+	if strings.Contains(recv.stdout, "message_id: ") {
+		t.Fatalf("recv stdout unexpectedly contains message_id: %q", recv.stdout)
+	}
 	if !strings.Contains(recv.stdout, "body: \"hello reviewer\\n\"\n") {
 		t.Fatalf("recv stdout = %q, want YAML body", recv.stdout)
 	}
@@ -218,6 +224,9 @@ func TestCLIRecvHonorsMaxAndReportsMoreAvailable(t *testing.T) {
 	}
 	if result.Messages[1].RecipientAddress != "workflow/two" {
 		t.Fatalf("recv messages[1].recipient_address = %q, want workflow/two", result.Messages[1].RecipientAddress)
+	}
+	if result.Messages[0].LeaseToken == "" || result.Messages[1].LeaseToken == "" {
+		t.Fatalf("recv lease tokens = %#v, want both non-empty", result.Messages)
 	}
 }
 
@@ -459,6 +468,12 @@ func TestCLIWaitReturnsOneJSONDeliveryWithoutClaiming(t *testing.T) {
 	if delivery["subject"] != "wait for me" {
 		t.Fatalf("wait subject = %v, want wait for me", delivery["subject"])
 	}
+	if _, ok := delivery["state"]; ok {
+		t.Fatalf("wait payload unexpectedly contains state: %v", delivery)
+	}
+	if _, ok := delivery["visible_at"]; ok {
+		t.Fatalf("wait payload unexpectedly contains visible_at: %v", delivery)
+	}
 	if _, ok := delivery["lease_token"]; ok {
 		t.Fatalf("wait payload unexpectedly contains lease_token: %v", delivery)
 	}
@@ -506,6 +521,12 @@ func TestCLIWaitReturnsYAMLWithoutClaiming(t *testing.T) {
 	}
 	if !strings.Contains(wait.stdout, "recipient_address: \"workflow/wait\"\n") {
 		t.Fatalf("wait stdout = %q, want recipient_address field", wait.stdout)
+	}
+	if strings.Contains(wait.stdout, "state: ") {
+		t.Fatalf("wait stdout unexpectedly contains state: %q", wait.stdout)
+	}
+	if strings.Contains(wait.stdout, "visible_at: ") {
+		t.Fatalf("wait stdout unexpectedly contains visible_at: %q", wait.stdout)
 	}
 	if strings.Contains(wait.stdout, "lease_token: ") {
 		t.Fatalf("wait stdout unexpectedly contains lease_token: %q", wait.stdout)
@@ -611,6 +632,81 @@ func TestCLIWatchTimeoutExitsCleanlyWithoutOutput(t *testing.T) {
 	}
 }
 
+func TestCLIRecvFullJSONIncludesLegacyFields(t *testing.T) {
+	stateDir := filepath.Join(t.TempDir(), "mailbox-state")
+
+	send := runCLI(t, "hello reviewer\n", "--state-dir", stateDir,
+		"send",
+		"--to", "workflow/reviewer/task-123",
+		"--from", "agent/sender",
+		"--subject", "review request",
+		"--body-file", "-",
+	)
+	if send.exitCode != 0 {
+		t.Fatalf("send exit code = %d, stderr = %q", send.exitCode, send.stderr)
+	}
+
+	recv := runCLI(t, "", "--state-dir", stateDir,
+		"recv",
+		"--for", "workflow/reviewer/task-123",
+		"--json",
+		"--full",
+	)
+	if recv.exitCode != 0 {
+		t.Fatalf("recv --full exit code = %d, stderr = %q", recv.exitCode, recv.stderr)
+	}
+
+	message := decodeFullReceivedMessage(t, recv.stdout)
+	if message.MessageID == "" {
+		t.Fatalf("recv --full message_id = %q, want non-empty", message.MessageID)
+	}
+	if message.LeaseExpiresAt == "" {
+		t.Fatalf("recv --full lease_expires_at = %q, want non-empty", message.LeaseExpiresAt)
+	}
+	if message.BodyBlobRef == "" {
+		t.Fatalf("recv --full body_blob_ref = %q, want non-empty", message.BodyBlobRef)
+	}
+}
+
+func TestCLIWaitFullJSONIncludesLegacyMetadata(t *testing.T) {
+	stateDir := filepath.Join(t.TempDir(), "mailbox-state")
+
+	send := runCLI(t, "wait body\n", "--state-dir", stateDir,
+		"send",
+		"--to", "workflow/wait",
+		"--from", "agent/sender",
+		"--subject", "wait for me",
+		"--body-file", "-",
+	)
+	if send.exitCode != 0 {
+		t.Fatalf("send exit code = %d, stderr = %q", send.exitCode, send.stderr)
+	}
+
+	wait := runCLI(t, "", "--state-dir", stateDir,
+		"wait",
+		"--for", "workflow/wait",
+		"--json",
+		"--full",
+	)
+	if wait.exitCode != 0 {
+		t.Fatalf("wait --full exit code = %d, stderr = %q", wait.exitCode, wait.stderr)
+	}
+
+	var delivery map[string]any
+	if err := json.Unmarshal([]byte(wait.stdout), &delivery); err != nil {
+		t.Fatalf("json.Unmarshal(wait --full stdout) error = %v; stdout = %q", err, wait.stdout)
+	}
+	if delivery["state"] != "queued" {
+		t.Fatalf("wait --full state = %v, want queued", delivery["state"])
+	}
+	if _, ok := delivery["visible_at"]; !ok {
+		t.Fatalf("wait --full payload = %v, want visible_at", delivery)
+	}
+	if _, ok := delivery["message_id"]; !ok {
+		t.Fatalf("wait --full payload = %v, want message_id", delivery)
+	}
+}
+
 func TestCLIHelpExitsZeroAndPrintsUsage(t *testing.T) {
 	testCases := []struct {
 		name         string
@@ -625,7 +721,7 @@ func TestCLIHelpExitsZeroAndPrintsUsage(t *testing.T) {
 		{
 			name:         "recv help",
 			args:         []string{"recv", "--help"},
-			wantContains: "Usage:\n  agent-mailbox recv --for ADDRESS [--for ADDRESS ...] [--max COUNT] [--json | --yaml]",
+			wantContains: "Usage:\n  agent-mailbox recv --for ADDRESS [--for ADDRESS ...] [--max COUNT] [--json | --yaml] [--full]",
 		},
 		{
 			name:         "watch help",
@@ -635,7 +731,7 @@ func TestCLIHelpExitsZeroAndPrintsUsage(t *testing.T) {
 		{
 			name:         "wait help",
 			args:         []string{"wait", "--help"},
-			wantContains: "Usage:\n  agent-mailbox wait --for ADDRESS [--for ADDRESS ...] [--timeout DURATION] [--json | --yaml]",
+			wantContains: "Usage:\n  agent-mailbox wait --for ADDRESS [--for ADDRESS ...] [--timeout DURATION] [--json | --yaml] [--full]",
 		},
 	}
 
@@ -733,17 +829,41 @@ func runCLI(t *testing.T, stdin string, args ...string) cliResult {
 	}
 }
 
-func decodeReceiveResult(t *testing.T, raw string) mailbox.ReceiveResult {
+type receivedMessageSummary struct {
+	DeliveryID       string `json:"delivery_id"`
+	RecipientAddress string `json:"recipient_address"`
+	LeaseToken       string `json:"lease_token"`
+	Subject          string `json:"subject"`
+	ContentType      string `json:"content_type"`
+	Body             string `json:"body"`
+}
+
+type receiveResultSummary struct {
+	Messages []receivedMessageSummary `json:"messages"`
+	HasMore  bool                     `json:"has_more"`
+}
+
+func decodeReceiveResult(t *testing.T, raw string) receiveResultSummary {
 	t.Helper()
 
-	var result mailbox.ReceiveResult
+	var result receiveResultSummary
 	if err := json.Unmarshal([]byte(raw), &result); err != nil {
 		t.Fatalf("json.Unmarshal(recv stdout) error = %v; stdout = %q", err, raw)
 	}
 	return result
 }
 
-func decodeReceivedMessage(t *testing.T, raw string) mailbox.ReceivedMessage {
+func decodeReceivedMessage(t *testing.T, raw string) receivedMessageSummary {
+	t.Helper()
+
+	var message receivedMessageSummary
+	if err := json.Unmarshal([]byte(raw), &message); err != nil {
+		t.Fatalf("json.Unmarshal(recv stdout) error = %v; stdout = %q", err, raw)
+	}
+	return message
+}
+
+func decodeFullReceivedMessage(t *testing.T, raw string) mailbox.ReceivedMessage {
 	t.Helper()
 
 	var message mailbox.ReceivedMessage

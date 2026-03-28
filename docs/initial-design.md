@@ -233,11 +233,13 @@ This rule is required for lazy lease expiry recovery to work without a daemon.
 `delivery_id` alone is not sufficient authorization for `ack`, `release`,
 `defer`, or `fail`.
 
-Each claimed message returned by `recv` must include:
+Each claimed message returned by `recv` must include, at minimum:
 
 - `delivery_id`
 - `lease_token`
-- `lease_expires_at`
+
+The full receive payload may additionally include lease timing and internal
+storage metadata when the caller explicitly asks for it.
 
 Any later state transition on that lease must prove ownership by presenting the
 current `lease_token`.
@@ -291,7 +293,7 @@ SQLite transaction.
 ### Receive
 
 ```text
-agent-mailbox recv --for workflow/reviewer/task-123 --for workflow/reviewer/task-456 --max 10 --json
+agent-mailbox recv --for workflow/reviewer/task-123 --for workflow/reviewer/task-456 --max 10 --json [--full]
 ```
 
 Behavior:
@@ -306,8 +308,10 @@ Behavior:
 - selection order is `visible_at`, then `message_created_at`, then `delivery_id`
 - transition each claimed delivery to `leased`
 - assign a fresh lease token and lease timeout to each claimed delivery
-- when `--max` is omitted, return one message envelope and identifiers
+- when `--max` is omitted, return one compact message view and identifiers
+- when `--max` is omitted and `--full` is set, return the full legacy message payload
 - when `--max` is provided, return a result object with `messages` and `has_more`
+- when `--max` is provided with `--full`, each message uses the full legacy payload
 
 If no claimable message exists:
 

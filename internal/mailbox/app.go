@@ -231,10 +231,12 @@ func (a *App) prepareRecvCommand(args []string) (preparedCommand, error) {
 
 	var addresses stringListFlag
 	var maxMessages int
+	var full bool
 	var formats outputFlags
 
 	fs.Var(&addresses, "for", "recipient address (repeatable)")
 	fs.IntVar(&maxMessages, "max", 1, "maximum number of deliveries to claim")
+	fs.BoolVar(&full, "full", false, "emit the full payload")
 	formats.register(fs, "emit JSON", "emit YAML")
 
 	if err := a.parseCommandFlags(fs, args, a.writeRecvHelp); err != nil {
@@ -266,9 +268,15 @@ func (a *App) prepareRecvCommand(args []string) (preparedCommand, error) {
 			}
 
 			if format != outputFormatText {
-				return a.writeStructuredOutput(format, message)
+				if full {
+					return a.writeStructuredOutput(format, message)
+				}
+				return a.writeStructuredOutput(format, summarizeReceivedMessage(message))
 			}
-			return a.writeReceivedMessageText(message)
+			if full {
+				return a.writeReceivedMessageFullText(message)
+			}
+			return a.writeReceivedMessageText(summarizeReceivedMessage(message))
 		}
 
 		result, err := store.ReceiveBatch(ctx, params)
@@ -277,10 +285,16 @@ func (a *App) prepareRecvCommand(args []string) (preparedCommand, error) {
 		}
 
 		if format != outputFormatText {
-			return a.writeStructuredOutput(format, result)
+			if full {
+				return a.writeStructuredOutput(format, result)
+			}
+			return a.writeStructuredOutput(format, summarizeReceiveResult(result))
+		}
+		if full {
+			return a.writeReceiveResultFullText(result)
 		}
 
-		return a.writeReceiveResultText(result)
+		return a.writeReceiveResultText(summarizeReceiveResult(result))
 	}, nil
 }
 
@@ -337,10 +351,12 @@ func (a *App) prepareWaitCommand(args []string) (preparedCommand, error) {
 
 	var addresses stringListFlag
 	var timeout time.Duration
+	var full bool
 	var formats outputFlags
 
 	fs.Var(&addresses, "for", "recipient address (repeatable)")
 	fs.DurationVar(&timeout, "timeout", 0, "maximum time to wait for a matching delivery")
+	fs.BoolVar(&full, "full", false, "emit the full payload")
 	formats.register(fs, "emit JSON", "emit YAML")
 
 	if err := a.parseCommandFlags(fs, args, a.writeWaitHelp); err != nil {
@@ -369,9 +385,15 @@ func (a *App) prepareWaitCommand(args []string) (preparedCommand, error) {
 			return err
 		}
 		if format != outputFormatText {
-			return a.writeStructuredOutput(format, delivery)
+			if full {
+				return a.writeStructuredOutput(format, delivery)
+			}
+			return a.writeStructuredOutput(format, summarizeListedDelivery(delivery))
 		}
-		return a.writeListedDeliveryText(delivery)
+		if full {
+			return a.writeListedDeliveryText(delivery)
+		}
+		return a.writeWaitedDeliveryText(summarizeListedDelivery(delivery))
 	}, nil
 }
 
@@ -609,13 +631,14 @@ func (a *App) writeListHelp() {
 func (a *App) writeRecvHelp() {
 	writeHelp(a.stdout, []string{
 		"Usage:",
-		"  agent-mailbox recv --for ADDRESS [--for ADDRESS ...] [--max COUNT] [--json | --yaml]",
+		"  agent-mailbox recv --for ADDRESS [--for ADDRESS ...] [--max COUNT] [--json | --yaml] [--full]",
 		"",
 		"Options:",
 		"  --for ADDRESS        Recipient address (repeatable)",
 		"  --max COUNT          Maximum number of deliveries to claim (up to 10)",
 		"  --json               Emit JSON",
 		"  --yaml               Emit YAML",
+		"  --full               Emit the full payload",
 	})
 }
 
@@ -636,13 +659,14 @@ func (a *App) writeWatchHelp() {
 func (a *App) writeWaitHelp() {
 	writeHelp(a.stdout, []string{
 		"Usage:",
-		"  agent-mailbox wait --for ADDRESS [--for ADDRESS ...] [--timeout DURATION] [--json | --yaml]",
+		"  agent-mailbox wait --for ADDRESS [--for ADDRESS ...] [--timeout DURATION] [--json | --yaml] [--full]",
 		"",
 		"Options:",
 		"  --for ADDRESS        Recipient address (repeatable)",
 		"  --timeout DURATION   Maximum time to wait for a matching delivery (for example 30s, 5m, 120ms, 1m30s)",
 		"  --json               Emit JSON",
 		"  --yaml               Emit YAML",
+		"  --full               Emit the full payload",
 	})
 }
 
