@@ -28,7 +28,22 @@ var (
 	ErrBodyIntegrity      = errors.New("body blob failed integrity check")
 	ErrLeaseExpired       = errors.New("lease expired")
 	ErrLeaseTokenMismatch = errors.New("lease token does not match current lease")
+	ErrReceiveRecovery    = errors.New("receive recovery failed")
 )
+
+type ReceiveRecoveryError struct {
+	DeliveryID  string
+	ReceiveErr  error
+	RecoveryErr error
+}
+
+func (e *ReceiveRecoveryError) Error() string {
+	return fmt.Sprintf("receive recovery failed for delivery %q: read error: %v: recovery error: %v", e.DeliveryID, e.ReceiveErr, e.RecoveryErr)
+}
+
+func (e *ReceiveRecoveryError) Unwrap() []error {
+	return []error{ErrReceiveRecovery, e.ReceiveErr, e.RecoveryErr}
+}
 
 type ReceiveParams struct {
 	Address   string
@@ -386,7 +401,7 @@ WHERE delivery_id = ?
 
 		body, err := s.readBlob(candidate.BodyBlobRef, candidate.BodySize, candidate.BodySHA256)
 		if err != nil {
-			return ReceivedMessage{}, err
+			return ReceivedMessage{}, s.recoverReceiveFailure(ctx, candidate.DeliveryID, leaseToken, err)
 		}
 
 		message := ReceivedMessage{
@@ -413,6 +428,17 @@ WHERE delivery_id = ?
 		}
 		return message, nil
 	}
+}
+
+func (s *Store) recoverReceiveFailure(ctx context.Context, deliveryID, leaseToken string, readErr error) error {
+	if _, err := s.Fail(ctx, deliveryID, leaseToken, readErr.Error()); err != nil {
+		return &ReceiveRecoveryError{
+			DeliveryID:  deliveryID,
+			ReceiveErr:  readErr,
+			RecoveryErr: err,
+		}
+	}
+	return readErr
 }
 
 func (s *Store) hasClaimableDelivery(ctx context.Context, addresses []string) (bool, error) {

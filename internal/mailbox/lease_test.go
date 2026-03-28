@@ -430,6 +430,11 @@ func TestReceiveRejectsCorruptBodyBlob(t *testing.T) {
 	runtime, store := newLeaseTestStore(t)
 	defer runtime.Close()
 
+	current := time.Date(2026, 3, 18, 15, 0, 0, 0, time.UTC)
+	store.now = func() time.Time {
+		return current
+	}
+
 	sent := mustSendMessage(t, store, "workflow/corrupt", "agent/sender", "corrupt", "expected body")
 	blobPath := filepath.Join(runtime.BlobDir(), sent.BodyBlobRef)
 	if err := os.WriteFile(blobPath, []byte{}, 0o600); err != nil {
@@ -443,6 +448,74 @@ func TestReceiveRejectsCorruptBodyBlob(t *testing.T) {
 	if !strings.Contains(err.Error(), sent.BodyBlobRef) {
 		t.Fatalf("Receive(corrupt blob) error = %q, want blob ref %q", err, sent.BodyBlobRef)
 	}
+
+	state, attemptCount := readDeliveryStateAndAttemptCount(t, runtime, sent.DeliveryID)
+	if state != "queued" {
+		t.Fatalf("delivery state after corrupt receive = %q, want queued", state)
+	}
+	if attemptCount != 1 {
+		t.Fatalf("delivery attempt_count after corrupt receive = %d, want 1", attemptCount)
+	}
+
+	eventTypes := readDeliveryEventTypes(t, runtime, sent.DeliveryID)
+	want := []string{"delivery_queued", "delivery_leased", "delivery_failed"}
+	assertStringSlicesEqual(t, eventTypes, want)
+}
+
+func TestReceiveCorruptBodyReportsRecoveryFailureWhenFailTransitionFails(t *testing.T) {
+	t.Parallel()
+
+	runtime, store := newLeaseTestStore(t)
+	defer runtime.Close()
+
+	current := time.Date(2026, 3, 18, 15, 30, 0, 0, time.UTC)
+	store.now = func() time.Time { return current }
+
+	sent := mustSendMessage(t, store, "workflow/corrupt-recovery", "agent/sender", "corrupt", "expected body")
+	blobPath := filepath.Join(runtime.BlobDir(), sent.BodyBlobRef)
+	if err := os.WriteFile(blobPath, []byte{}, 0o600); err != nil {
+		t.Fatalf("os.WriteFile(corrupt blob) error = %v", err)
+	}
+
+	nowCalls := 0
+	store.now = func() time.Time {
+		nowCalls++
+		if nowCalls >= 3 {
+			return current.Add(defaultLeaseTimeout + time.Second)
+		}
+		return current
+	}
+
+	_, err := store.Receive(context.Background(), ReceiveParams{Address: "workflow/corrupt-recovery"})
+	if !errors.Is(err, ErrReceiveRecovery) {
+		t.Fatalf("Receive(corrupt blob recovery failure) error = %v, want ErrReceiveRecovery", err)
+	}
+	if !errors.Is(err, ErrBodyIntegrity) {
+		t.Fatalf("Receive(corrupt blob recovery failure) error = %v, want ErrBodyIntegrity", err)
+	}
+
+	var recoveryErr *ReceiveRecoveryError
+	if !errors.As(err, &recoveryErr) {
+		t.Fatalf("Receive(corrupt blob recovery failure) error = %T, want *ReceiveRecoveryError", err)
+	}
+	if recoveryErr.DeliveryID != sent.DeliveryID {
+		t.Fatalf("Receive(corrupt blob recovery failure) delivery id = %q, want %q", recoveryErr.DeliveryID, sent.DeliveryID)
+	}
+	if !strings.Contains(err.Error(), sent.DeliveryID) {
+		t.Fatalf("Receive(corrupt blob recovery failure) error = %q, want delivery id %q", err, sent.DeliveryID)
+	}
+
+	state, attemptCount := readDeliveryStateAndAttemptCount(t, runtime, sent.DeliveryID)
+	if state != "leased" {
+		t.Fatalf("delivery state after recovery failure = %q, want leased", state)
+	}
+	if attemptCount != 0 {
+		t.Fatalf("delivery attempt_count after recovery failure = %d, want 0", attemptCount)
+	}
+
+	eventTypes := readDeliveryEventTypes(t, runtime, sent.DeliveryID)
+	want := []string{"delivery_queued", "delivery_leased"}
+	assertStringSlicesEqual(t, eventTypes, want)
 }
 
 func TestReceiveConcurrentClaimUsesSingleClaimerAcrossRuntimes(t *testing.T) {
@@ -554,6 +627,21 @@ ORDER BY rowid
 		t.Fatalf("rows.Err() = %v", err)
 	}
 	return eventTypes
+}
+
+func readDeliveryStateAndAttemptCount(t *testing.T, runtime *Runtime, deliveryID string) (string, int) {
+	t.Helper()
+
+	var state string
+	var attemptCount int
+	if err := runtime.DB().QueryRow(`
+SELECT state, attempt_count
+FROM deliveries
+WHERE delivery_id = ?
+`, deliveryID).Scan(&state, &attemptCount); err != nil {
+		t.Fatalf("QueryRow(delivery state/attempt_count) error = %v", err)
+	}
+	return state, attemptCount
 }
 
 func assertStringSlicesEqual(t *testing.T, got, want []string) {
