@@ -19,17 +19,33 @@ const (
 	defaultLeaseTimeout     = 5 * time.Minute
 	initialPollDelay        = 50 * time.Millisecond
 	maxPollDelay            = time.Second
+	maxClaimRetryCount      = 3
+	claimRetryDelay         = 10 * time.Millisecond
 	maxDeliveryAttemptCount = 3
 	maxReceiveBatchSize     = 10
 )
 
 var (
 	ErrNoMessage          = errors.New("no message available")
+	ErrClaimContention    = errors.New("receive claim contention")
 	ErrBodyIntegrity      = errors.New("body blob failed integrity check")
 	ErrLeaseExpired       = errors.New("lease expired")
 	ErrLeaseTokenMismatch = errors.New("lease token does not match current lease")
 	ErrReceiveRecovery    = errors.New("receive recovery failed")
 )
+
+type ClaimContentionError struct {
+	Attempts int
+	Cause    error
+}
+
+func (e *ClaimContentionError) Error() string {
+	return fmt.Sprintf("receive claim contention after %d attempts: %v", e.Attempts, e.Cause)
+}
+
+func (e *ClaimContentionError) Unwrap() []error {
+	return []error{ErrClaimContention, e.Cause}
+}
 
 type ReceiveRecoveryError struct {
 	DeliveryID  string
@@ -141,7 +157,7 @@ func (s *Store) Receive(ctx context.Context, params ReceiveParams) (ReceivedMess
 		return ReceivedMessage{}, err
 	}
 
-	return s.receiveOnce(ctx, addresses, s.writeDB)
+	return s.receiveOnce(ctx, addresses)
 }
 
 func (s *Store) ReceiveBatch(ctx context.Context, params ReceiveBatchParams) (ReceiveResult, error) {
@@ -157,7 +173,7 @@ func (s *Store) ReceiveBatch(ctx context.Context, params ReceiveBatchParams) (Re
 
 	messages := make([]ReceivedMessage, 0, maxMessages)
 	for len(messages) < maxMessages {
-		message, err := s.receiveOnce(ctx, addresses, s.writeDB)
+		message, err := s.receiveOnce(ctx, addresses)
 		if err == nil {
 			messages = append(messages, message)
 			continue
@@ -315,7 +331,7 @@ func (s *Store) Fail(ctx context.Context, deliveryID, leaseToken, reason string)
 	})
 }
 
-func (s *Store) receiveOnce(ctx context.Context, addresses []string, claimDB *sql.DB) (ReceivedMessage, error) {
+func (s *Store) receiveOnce(ctx context.Context, addresses []string) (ReceivedMessage, error) {
 	recipients, err := s.resolveRecipients(ctx, addresses)
 	if err != nil {
 		return ReceivedMessage{}, err
@@ -331,7 +347,11 @@ func (s *Store) receiveOnce(ctx context.Context, addresses []string, claimDB *sq
 		recipientEndpointIDs = append(recipientEndpointIDs, recipient.EndpointID)
 	}
 
-	for {
+	return s.claimNextDelivery(ctx, addressByEndpointID, recipientEndpointIDs)
+}
+
+func (s *Store) claimNextDelivery(ctx context.Context, addressByEndpointID map[string]string, recipientEndpointIDs []string) (ReceivedMessage, error) {
+	for attempt := 1; ; attempt++ {
 		nowText := formatTimestamp(s.now())
 		if _, err := loadClaimCandidate(ctx, s.readDB, recipientEndpointIDs, nowText); errors.Is(err, sql.ErrNoRows) {
 			return ReceivedMessage{}, ErrNoMessage
@@ -339,7 +359,28 @@ func (s *Store) receiveOnce(ctx context.Context, addresses []string, claimDB *sq
 			return ReceivedMessage{}, fmt.Errorf("query claimable delivery: %w", err)
 		}
 
-		tx, err := claimDB.BeginTx(ctx, nil)
+		message, err := s.claimNextDeliveryOnce(ctx, addressByEndpointID, recipientEndpointIDs, nowText)
+		if err == nil {
+			return message, nil
+		}
+		if !isSQLiteBusy(err) {
+			return ReceivedMessage{}, err
+		}
+		if attempt > maxClaimRetryCount {
+			return ReceivedMessage{}, &ClaimContentionError{
+				Attempts: attempt,
+				Cause:    err,
+			}
+		}
+		if err := waitForClaimRetry(ctx); err != nil {
+			return ReceivedMessage{}, err
+		}
+	}
+}
+
+func (s *Store) claimNextDeliveryOnce(ctx context.Context, addressByEndpointID map[string]string, recipientEndpointIDs []string, nowText string) (ReceivedMessage, error) {
+	for {
+		tx, err := s.claimDB.BeginTx(ctx, nil)
 		if err != nil {
 			return ReceivedMessage{}, fmt.Errorf("begin receive transaction: %w", err)
 		}
@@ -402,6 +443,7 @@ WHERE delivery_id = ?
 		}
 
 		if err := tx.Commit(); err != nil {
+			_ = tx.Rollback()
 			return ReceivedMessage{}, fmt.Errorf("commit receive transaction: %w", err)
 		}
 
@@ -433,6 +475,18 @@ WHERE delivery_id = ?
 			message.SenderEndpointID = &candidate.SenderEndpointID.String
 		}
 		return message, nil
+	}
+}
+
+func waitForClaimRetry(ctx context.Context) error {
+	timer := time.NewTimer(claimRetryDelay)
+	defer timer.Stop()
+
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
 	}
 }
 

@@ -583,6 +583,117 @@ func TestReceiveCorruptBodyReportsRecoveryFailureWhenFailTransitionFails(t *test
 	assertStringSlicesEqual(t, eventTypes, want)
 }
 
+func TestReceiveRetriesClaimContentionUntilLockClears(t *testing.T) {
+	t.Parallel()
+
+	stateDir := filepath.Join(t.TempDir(), "mailbox-state")
+	lockerRuntime, err := OpenRuntime(context.Background(), stateDir)
+	if err != nil {
+		t.Fatalf("OpenRuntime(locker) error = %v", err)
+	}
+	defer lockerRuntime.Close()
+
+	receiverRuntime, err := OpenRuntime(context.Background(), stateDir)
+	if err != nil {
+		t.Fatalf("OpenRuntime(receiver) error = %v", err)
+	}
+	defer receiverRuntime.Close()
+
+	const address = "workflow/claim-retry"
+	sent := mustSendMessage(t, lockerRuntime.Store(), address, "agent/sender", "retry", "retry body")
+
+	lockTx, err := lockerRuntime.DB().BeginTx(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("BeginTx(writer lock) error = %v", err)
+	}
+
+	releaseDone := make(chan error, 1)
+	go func() {
+		time.Sleep(2 * claimRetryDelay)
+		releaseDone <- lockTx.Rollback()
+	}()
+
+	message, err := receiverRuntime.Store().Receive(context.Background(), ReceiveParams{Address: address})
+	if err != nil {
+		t.Fatalf("Receive(retry after contention) error = %v", err)
+	}
+	if rollbackErr := <-releaseDone; rollbackErr != nil {
+		t.Fatalf("Rollback(writer lock) error = %v", rollbackErr)
+	}
+	if message.DeliveryID != sent.DeliveryID {
+		t.Fatalf("Receive(retry after contention) delivery id = %q, want %q", message.DeliveryID, sent.DeliveryID)
+	}
+	if message.RecipientAddress != address {
+		t.Fatalf("Receive(retry after contention) recipient address = %q, want %q", message.RecipientAddress, address)
+	}
+}
+
+func TestReceiveBatchReturnsClaimContentionWhenLockRetriesExhausted(t *testing.T) {
+	t.Parallel()
+
+	stateDir := filepath.Join(t.TempDir(), "mailbox-state")
+	lockerRuntime, err := OpenRuntime(context.Background(), stateDir)
+	if err != nil {
+		t.Fatalf("OpenRuntime(locker) error = %v", err)
+	}
+	defer lockerRuntime.Close()
+
+	receiverRuntime, err := OpenRuntime(context.Background(), stateDir)
+	if err != nil {
+		t.Fatalf("OpenRuntime(receiver) error = %v", err)
+	}
+	defer receiverRuntime.Close()
+
+	const address = "workflow/claim-contention"
+	sent := mustSendMessage(t, lockerRuntime.Store(), address, "agent/sender", "contention", "contention body")
+
+	lockTx, err := lockerRuntime.DB().BeginTx(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("BeginTx(writer lock) error = %v", err)
+	}
+	lockReleased := false
+	defer func() {
+		if !lockReleased {
+			_ = lockTx.Rollback()
+		}
+	}()
+
+	_, err = receiverRuntime.Store().ReceiveBatch(context.Background(), ReceiveBatchParams{
+		Address: address,
+		Max:     1,
+	})
+	if !errors.Is(err, ErrClaimContention) {
+		t.Fatalf("ReceiveBatch(contention exhaustion) error = %v, want ErrClaimContention", err)
+	}
+	if errors.Is(err, ErrNoMessage) {
+		t.Fatalf("ReceiveBatch(contention exhaustion) error = %v, must not look like ErrNoMessage", err)
+	}
+
+	var contentionErr *ClaimContentionError
+	if !errors.As(err, &contentionErr) {
+		t.Fatalf("ReceiveBatch(contention exhaustion) error = %T, want *ClaimContentionError", err)
+	}
+	if contentionErr.Attempts != maxClaimRetryCount+1 {
+		t.Fatalf("ReceiveBatch(contention exhaustion) attempts = %d, want %d", contentionErr.Attempts, maxClaimRetryCount+1)
+	}
+	if err := lockTx.Rollback(); err != nil {
+		t.Fatalf("Rollback(writer lock) error = %v", err)
+	}
+	lockReleased = true
+
+	state, attemptCount := readDeliveryStateAndAttemptCount(t, lockerRuntime, sent.DeliveryID)
+	if state != "queued" {
+		t.Fatalf("delivery state after contention exhaustion = %q, want queued", state)
+	}
+	if attemptCount != 0 {
+		t.Fatalf("delivery attempt_count after contention exhaustion = %d, want 0", attemptCount)
+	}
+
+	assertStringSlicesEqual(t, readDeliveryEventTypes(t, lockerRuntime, sent.DeliveryID), []string{
+		"delivery_queued",
+	})
+}
+
 func TestReceiveConcurrentClaimUsesSingleClaimerAcrossRuntimes(t *testing.T) {
 	t.Parallel()
 
