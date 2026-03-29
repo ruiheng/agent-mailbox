@@ -42,7 +42,19 @@ func TestOpenRuntimeInitializesStateAndSchema(t *testing.T) {
 		t.Fatalf("journal mode = %q, want wal", journalMode)
 	}
 
-	tables := []string{"endpoints", "endpoint_addresses", "messages", "deliveries", "events"}
+	tables := []string{
+		"endpoints",
+		"endpoint_addresses",
+		"persons",
+		"groups",
+		"group_memberships",
+		"messages",
+		"deliveries",
+		"group_messages",
+		"group_message_eligibility",
+		"group_reads",
+		"events",
+	}
 	for _, table := range tables {
 		var name string
 		if err := runtime.DB().QueryRow(`

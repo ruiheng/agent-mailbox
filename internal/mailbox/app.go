@@ -50,7 +50,7 @@ func (a *App) Run(ctx context.Context, args []string) error {
 		return ErrHelpRequested
 	}
 	if len(rest) == 0 {
-		return errors.New("expected a command: send, recv, wait, watch, ack, release, defer, fail, or list")
+		return errors.New("expected a command: send, recv, wait, watch, ack, release, defer, fail, list, group, or address")
 	}
 
 	command, err := a.prepareCommand(rest)
@@ -69,7 +69,7 @@ func (a *App) Run(ctx context.Context, args []string) error {
 
 func (a *App) prepareCommand(args []string) (preparedCommand, error) {
 	if len(args) == 0 {
-		return nil, errors.New("expected a command: send, recv, wait, watch, ack, release, defer, fail, or list")
+		return nil, errors.New("expected a command: send, recv, wait, watch, ack, release, defer, fail, list, group, or address")
 	}
 
 	switch args[0] {
@@ -91,6 +91,10 @@ func (a *App) prepareCommand(args []string) (preparedCommand, error) {
 		return a.prepareFailCommand(args[1:])
 	case "list":
 		return a.prepareListCommand(args[1:])
+	case "group":
+		return a.prepareGroupCommand(args[1:])
+	case "address":
+		return a.prepareAddressCommand(args[1:])
 	default:
 		return nil, fmt.Errorf("unknown command %q", args[0])
 	}
@@ -551,6 +555,13 @@ func requireFlag(value, name string) error {
 	return nil
 }
 
+func valueOrEmpty(value *string) string {
+	if value == nil {
+		return ""
+	}
+	return *value
+}
+
 func normalizeAddresses(address string, addresses []string, flagName string) ([]string, error) {
 	values := make([]string, 0, len(addresses)+1)
 	if address != "" {
@@ -603,6 +614,8 @@ func (a *App) writeRootHelp() {
 		"  wait                Wait for one delivery without claiming",
 		"  watch               Observe deliveries without claiming",
 		"  list                List deliveries",
+		"  group               Manage group mailboxes",
+		"  address             Inspect address bindings",
 		"  ack                 Acknowledge a leased delivery",
 		"  release             Return a leased delivery to the queue",
 		"  defer               Hide a leased delivery until a future time",
@@ -644,6 +657,69 @@ func (a *App) writeListHelp() {
 		"  --state STATE      Filter by delivery state",
 		"  --json             Emit JSON",
 		"  --yaml             Emit YAML",
+	})
+}
+
+func (a *App) writeGroupHelp() {
+	writeHelp(a.stdout, []string{
+		"Usage:",
+		"  agent-mailbox group <subcommand> [options]",
+		"",
+		"Subcommands:",
+		"  create              Create a group address",
+		"  add-member          Add a person to a group",
+		"  remove-member       Remove a person from a group",
+		"  members             List current and historical memberships",
+	})
+}
+
+func (a *App) writeGroupCreateHelp() {
+	writeHelp(a.stdout, []string{
+		"Usage:",
+		"  agent-mailbox group create --group ADDRESS [--json | --yaml]",
+		"",
+		"Options:",
+		"  --group ADDRESS     Group address",
+		"  --json              Emit JSON",
+		"  --yaml              Emit YAML",
+	})
+}
+
+func (a *App) writeGroupAddMemberHelp() {
+	writeHelp(a.stdout, []string{
+		"Usage:",
+		"  agent-mailbox group add-member --group ADDRESS --person PERSON [--json | --yaml]",
+		"",
+		"Options:",
+		"  --group ADDRESS     Group address",
+		"  --person PERSON     Person identity",
+		"  --json              Emit JSON",
+		"  --yaml              Emit YAML",
+	})
+}
+
+func (a *App) writeGroupRemoveMemberHelp() {
+	writeHelp(a.stdout, []string{
+		"Usage:",
+		"  agent-mailbox group remove-member --group ADDRESS --person PERSON [--json | --yaml]",
+		"",
+		"Options:",
+		"  --group ADDRESS     Group address",
+		"  --person PERSON     Person identity",
+		"  --json              Emit JSON",
+		"  --yaml              Emit YAML",
+	})
+}
+
+func (a *App) writeGroupMembersHelp() {
+	writeHelp(a.stdout, []string{
+		"Usage:",
+		"  agent-mailbox group members --group ADDRESS [--json | --yaml]",
+		"",
+		"Options:",
+		"  --group ADDRESS     Group address",
+		"  --json              Emit JSON",
+		"  --yaml              Emit YAML",
 	})
 }
 
@@ -717,10 +793,291 @@ func (a *App) writeFailHelp() {
 	})
 }
 
+func (a *App) writeAddressHelp() {
+	writeHelp(a.stdout, []string{
+		"Usage:",
+		"  agent-mailbox address <subcommand> [options]",
+		"",
+		"Subcommands:",
+		"  inspect             Inspect endpoint/group binding for one address",
+	})
+}
+
+func (a *App) writeAddressInspectHelp() {
+	writeHelp(a.stdout, []string{
+		"Usage:",
+		"  agent-mailbox address inspect --address ADDRESS [--json | --yaml]",
+		"",
+		"Options:",
+		"  --address ADDRESS   Address to inspect",
+		"  --json              Emit JSON",
+		"  --yaml              Emit YAML",
+	})
+}
+
 func writeHelp(w io.Writer, lines []string) {
 	for _, line := range lines {
 		fmt.Fprintln(w, line)
 	}
+}
+
+func (a *App) prepareGroupCommand(args []string) (preparedCommand, error) {
+	if len(args) == 0 {
+		return nil, errors.New("expected a group subcommand: create, add-member, remove-member, or members")
+	}
+	if isHelpArg(args[0]) {
+		a.writeGroupHelp()
+		return nil, ErrHelpRequested
+	}
+
+	switch args[0] {
+	case "create":
+		return a.prepareGroupCreateCommand(args[1:])
+	case "add-member":
+		return a.prepareGroupAddMemberCommand(args[1:])
+	case "remove-member":
+		return a.prepareGroupRemoveMemberCommand(args[1:])
+	case "members":
+		return a.prepareGroupMembersCommand(args[1:])
+	default:
+		return nil, fmt.Errorf("unknown group subcommand %q", args[0])
+	}
+}
+
+func (a *App) prepareGroupCreateCommand(args []string) (preparedCommand, error) {
+	fs := flag.NewFlagSet("agent-mailbox group create", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+
+	var groupAddress string
+	var formats outputFlags
+	fs.StringVar(&groupAddress, "group", "", "group address")
+	formats.register(fs, "emit JSON", "emit YAML")
+
+	if err := a.parseCommandFlags(fs, args, a.writeGroupCreateHelp); err != nil {
+		return nil, err
+	}
+	if err := requireFlag(groupAddress, "--group"); err != nil {
+		return nil, err
+	}
+	format, err := formats.resolve()
+	if err != nil {
+		return nil, err
+	}
+
+	return func(ctx context.Context, store *Store) error {
+		group, err := store.CreateGroup(ctx, groupAddress)
+		if err != nil {
+			return err
+		}
+		if format != outputFormatText {
+			return a.writeStructuredOutput(format, group)
+		}
+		_, err = fmt.Fprintf(a.stdout, "group_id=%s address=%s\n", group.GroupID, group.Address)
+		return err
+	}, nil
+}
+
+func (a *App) prepareGroupAddMemberCommand(args []string) (preparedCommand, error) {
+	fs := flag.NewFlagSet("agent-mailbox group add-member", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+
+	var groupAddress string
+	var person string
+	var formats outputFlags
+	fs.StringVar(&groupAddress, "group", "", "group address")
+	fs.StringVar(&person, "person", "", "person identity")
+	formats.register(fs, "emit JSON", "emit YAML")
+
+	if err := a.parseCommandFlags(fs, args, a.writeGroupAddMemberHelp); err != nil {
+		return nil, err
+	}
+	if err := requireFlag(groupAddress, "--group"); err != nil {
+		return nil, err
+	}
+	if err := requireFlag(person, "--person"); err != nil {
+		return nil, err
+	}
+	format, err := formats.resolve()
+	if err != nil {
+		return nil, err
+	}
+
+	return func(ctx context.Context, store *Store) error {
+		membership, err := store.AddGroupMember(ctx, groupAddress, person)
+		if err != nil {
+			return err
+		}
+		if format != outputFormatText {
+			return a.writeStructuredOutput(format, membership)
+		}
+		_, err = fmt.Fprintf(
+			a.stdout,
+			"membership_id=%s group=%s person=%s active=%t joined_at=%s\n",
+			membership.MembershipID,
+			membership.GroupAddress,
+			membership.Person,
+			membership.Active,
+			membership.JoinedAt,
+		)
+		return err
+	}, nil
+}
+
+func (a *App) prepareGroupRemoveMemberCommand(args []string) (preparedCommand, error) {
+	fs := flag.NewFlagSet("agent-mailbox group remove-member", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+
+	var groupAddress string
+	var person string
+	var formats outputFlags
+	fs.StringVar(&groupAddress, "group", "", "group address")
+	fs.StringVar(&person, "person", "", "person identity")
+	formats.register(fs, "emit JSON", "emit YAML")
+
+	if err := a.parseCommandFlags(fs, args, a.writeGroupRemoveMemberHelp); err != nil {
+		return nil, err
+	}
+	if err := requireFlag(groupAddress, "--group"); err != nil {
+		return nil, err
+	}
+	if err := requireFlag(person, "--person"); err != nil {
+		return nil, err
+	}
+	format, err := formats.resolve()
+	if err != nil {
+		return nil, err
+	}
+
+	return func(ctx context.Context, store *Store) error {
+		membership, err := store.RemoveGroupMember(ctx, groupAddress, person)
+		if err != nil {
+			return err
+		}
+		if format != outputFormatText {
+			return a.writeStructuredOutput(format, membership)
+		}
+		leftAt := ""
+		if membership.LeftAt != nil {
+			leftAt = *membership.LeftAt
+		}
+		_, err = fmt.Fprintf(
+			a.stdout,
+			"membership_id=%s group=%s person=%s active=%t joined_at=%s left_at=%s\n",
+			membership.MembershipID,
+			membership.GroupAddress,
+			membership.Person,
+			membership.Active,
+			membership.JoinedAt,
+			leftAt,
+		)
+		return err
+	}, nil
+}
+
+func (a *App) prepareGroupMembersCommand(args []string) (preparedCommand, error) {
+	fs := flag.NewFlagSet("agent-mailbox group members", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+
+	var groupAddress string
+	var formats outputFlags
+	fs.StringVar(&groupAddress, "group", "", "group address")
+	formats.register(fs, "emit JSON", "emit YAML")
+
+	if err := a.parseCommandFlags(fs, args, a.writeGroupMembersHelp); err != nil {
+		return nil, err
+	}
+	if err := requireFlag(groupAddress, "--group"); err != nil {
+		return nil, err
+	}
+	format, err := formats.resolve()
+	if err != nil {
+		return nil, err
+	}
+
+	return func(ctx context.Context, store *Store) error {
+		memberships, err := store.ListGroupMembers(ctx, groupAddress)
+		if err != nil {
+			return err
+		}
+		if format != outputFormatText {
+			return a.writeStructuredOutput(format, memberships)
+		}
+		for _, membership := range memberships {
+			leftAt := ""
+			if membership.LeftAt != nil {
+				leftAt = *membership.LeftAt
+			}
+			if _, err := fmt.Fprintf(
+				a.stdout,
+				"membership_id=%s person=%s active=%t joined_at=%s left_at=%s\n",
+				membership.MembershipID,
+				membership.Person,
+				membership.Active,
+				membership.JoinedAt,
+				leftAt,
+			); err != nil {
+				return err
+			}
+		}
+		return nil
+	}, nil
+}
+
+func (a *App) prepareAddressCommand(args []string) (preparedCommand, error) {
+	if len(args) == 0 {
+		return nil, errors.New("expected an address subcommand: inspect")
+	}
+	if isHelpArg(args[0]) {
+		a.writeAddressHelp()
+		return nil, ErrHelpRequested
+	}
+
+	switch args[0] {
+	case "inspect":
+		return a.prepareAddressInspectCommand(args[1:])
+	default:
+		return nil, fmt.Errorf("unknown address subcommand %q", args[0])
+	}
+}
+
+func (a *App) prepareAddressInspectCommand(args []string) (preparedCommand, error) {
+	fs := flag.NewFlagSet("agent-mailbox address inspect", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+
+	var address string
+	var formats outputFlags
+	fs.StringVar(&address, "address", "", "address to inspect")
+	formats.register(fs, "emit JSON", "emit YAML")
+
+	if err := a.parseCommandFlags(fs, args, a.writeAddressInspectHelp); err != nil {
+		return nil, err
+	}
+	if err := requireFlag(address, "--address"); err != nil {
+		return nil, err
+	}
+	format, err := formats.resolve()
+	if err != nil {
+		return nil, err
+	}
+
+	return func(ctx context.Context, store *Store) error {
+		inspection, err := store.InspectAddress(ctx, address)
+		if err != nil {
+			return err
+		}
+		if format != outputFormatText {
+			return a.writeStructuredOutput(format, inspection)
+		}
+		switch inspection.Kind {
+		case AddressKindEndpoint:
+			_, err = fmt.Fprintf(a.stdout, "address=%s kind=%s endpoint_id=%s\n", inspection.Address, inspection.Kind, valueOrEmpty(inspection.EndpointID))
+		case AddressKindGroup:
+			_, err = fmt.Fprintf(a.stdout, "address=%s kind=%s group_id=%s\n", inspection.Address, inspection.Kind, valueOrEmpty(inspection.GroupID))
+		default:
+			_, err = fmt.Fprintf(a.stdout, "address=%s kind=%s\n", inspection.Address, inspection.Kind)
+		}
+		return err
+	}, nil
 }
 
 func flagWasProvided(fs *flag.FlagSet, name string) bool {

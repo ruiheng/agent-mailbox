@@ -118,6 +118,9 @@ func (s *Store) RegisterEndpoint(ctx context.Context, address string) (EndpointR
 	if address == "" {
 		return EndpointRegistration{}, errors.New("endpoint address is required")
 	}
+	if err := s.rejectGroupAddress(ctx, address); err != nil {
+		return EndpointRegistration{}, err
+	}
 
 	tx, err := s.writeDB.BeginTx(ctx, nil)
 	if err != nil {
@@ -144,6 +147,9 @@ func (s *Store) Send(ctx context.Context, params SendParams) (SendResult, error)
 	if len(params.Body) == 0 {
 		return SendResult{}, ErrEmptyBody
 	}
+	if err := s.rejectGroupAddress(ctx, toAddress); err != nil {
+		return SendResult{}, err
+	}
 	contentType := strings.TrimSpace(params.ContentType)
 	if contentType == "" {
 		contentType = "text/plain"
@@ -151,6 +157,11 @@ func (s *Store) Send(ctx context.Context, params SendParams) (SendResult, error)
 	schemaVersion := strings.TrimSpace(params.SchemaVersion)
 	if schemaVersion == "" {
 		schemaVersion = "v1"
+	}
+	if address := strings.TrimSpace(params.FromAddress); address != "" {
+		if err := s.rejectGroupAddress(ctx, address); err != nil {
+			return SendResult{}, err
+		}
 	}
 
 	blobRef, bodySize, bodySHA256, err := s.writeBlob(params.Body)
@@ -313,6 +324,17 @@ WHERE address = ?
 	return endpointID, true, nil
 }
 
+func (s *Store) rejectGroupAddress(ctx context.Context, address string) error {
+	groupRecord, found, err := lookupGroupRecord(ctx, s.readDB, address)
+	if err != nil {
+		return fmt.Errorf("resolve group address reservation for %q: %w", address, err)
+	}
+	if found {
+		return fmt.Errorf("endpoint address %q is already bound to group %q: %w", address, groupRecord.GroupID, ErrAddressReservedByGroup)
+	}
+	return nil
+}
+
 func (s *Store) ensureEndpointAddress(ctx context.Context, tx *sql.Tx, address string) (EndpointRegistration, error) {
 	endpointID, found, err := s.lookupEndpointID(ctx, tx, address)
 	if err != nil {
@@ -337,6 +359,18 @@ INSERT INTO endpoints (endpoint_id, created_at, metadata_json)
 VALUES (?, ?, '{}')
 `, endpointID, timestamp); err != nil {
 		return EndpointRegistration{}, fmt.Errorf("insert endpoint: %w", err)
+	}
+
+	if groupRecord, found, err := lookupGroupRecord(ctx, tx, address); err != nil {
+		return EndpointRegistration{}, fmt.Errorf("check group collision for endpoint address %q: %w", address, err)
+	} else if found {
+		if _, err := tx.ExecContext(ctx, `
+DELETE FROM endpoints
+WHERE endpoint_id = ?
+`, endpointID); err != nil {
+			return EndpointRegistration{}, fmt.Errorf("delete unused endpoint after group collision: %w", err)
+		}
+		return EndpointRegistration{}, fmt.Errorf("endpoint address %q is already bound to group %q: %w", address, groupRecord.GroupID, ErrAddressReservedByGroup)
 	}
 
 	result, err := tx.ExecContext(ctx, `
