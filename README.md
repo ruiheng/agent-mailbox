@@ -114,6 +114,19 @@ By default, `send` prints only `delivery_id=...`. Add `--full` when you also
 need the legacy `message_id` and `blob_id`, or add `--json` / `--yaml` for the
 same compact or full payloads in structured form.
 
+Group delivery is explicit. Create a group address first, then send with
+`--group`:
+
+```bash
+printf 'group update\n' | \
+agent-mailbox --state-dir /tmp/mailbox-demo \
+  send --to group/ops --group --from agent/sender --body-file - --json
+```
+
+Group send keeps personal send semantics unchanged: plain `send --to <address>`
+still targets the personal queue path and fails if `<address>` is already a
+known group address.
+
 Receive the next claimable message:
 
 ```bash

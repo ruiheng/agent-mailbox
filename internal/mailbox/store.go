@@ -51,18 +51,29 @@ type SendParams struct {
 	ContentType   string
 	SchemaVersion string
 	Body          []byte
+	Group         bool
 }
 
 type SendResult struct {
-	MessageID    string
-	DeliveryID   string
-	BodyBlobRef  string
-	RecipientID  string
-	SenderID     *string
-	BodySHA256   string
-	BodySize     int64
-	VisibleAtUTC string
+	Mode             string
+	MessageID        string
+	DeliveryID       string
+	BodyBlobRef      string
+	RecipientID      string
+	SenderID         *string
+	BodySHA256       string
+	BodySize         int64
+	VisibleAtUTC     string
+	GroupID          string
+	GroupAddress     string
+	EligibleCount    int
+	MessageCreatedAt string
 }
+
+const (
+	SendModePersonal = "personal"
+	SendModeGroup    = "group"
+)
 
 type ListParams struct {
 	Address string
@@ -147,9 +158,6 @@ func (s *Store) Send(ctx context.Context, params SendParams) (SendResult, error)
 	if len(params.Body) == 0 {
 		return SendResult{}, ErrEmptyBody
 	}
-	if err := s.rejectGroupAddress(ctx, toAddress); err != nil {
-		return SendResult{}, err
-	}
 	contentType := strings.TrimSpace(params.ContentType)
 	if contentType == "" {
 		contentType = "text/plain"
@@ -160,6 +168,17 @@ func (s *Store) Send(ctx context.Context, params SendParams) (SendResult, error)
 	}
 	if address := strings.TrimSpace(params.FromAddress); address != "" {
 		if err := s.rejectGroupAddress(ctx, address); err != nil {
+			return SendResult{}, err
+		}
+	}
+	if params.Group {
+		if _, found, err := lookupGroupRecord(ctx, s.readDB, toAddress); err != nil {
+			return SendResult{}, fmt.Errorf("resolve group address %q: %w", toAddress, err)
+		} else if !found {
+			return SendResult{}, fmt.Errorf("group %q: %w", toAddress, ErrGroupNotFound)
+		}
+	} else {
+		if err := s.rejectGroupAddress(ctx, toAddress); err != nil {
 			return SendResult{}, err
 		}
 	}
@@ -174,30 +193,12 @@ func (s *Store) Send(ctx context.Context, params SendParams) (SendResult, error)
 	if err != nil {
 		return SendResult{}, err
 	}
-	deliveryID, err := newPrefixedID("dlv")
-	if err != nil {
-		return SendResult{}, err
-	}
-	messageEventID, err := newPrefixedID("evt")
-	if err != nil {
-		return SendResult{}, err
-	}
-	deliveryEventID, err := newPrefixedID("evt")
-	if err != nil {
-		return SendResult{}, err
-	}
 
 	tx, err := s.writeDB.BeginTx(ctx, nil)
 	if err != nil {
 		return SendResult{}, fmt.Errorf("begin send transaction: %w", err)
 	}
 	defer tx.Rollback()
-
-	recipientRegistration, err := s.ensureEndpointAddress(ctx, tx, toAddress)
-	if err != nil {
-		return SendResult{}, fmt.Errorf("resolve recipient address: %w", err)
-	}
-	recipientEndpointID := recipientRegistration.EndpointID
 
 	var senderEndpointID *string
 	if address := strings.TrimSpace(params.FromAddress); address != "" {
@@ -227,9 +228,46 @@ INSERT INTO messages (
   reply_to_message_id,
   metadata_json
 ) VALUES (?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, NULL, '{}')
-`, messageID, timestamp, senderEndpointValue, params.Subject, contentType, schemaVersion, blobRef, bodySize, bodySHA256); err != nil {
+	`, messageID, timestamp, senderEndpointValue, params.Subject, contentType, schemaVersion, blobRef, bodySize, bodySHA256); err != nil {
 		return SendResult{}, fmt.Errorf("insert message: %w", err)
 	}
+
+	if params.Group {
+		result, err := s.sendGroupMessage(ctx, tx, messageID, timestamp, toAddress, params.Subject, senderEndpointValue, senderEndpointID)
+		if err != nil {
+			return SendResult{}, err
+		}
+		if err := tx.Commit(); err != nil {
+			return SendResult{}, fmt.Errorf("commit send transaction: %w", err)
+		}
+		result.Mode = SendModeGroup
+		result.MessageID = messageID
+		result.BodyBlobRef = blobRef
+		result.SenderID = senderEndpointID
+		result.BodySHA256 = bodySHA256
+		result.BodySize = bodySize
+		result.MessageCreatedAt = timestamp
+		return result, nil
+	}
+
+	deliveryID, err := newPrefixedID("dlv")
+	if err != nil {
+		return SendResult{}, err
+	}
+	messageEventID, err := newPrefixedID("evt")
+	if err != nil {
+		return SendResult{}, err
+	}
+	deliveryEventID, err := newPrefixedID("evt")
+	if err != nil {
+		return SendResult{}, err
+	}
+
+	recipientRegistration, err := s.ensureEndpointAddress(ctx, tx, toAddress)
+	if err != nil {
+		return SendResult{}, fmt.Errorf("resolve recipient address: %w", err)
+	}
+	recipientEndpointID := recipientRegistration.EndpointID
 
 	if _, err := tx.ExecContext(ctx, `
 INSERT INTO deliveries (
@@ -282,14 +320,112 @@ VALUES (?, ?, ?, ?, ?, ?, ?)
 	}
 
 	return SendResult{
-		MessageID:    messageID,
-		DeliveryID:   deliveryID,
-		BodyBlobRef:  blobRef,
-		RecipientID:  recipientEndpointID,
-		SenderID:     senderEndpointID,
-		BodySHA256:   bodySHA256,
-		BodySize:     bodySize,
-		VisibleAtUTC: timestamp,
+		Mode:             SendModePersonal,
+		MessageID:        messageID,
+		DeliveryID:       deliveryID,
+		BodyBlobRef:      blobRef,
+		RecipientID:      recipientEndpointID,
+		SenderID:         senderEndpointID,
+		BodySHA256:       bodySHA256,
+		BodySize:         bodySize,
+		VisibleAtUTC:     timestamp,
+		MessageCreatedAt: timestamp,
+	}, nil
+}
+
+func (s *Store) sendGroupMessage(
+	ctx context.Context,
+	tx *sql.Tx,
+	messageID string,
+	timestamp string,
+	toAddress string,
+	subject string,
+	senderEndpointValue any,
+	senderEndpointID *string,
+) (SendResult, error) {
+	group, found, err := lookupGroupRecord(ctx, tx, toAddress)
+	if err != nil {
+		return SendResult{}, fmt.Errorf("resolve group address %q: %w", toAddress, err)
+	}
+	if !found {
+		return SendResult{}, fmt.Errorf("group %q: %w", toAddress, ErrGroupNotFound)
+	}
+
+	memberships, err := listActiveGroupMemberships(ctx, tx, group.GroupID)
+	if err != nil {
+		return SendResult{}, fmt.Errorf("list active members for group %q: %w", toAddress, err)
+	}
+	eligibleCount := len(memberships)
+
+	if _, err := tx.ExecContext(ctx, `
+INSERT INTO group_messages (
+  message_id,
+  group_id,
+  created_at,
+  eligible_count
+) VALUES (?, ?, ?, ?)
+	`, messageID, group.GroupID, timestamp, eligibleCount); err != nil {
+		return SendResult{}, fmt.Errorf("insert group message: %w", err)
+	}
+
+	for _, membership := range memberships {
+		if _, err := tx.ExecContext(ctx, `
+INSERT INTO group_message_eligibility (
+  message_id,
+  person_id,
+  membership_id,
+  eligible_at
+) VALUES (?, ?, ?, ?)
+		`, messageID, membership.PersonID, membership.MembershipID, timestamp); err != nil {
+			return SendResult{}, fmt.Errorf("insert eligibility for group %q person %q: %w", toAddress, membership.Person, err)
+		}
+	}
+
+	messageEventID, err := newPrefixedID("evt")
+	if err != nil {
+		return SendResult{}, err
+	}
+	groupMessageEventID, err := newPrefixedID("evt")
+	if err != nil {
+		return SendResult{}, err
+	}
+
+	messageDetailJSON, err := marshalDetail(map[string]string{
+		"recipient_address": toAddress,
+		"subject":           subject,
+		"mode":              SendModeGroup,
+	})
+	if err != nil {
+		return SendResult{}, err
+	}
+	if _, err := tx.ExecContext(ctx, `
+INSERT INTO events (event_id, created_at, event_type, endpoint_id, message_id, detail_json)
+VALUES (?, ?, ?, ?, ?, ?)
+	`, messageEventID, timestamp, "message_created", senderEndpointValue, messageID, messageDetailJSON); err != nil {
+		return SendResult{}, fmt.Errorf("insert group message event: %w", err)
+	}
+
+	groupDetailJSON, err := marshalDetail(map[string]string{
+		"group_id":       group.GroupID,
+		"group_address":  group.Address,
+		"eligible_count": fmt.Sprintf("%d", eligibleCount),
+	})
+	if err != nil {
+		return SendResult{}, err
+	}
+	if _, err := tx.ExecContext(ctx, `
+INSERT INTO events (event_id, created_at, event_type, endpoint_id, message_id, detail_json)
+VALUES (?, ?, ?, ?, ?, ?)
+	`, groupMessageEventID, timestamp, "group_message_created", senderEndpointValue, messageID, groupDetailJSON); err != nil {
+		return SendResult{}, fmt.Errorf("insert group creation event: %w", err)
+	}
+
+	return SendResult{
+		GroupID:          group.GroupID,
+		GroupAddress:     group.Address,
+		EligibleCount:    eligibleCount,
+		MessageCreatedAt: timestamp,
+		SenderID:         senderEndpointID,
 	}, nil
 }
 

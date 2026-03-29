@@ -450,3 +450,36 @@ WHERE gm.group_id = ?
 	}
 	return record, true, nil
 }
+
+func listActiveGroupMemberships(ctx context.Context, querier interface {
+	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
+}, groupID string) ([]GroupMembershipRecord, error) {
+	rows, err := querier.QueryContext(ctx, `
+SELECT gm.membership_id, gm.person_id, p.person, gm.joined_at, g.address
+FROM group_memberships AS gm
+JOIN persons AS p ON p.person_id = gm.person_id
+JOIN groups AS g ON g.group_id = gm.group_id
+WHERE gm.group_id = ?
+  AND gm.left_at IS NULL
+ORDER BY gm.joined_at ASC, gm.membership_id ASC
+	`, groupID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var memberships []GroupMembershipRecord
+	for rows.Next() {
+		var membership GroupMembershipRecord
+		if err := rows.Scan(&membership.MembershipID, &membership.PersonID, &membership.Person, &membership.JoinedAt, &membership.GroupAddress); err != nil {
+			return nil, err
+		}
+		membership.GroupID = groupID
+		membership.Active = true
+		memberships = append(memberships, membership)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return memberships, nil
+}

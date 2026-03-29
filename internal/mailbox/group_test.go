@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -298,5 +299,274 @@ func TestGroupControlPlaneCLI(t *testing.T) {
 	}
 	if unboundInspection.Kind != AddressKindUnbound {
 		t.Fatalf("unbound inspect kind = %q, want %q", unboundInspection.Kind, AddressKindUnbound)
+	}
+}
+
+func TestExplicitGroupSendStoresMessageWithoutDelivery(t *testing.T) {
+	t.Parallel()
+
+	runtime, err := OpenRuntime(context.Background(), filepath.Join(t.TempDir(), "mailbox-state"))
+	if err != nil {
+		t.Fatalf("OpenRuntime() error = %v", err)
+	}
+	defer runtime.Close()
+
+	store := runtime.Store()
+	group, err := store.CreateGroup(context.Background(), "group/ops")
+	if err != nil {
+		t.Fatalf("CreateGroup() error = %v", err)
+	}
+	if _, err := store.AddGroupMember(context.Background(), group.Address, "alice"); err != nil {
+		t.Fatalf("AddGroupMember(alice) error = %v", err)
+	}
+	if _, err := store.AddGroupMember(context.Background(), group.Address, "bob"); err != nil {
+		t.Fatalf("AddGroupMember(bob) error = %v", err)
+	}
+
+	result, err := store.Send(context.Background(), SendParams{
+		ToAddress:     group.Address,
+		FromAddress:   "agent/sender",
+		Subject:       "group update",
+		ContentType:   "text/plain",
+		SchemaVersion: "v1",
+		Body:          []byte("hello group"),
+		Group:         true,
+	})
+	if err != nil {
+		t.Fatalf("Send(group) error = %v", err)
+	}
+	if result.Mode != SendModeGroup {
+		t.Fatalf("Send(group) mode = %q, want %q", result.Mode, SendModeGroup)
+	}
+	if result.DeliveryID != "" {
+		t.Fatalf("Send(group) delivery_id = %q, want empty", result.DeliveryID)
+	}
+	if result.GroupID != group.GroupID {
+		t.Fatalf("Send(group) group_id = %q, want %q", result.GroupID, group.GroupID)
+	}
+	if result.GroupAddress != group.Address {
+		t.Fatalf("Send(group) group_address = %q, want %q", result.GroupAddress, group.Address)
+	}
+	if result.EligibleCount != 2 {
+		t.Fatalf("Send(group) eligible_count = %d, want 2", result.EligibleCount)
+	}
+	if strings.TrimSpace(result.MessageCreatedAt) == "" {
+		t.Fatalf("Send(group) message_created_at = %q, want non-empty", result.MessageCreatedAt)
+	}
+
+	var messageCount int
+	if err := runtime.DB().QueryRow(`SELECT COUNT(*) FROM messages`).Scan(&messageCount); err != nil {
+		t.Fatalf("count messages error = %v", err)
+	}
+	if messageCount != 1 {
+		t.Fatalf("message count = %d, want 1", messageCount)
+	}
+
+	var deliveryCount int
+	if err := runtime.DB().QueryRow(`SELECT COUNT(*) FROM deliveries`).Scan(&deliveryCount); err != nil {
+		t.Fatalf("count deliveries error = %v", err)
+	}
+	if deliveryCount != 0 {
+		t.Fatalf("delivery count = %d, want 0", deliveryCount)
+	}
+
+	var storedGroupID string
+	var eligibleCount int
+	if err := runtime.DB().QueryRow(`
+SELECT group_id, eligible_count
+FROM group_messages
+WHERE message_id = ?
+	`, result.MessageID).Scan(&storedGroupID, &eligibleCount); err != nil {
+		t.Fatalf("select group_messages row error = %v", err)
+	}
+	if storedGroupID != group.GroupID {
+		t.Fatalf("group_messages group_id = %q, want %q", storedGroupID, group.GroupID)
+	}
+	if eligibleCount != 2 {
+		t.Fatalf("group_messages eligible_count = %d, want 2", eligibleCount)
+	}
+
+	var eligibilityCount int
+	if err := runtime.DB().QueryRow(`
+SELECT COUNT(*)
+FROM group_message_eligibility
+WHERE message_id = ?
+	`, result.MessageID).Scan(&eligibilityCount); err != nil {
+		t.Fatalf("count group_message_eligibility error = %v", err)
+	}
+	if eligibilityCount != 2 {
+		t.Fatalf("group_message_eligibility count = %d, want 2", eligibilityCount)
+	}
+
+	var groupEndpointCount int
+	if err := runtime.DB().QueryRow(`SELECT COUNT(*) FROM endpoint_addresses WHERE address = ?`, group.Address).Scan(&groupEndpointCount); err != nil {
+		t.Fatalf("count endpoint_addresses(group) error = %v", err)
+	}
+	if groupEndpointCount != 0 {
+		t.Fatalf("group address endpoint count = %d, want 0", groupEndpointCount)
+	}
+}
+
+func TestExplicitGroupSendAllowsZeroMemberGroups(t *testing.T) {
+	t.Parallel()
+
+	runtime, err := OpenRuntime(context.Background(), filepath.Join(t.TempDir(), "mailbox-state"))
+	if err != nil {
+		t.Fatalf("OpenRuntime() error = %v", err)
+	}
+	defer runtime.Close()
+
+	store := runtime.Store()
+	group, err := store.CreateGroup(context.Background(), "group/empty")
+	if err != nil {
+		t.Fatalf("CreateGroup() error = %v", err)
+	}
+
+	result, err := store.Send(context.Background(), SendParams{
+		ToAddress:     group.Address,
+		Subject:       "empty group update",
+		ContentType:   "text/plain",
+		SchemaVersion: "v1",
+		Body:          []byte("still durable"),
+		Group:         true,
+	})
+	if err != nil {
+		t.Fatalf("Send(zero-member group) error = %v", err)
+	}
+	if result.EligibleCount != 0 {
+		t.Fatalf("Send(zero-member group) eligible_count = %d, want 0", result.EligibleCount)
+	}
+
+	var eligibilityCount int
+	if err := runtime.DB().QueryRow(`
+SELECT COUNT(*)
+FROM group_message_eligibility
+WHERE message_id = ?
+	`, result.MessageID).Scan(&eligibilityCount); err != nil {
+		t.Fatalf("count group_message_eligibility error = %v", err)
+	}
+	if eligibilityCount != 0 {
+		t.Fatalf("group_message_eligibility count = %d, want 0", eligibilityCount)
+	}
+}
+
+func TestExplicitGroupSendRejectsUnknownGroupBeforeWritingBlob(t *testing.T) {
+	t.Parallel()
+
+	runtime, err := OpenRuntime(context.Background(), filepath.Join(t.TempDir(), "mailbox-state"))
+	if err != nil {
+		t.Fatalf("OpenRuntime() error = %v", err)
+	}
+	defer runtime.Close()
+
+	store := runtime.Store()
+	if _, err := store.Send(context.Background(), SendParams{
+		ToAddress:     "group/missing",
+		Subject:       "missing group",
+		ContentType:   "text/plain",
+		SchemaVersion: "v1",
+		Body:          []byte("hello"),
+		Group:         true,
+	}); !errors.Is(err, ErrGroupNotFound) {
+		t.Fatalf("Send(unknown group) error = %v, want ErrGroupNotFound", err)
+	}
+
+	var messageCount int
+	if err := runtime.DB().QueryRow(`SELECT COUNT(*) FROM messages`).Scan(&messageCount); err != nil {
+		t.Fatalf("count messages error = %v", err)
+	}
+	if messageCount != 0 {
+		t.Fatalf("message count = %d, want 0", messageCount)
+	}
+
+	entries, err := os.ReadDir(runtime.BlobDir())
+	if err != nil {
+		t.Fatalf("os.ReadDir(blob dir) error = %v", err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("len(blob entries) = %d, want 0", len(entries))
+	}
+}
+
+func TestSendCLIShapesStayCompatibleForPersonalAndGroup(t *testing.T) {
+	t.Parallel()
+
+	stateDir := filepath.Join(t.TempDir(), "mailbox-state")
+
+	createApp := NewApp(strings.NewReader(""), &bytes.Buffer{}, &bytes.Buffer{})
+	if err := createApp.Run(context.Background(), []string{
+		"--state-dir", stateDir,
+		"group",
+		"create",
+		"--group", "group/ops",
+	}); err != nil {
+		t.Fatalf("group create error = %v", err)
+	}
+
+	addApp := NewApp(strings.NewReader(""), &bytes.Buffer{}, &bytes.Buffer{})
+	if err := addApp.Run(context.Background(), []string{
+		"--state-dir", stateDir,
+		"group",
+		"add-member",
+		"--group", "group/ops",
+		"--person", "alice",
+	}); err != nil {
+		t.Fatalf("group add-member error = %v", err)
+	}
+
+	personalStdout := &bytes.Buffer{}
+	personalApp := NewApp(strings.NewReader("personal body"), personalStdout, &bytes.Buffer{})
+	if err := personalApp.Run(context.Background(), []string{
+		"--state-dir", stateDir,
+		"send",
+		"--to", "workflow/personal",
+		"--body-file", "-",
+		"--json",
+	}); err != nil {
+		t.Fatalf("personal send error = %v", err)
+	}
+
+	var personalPayload map[string]any
+	if err := json.Unmarshal(personalStdout.Bytes(), &personalPayload); err != nil {
+		t.Fatalf("json.Unmarshal(personal send) error = %v", err)
+	}
+	if len(personalPayload) != 1 {
+		t.Fatalf("len(personal payload) = %d, want 1", len(personalPayload))
+	}
+	if _, ok := personalPayload["delivery_id"]; !ok {
+		t.Fatalf("personal payload = %v, want delivery_id only", personalPayload)
+	}
+
+	groupStdout := &bytes.Buffer{}
+	groupApp := NewApp(strings.NewReader("group body"), groupStdout, &bytes.Buffer{})
+	if err := groupApp.Run(context.Background(), []string{
+		"--state-dir", stateDir,
+		"send",
+		"--to", "group/ops",
+		"--group",
+		"--body-file", "-",
+		"--json",
+	}); err != nil {
+		t.Fatalf("group send error = %v", err)
+	}
+
+	var groupPayload map[string]any
+	if err := json.Unmarshal(groupStdout.Bytes(), &groupPayload); err != nil {
+		t.Fatalf("json.Unmarshal(group send) error = %v", err)
+	}
+	if groupPayload["mode"] != SendModeGroup {
+		t.Fatalf("group payload mode = %v, want %q", groupPayload["mode"], SendModeGroup)
+	}
+	if groupPayload["group_address"] != "group/ops" {
+		t.Fatalf("group payload group_address = %v, want group/ops", groupPayload["group_address"])
+	}
+	if _, ok := groupPayload["delivery_id"]; ok {
+		t.Fatalf("group payload = %v, want no delivery_id", groupPayload)
+	}
+	if _, ok := groupPayload["eligible_count"]; !ok {
+		t.Fatalf("group payload = %v, want eligible_count", groupPayload)
+	}
+	if _, ok := groupPayload["message_created_at"]; !ok {
+		t.Fatalf("group payload = %v, want message_created_at", groupPayload)
 	}
 }

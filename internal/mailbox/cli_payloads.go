@@ -1,13 +1,24 @@
 package mailbox
 
 type sendResultSummary struct {
-	DeliveryID string `json:"delivery_id"`
+	Mode             string `json:"mode,omitempty"`
+	DeliveryID       string `json:"delivery_id,omitempty"`
+	MessageID        string `json:"message_id,omitempty"`
+	GroupID          string `json:"group_id,omitempty"`
+	GroupAddress     string `json:"group_address,omitempty"`
+	EligibleCount    *int   `json:"eligible_count,omitempty"`
+	MessageCreatedAt string `json:"message_created_at,omitempty"`
 }
 
 type sendResultFull struct {
-	MessageID  string `json:"message_id"`
-	DeliveryID string `json:"delivery_id"`
-	BlobID     string `json:"blob_id"`
+	Mode             string `json:"mode,omitempty"`
+	MessageID        string `json:"message_id,omitempty"`
+	DeliveryID       string `json:"delivery_id,omitempty"`
+	BlobID           string `json:"blob_id,omitempty"`
+	GroupID          string `json:"group_id,omitempty"`
+	GroupAddress     string `json:"group_address,omitempty"`
+	EligibleCount    *int   `json:"eligible_count,omitempty"`
+	MessageCreatedAt string `json:"message_created_at,omitempty"`
 }
 
 type receivedMessageSummary struct {
@@ -32,12 +43,34 @@ type listedDeliverySummary struct {
 }
 
 func summarizeSendResult(result SendResult) sendResultSummary {
+	if result.Mode == SendModeGroup {
+		eligibleCount := result.EligibleCount
+		return sendResultSummary{
+			Mode:             SendModeGroup,
+			MessageID:        result.MessageID,
+			GroupID:          result.GroupID,
+			GroupAddress:     result.GroupAddress,
+			EligibleCount:    &eligibleCount,
+			MessageCreatedAt: result.MessageCreatedAt,
+		}
+	}
 	return sendResultSummary{
 		DeliveryID: result.DeliveryID,
 	}
 }
 
 func fullSendResult(result SendResult) sendResultFull {
+	if result.Mode == SendModeGroup {
+		eligibleCount := result.EligibleCount
+		return sendResultFull{
+			Mode:             SendModeGroup,
+			MessageID:        result.MessageID,
+			GroupID:          result.GroupID,
+			GroupAddress:     result.GroupAddress,
+			EligibleCount:    &eligibleCount,
+			MessageCreatedAt: result.MessageCreatedAt,
+		}
+	}
 	return sendResultFull{
 		MessageID:  result.MessageID,
 		DeliveryID: result.DeliveryID,

@@ -186,10 +186,11 @@ Rules:
 
 ### `send`
 
-Queue one message for a recipient address.
+Queue one message for a recipient address, or append one message to a known group
+address when `--group` is set.
 
 ```bash
-agent-mailbox send --to <address> --body-file <path-or-> [--json | --yaml] [--full]
+agent-mailbox send --to <address> --body-file <path-or-> [--group] [--json | --yaml] [--full]
 ```
 
 Use `--json` or `--yaml` for scripts and agents.
@@ -200,17 +201,26 @@ Common options:
 - `--subject <text>`
 - `--content-type <mime-type>`
 - `--schema-version <version>`
+- `--group`
 
 Notes:
 
 - `--body-file -` reads from stdin
 - the message body must not be empty
-- default output is a compact acknowledgement with `delivery_id`
-- add `--full` to return the legacy identifier payload with `message_id`,
+- personal send default output is a compact acknowledgement with `delivery_id`
+- personal `--full` returns the legacy identifier payload with `message_id`,
   `delivery_id`, and `blob_id`
 - `send` creates the recipient address automatically on first use
 - `send` also creates the optional `--from` address automatically on first use
 - `--from` is optional
+- `send --to <address>` always uses personal queue semantics
+- personal send to a known group address fails with an explicit collision error
+- `send --to <group-address> --group` requires an existing group address
+- group send stores one durable message record, creates no `deliveries`, and
+  returns structured output with `mode`, `message_id`, `group_id`,
+  `group_address`, `eligible_count`, and `message_created_at`
+- group send plain-text output is
+  `message_id=<id> group=<address> eligible_count=<n>`
 
 ### `recv`
 

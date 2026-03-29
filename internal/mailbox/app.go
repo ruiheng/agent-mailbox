@@ -126,6 +126,7 @@ func (a *App) prepareSendCommand(args []string) (preparedCommand, error) {
 	var contentType string
 	var schemaVersion string
 	var bodyFile string
+	var groupMode bool
 	var full bool
 	var formats outputFlags
 
@@ -135,6 +136,7 @@ func (a *App) prepareSendCommand(args []string) (preparedCommand, error) {
 	fs.StringVar(&contentType, "content-type", "text/plain", "message content type")
 	fs.StringVar(&schemaVersion, "schema-version", "v1", "sender-defined schema version")
 	fs.StringVar(&bodyFile, "body-file", "", "path to message body, or - for stdin")
+	fs.BoolVar(&groupMode, "group", false, "send to a known group address")
 	fs.BoolVar(&full, "full", false, "emit the full payload")
 	formats.register(fs, "emit JSON", "emit YAML")
 
@@ -161,6 +163,7 @@ func (a *App) prepareSendCommand(args []string) (preparedCommand, error) {
 		ContentType:   contentType,
 		SchemaVersion: schemaVersion,
 		Body:          body,
+		Group:         groupMode,
 	}
 
 	return func(ctx context.Context, store *Store) error {
@@ -637,6 +640,7 @@ func (a *App) writeSendHelp() {
 		"Options:",
 		"  --to ADDRESS           Recipient address",
 		"  --from ADDRESS         Sender address",
+		"  --group                Send to a known group address",
 		"  --subject TEXT         Message subject",
 		"  --content-type TYPE    Message content type",
 		"  --schema-version VER   Sender-defined schema version",

@@ -54,11 +54,39 @@ func (a *App) writeStructuredOutput(format outputFormat, value any) error {
 }
 
 func (a *App) writeSendResultText(result sendResultSummary) error {
+	if result.Mode == SendModeGroup {
+		eligibleCount := 0
+		if result.EligibleCount != nil {
+			eligibleCount = *result.EligibleCount
+		}
+		_, err := fmt.Fprintf(
+			a.stdout,
+			"message_id=%s group=%s eligible_count=%d\n",
+			result.MessageID,
+			result.GroupAddress,
+			eligibleCount,
+		)
+		return err
+	}
 	_, err := fmt.Fprintf(a.stdout, "delivery_id=%s\n", result.DeliveryID)
 	return err
 }
 
 func (a *App) writeSendResultFullText(result sendResultFull) error {
+	if result.Mode == SendModeGroup {
+		eligibleCount := 0
+		if result.EligibleCount != nil {
+			eligibleCount = *result.EligibleCount
+		}
+		_, err := fmt.Fprintf(
+			a.stdout,
+			"message_id=%s group=%s eligible_count=%d\n",
+			result.MessageID,
+			result.GroupAddress,
+			eligibleCount,
+		)
+		return err
+	}
 	_, err := fmt.Fprintf(
 		a.stdout,
 		"message_id=%s delivery_id=%s blob_id=%s\n",
