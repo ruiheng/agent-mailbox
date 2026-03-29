@@ -215,9 +215,17 @@ func (s *Store) resolveRecipients(ctx context.Context, addresses []string) ([]re
 	recipients := make([]resolvedRecipient, 0, len(addresses))
 	seenEndpointIDs := make(map[string]struct{}, len(addresses))
 	for _, address := range addresses {
+		group, found, err := lookupGroupRecord(ctx, s.readDB, address)
+		if err != nil {
+			return nil, fmt.Errorf("resolve recipient address %q: %w", address, err)
+		}
+		if found {
+			return nil, fmt.Errorf("recipient address %q is reserved by group %q: %w", address, group.GroupID, ErrAddressReservedByGroup)
+		}
+
 		endpointID, found, err := s.lookupEndpointID(ctx, s.readDB, address)
 		if err != nil {
-			return nil, fmt.Errorf("resolve recipient address: %w", err)
+			return nil, fmt.Errorf("resolve recipient address %q: %w", address, err)
 		}
 		if !found {
 			continue

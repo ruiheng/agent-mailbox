@@ -125,6 +125,9 @@ func TestGroupAndEndpointNamespaceCollision(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateGroup(group/reviewer) error = %v", err)
 	}
+	if _, err := store.CreateGroup(context.Background(), group.Address); !errors.Is(err, ErrGroupExists) {
+		t.Fatalf("CreateGroup(duplicate group) error = %v, want ErrGroupExists", err)
+	}
 	if _, err := store.Send(context.Background(), SendParams{
 		ToAddress:     group.Address,
 		Subject:       "group collision",
@@ -141,6 +144,14 @@ func TestGroupAndEndpointNamespaceCollision(t *testing.T) {
 	}
 	if endpointAddressCount != 0 {
 		t.Fatalf("group address endpoint count = %d, want 0", endpointAddressCount)
+	}
+
+	if _, err := store.List(context.Background(), ListParams{Address: group.Address}); !errors.Is(err, ErrAddressReservedByGroup) {
+		t.Fatalf("List(group collision) error = %v, want ErrAddressReservedByGroup", err)
+	}
+
+	if _, err := store.Receive(context.Background(), ReceiveParams{Address: group.Address}); !errors.Is(err, ErrAddressReservedByGroup) {
+		t.Fatalf("Receive(group collision) error = %v, want ErrAddressReservedByGroup", err)
 	}
 }
 
