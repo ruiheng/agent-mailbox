@@ -42,6 +42,34 @@ type listedDeliverySummary struct {
 	ContentType      string `json:"content_type,omitempty"`
 }
 
+type groupListedMessageSummary struct {
+	MessageID        string  `json:"message_id"`
+	GroupID          string  `json:"group_id"`
+	GroupAddress     string  `json:"group_address"`
+	Person           string  `json:"person"`
+	MessageCreatedAt string  `json:"message_created_at"`
+	Subject          string  `json:"subject"`
+	ContentType      string  `json:"content_type,omitempty"`
+	Read             bool    `json:"read"`
+	FirstReadAt      *string `json:"first_read_at,omitempty"`
+	ReadCount        int     `json:"read_count"`
+	EligibleCount    int     `json:"eligible_count"`
+}
+
+type groupReceivedMessageSummary struct {
+	MessageID        string `json:"message_id"`
+	GroupID          string `json:"group_id"`
+	GroupAddress     string `json:"group_address"`
+	Person           string `json:"person"`
+	MessageCreatedAt string `json:"message_created_at"`
+	Subject          string `json:"subject"`
+	ContentType      string `json:"content_type,omitempty"`
+	Body             string `json:"body"`
+	ReadCount        int    `json:"read_count"`
+	EligibleCount    int    `json:"eligible_count"`
+	FirstReadAt      string `json:"first_read_at"`
+}
+
 func summarizeSendResult(result SendResult) sendResultSummary {
 	if result.Mode == SendModeGroup {
 		eligibleCount := result.EligibleCount
@@ -106,5 +134,37 @@ func summarizeListedDelivery(delivery ListedDelivery) listedDeliverySummary {
 		RecipientAddress: delivery.RecipientAddress,
 		Subject:          delivery.Subject,
 		ContentType:      delivery.ContentType,
+	}
+}
+
+func summarizeGroupListedMessage(message GroupListedMessage) groupListedMessageSummary {
+	return groupListedMessageSummary{
+		MessageID:        message.MessageID,
+		GroupID:          message.GroupID,
+		GroupAddress:     message.GroupAddress,
+		Person:           message.Person,
+		MessageCreatedAt: message.MessageCreatedAt,
+		Subject:          message.Subject,
+		ContentType:      message.ContentType,
+		Read:             message.Read,
+		FirstReadAt:      message.FirstReadAt,
+		ReadCount:        message.ReadCount,
+		EligibleCount:    message.EligibleCount,
+	}
+}
+
+func summarizeGroupReceivedMessage(message GroupReceivedMessage) groupReceivedMessageSummary {
+	return groupReceivedMessageSummary{
+		MessageID:        message.MessageID,
+		GroupID:          message.GroupID,
+		GroupAddress:     message.GroupAddress,
+		Person:           message.Person,
+		MessageCreatedAt: message.MessageCreatedAt,
+		Subject:          message.Subject,
+		ContentType:      message.ContentType,
+		Body:             message.Body,
+		ReadCount:        message.ReadCount,
+		EligibleCount:    message.EligibleCount,
+		FirstReadAt:      message.FirstReadAt,
 	}
 }

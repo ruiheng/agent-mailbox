@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 )
 
 const (
@@ -51,6 +52,29 @@ type AddressInspection struct {
 	Kind       string  `json:"kind"`
 	EndpointID *string `json:"endpoint_id,omitempty"`
 	GroupID    *string `json:"group_id,omitempty"`
+}
+
+type groupViewerState struct {
+	Group            GroupRecord
+	Person           string
+	PersonID         string
+	VisibilityCutoff *string
+}
+
+type groupMessageRecord struct {
+	MessageID        string
+	SenderEndpointID sql.NullString
+	MessageCreatedAt string
+	Subject          string
+	ContentType      string
+	SchemaVersion    string
+	BodyBlobRef      string
+	BodySize         int64
+	BodySHA256       string
+	FirstReadAt      sql.NullString
+	ViewerEligible   int
+	ReadCount        int
+	EligibleCount    int
 }
 
 func (s *Store) CreateGroup(ctx context.Context, address string) (GroupRecord, error) {
@@ -342,6 +366,408 @@ func (s *Store) InspectAddress(ctx context.Context, address string) (AddressInsp
 		Address: address,
 		Kind:    AddressKindUnbound,
 	}, nil
+}
+
+func (s *Store) ListGroupMessages(ctx context.Context, params GroupListParams) ([]GroupListedMessage, error) {
+	viewer, err := s.resolveGroupViewer(ctx, s.readDB, params.Address, params.Person)
+	if err != nil {
+		return nil, err
+	}
+	records, err := queryGroupMessageRecords(ctx, s.readDB, viewer, false, 0)
+	if err != nil {
+		return nil, err
+	}
+
+	messages := make([]GroupListedMessage, 0, len(records))
+	for _, record := range records {
+		messages = append(messages, buildGroupListedMessage(viewer, record))
+	}
+	return messages, nil
+}
+
+func (s *Store) WaitGroupMessage(ctx context.Context, params GroupWaitParams) (GroupListedMessage, error) {
+	if params.Timeout < 0 {
+		return GroupListedMessage{}, errors.New("--timeout must be greater than or equal to 0")
+	}
+
+	var deadline time.Time
+	if params.Timeout > 0 {
+		deadline = time.Now().Add(params.Timeout)
+	}
+
+	delay := initialPollDelay
+	for {
+		attemptCtx := ctx
+		cancel := func() {}
+		if !deadline.IsZero() {
+			attemptCtx, cancel = context.WithDeadline(ctx, deadline)
+		}
+
+		message, err := s.waitGroupMessageOnce(attemptCtx, params)
+		cancel()
+		if err == nil {
+			return message, nil
+		}
+		if !deadline.IsZero() && errors.Is(err, context.DeadlineExceeded) && ctx.Err() == nil {
+			return GroupListedMessage{}, ErrNoMessage
+		}
+		if !errors.Is(err, ErrNoMessage) {
+			return GroupListedMessage{}, err
+		}
+		if !deadline.IsZero() {
+			remaining := time.Until(deadline)
+			if remaining <= 0 {
+				return GroupListedMessage{}, ErrNoMessage
+			}
+			if delay > remaining {
+				delay = remaining
+			}
+		}
+
+		timer := time.NewTimer(delay)
+		select {
+		case <-ctx.Done():
+			if !timer.Stop() {
+				<-timer.C
+			}
+			return GroupListedMessage{}, ctx.Err()
+		case <-timer.C:
+		}
+
+		if delay < maxPollDelay {
+			delay *= 2
+			if delay > maxPollDelay {
+				delay = maxPollDelay
+			}
+		}
+	}
+}
+
+func (s *Store) waitGroupMessageOnce(ctx context.Context, params GroupWaitParams) (GroupListedMessage, error) {
+	viewer, err := s.resolveGroupViewer(ctx, s.readDB, params.Address, params.Person)
+	if err != nil {
+		return GroupListedMessage{}, err
+	}
+	records, err := queryGroupMessageRecords(ctx, s.readDB, viewer, true, 1)
+	if err != nil {
+		return GroupListedMessage{}, err
+	}
+	if len(records) == 0 {
+		return GroupListedMessage{}, ErrNoMessage
+	}
+	return buildGroupListedMessage(viewer, records[0]), nil
+}
+
+func (s *Store) ReceiveGroupMessage(ctx context.Context, params GroupReceiveParams) (GroupReceivedMessage, error) {
+	for attempt := 1; ; attempt++ {
+		message, err := s.receiveGroupMessageOnce(ctx, params)
+		if err == nil {
+			return message, nil
+		}
+		if !isSQLiteBusy(err) {
+			return GroupReceivedMessage{}, err
+		}
+		if attempt > maxClaimRetryCount {
+			return GroupReceivedMessage{}, &ClaimContentionError{
+				Attempts: attempt,
+				Cause:    err,
+			}
+		}
+		if err := waitForClaimRetry(ctx); err != nil {
+			return GroupReceivedMessage{}, err
+		}
+	}
+}
+
+func (s *Store) receiveGroupMessageOnce(ctx context.Context, params GroupReceiveParams) (GroupReceivedMessage, error) {
+	for {
+		tx, err := s.writeDB.BeginTx(ctx, nil)
+		if err != nil {
+			return GroupReceivedMessage{}, fmt.Errorf("begin group receive transaction: %w", err)
+		}
+
+		viewer, err := s.resolveGroupViewer(ctx, tx, params.Address, params.Person)
+		if err != nil {
+			_ = tx.Rollback()
+			return GroupReceivedMessage{}, err
+		}
+		if viewer.PersonID == "" {
+			_ = tx.Rollback()
+			return GroupReceivedMessage{}, ErrNoMessage
+		}
+
+		records, err := queryGroupMessageRecords(ctx, tx, viewer, true, 1)
+		if err != nil {
+			_ = tx.Rollback()
+			return GroupReceivedMessage{}, err
+		}
+		if len(records) == 0 {
+			_ = tx.Rollback()
+			return GroupReceivedMessage{}, ErrNoMessage
+		}
+		record := records[0]
+
+		body, err := s.readBlob(record.BodyBlobRef, record.BodySize, record.BodySHA256)
+		if err != nil {
+			_ = tx.Rollback()
+			return GroupReceivedMessage{}, err
+		}
+
+		firstReadAt := formatTimestamp(s.now())
+		result, err := tx.ExecContext(ctx, `
+INSERT OR IGNORE INTO group_reads (message_id, person_id, first_read_at)
+VALUES (?, ?, ?)
+`, record.MessageID, viewer.PersonID, firstReadAt)
+		if err != nil {
+			_ = tx.Rollback()
+			return GroupReceivedMessage{}, fmt.Errorf("mark group message read %q for %q: %w", record.MessageID, viewer.Person, err)
+		}
+		rowsAffected, err := result.RowsAffected()
+		if err != nil {
+			_ = tx.Rollback()
+			return GroupReceivedMessage{}, fmt.Errorf("read group message read rows affected for %q: %w", record.MessageID, err)
+		}
+		if rowsAffected == 0 {
+			_ = tx.Rollback()
+			continue
+		}
+
+		if err := tx.Commit(); err != nil {
+			_ = tx.Rollback()
+			return GroupReceivedMessage{}, fmt.Errorf("commit group receive transaction: %w", err)
+		}
+
+		record.FirstReadAt = sql.NullString{String: firstReadAt, Valid: true}
+		if record.ViewerEligible != 0 {
+			record.ReadCount++
+		}
+		return buildGroupReceivedMessage(viewer, record, string(body)), nil
+	}
+}
+
+func (s *Store) resolveGroupViewer(ctx context.Context, querier interface {
+	QueryRowContext(context.Context, string, ...any) *sql.Row
+}, groupAddress, person string) (groupViewerState, error) {
+	groupAddress = strings.TrimSpace(groupAddress)
+	if groupAddress == "" {
+		return groupViewerState{}, errors.New("group address is required")
+	}
+	person = strings.TrimSpace(person)
+	if person == "" {
+		return groupViewerState{}, errors.New("person is required")
+	}
+
+	group, found, err := lookupGroupRecord(ctx, querier, groupAddress)
+	if err != nil {
+		return groupViewerState{}, fmt.Errorf("load group %q: %w", groupAddress, err)
+	}
+	if !found {
+		return groupViewerState{}, fmt.Errorf("group %q: %w", groupAddress, ErrGroupNotFound)
+	}
+
+	membership, found, err := lookupLatestGroupMembershipByPerson(ctx, querier, group.GroupID, person)
+	if err != nil {
+		return groupViewerState{}, fmt.Errorf("load group membership for %q in %q: %w", person, groupAddress, err)
+	}
+	if !found {
+		return groupViewerState{
+			Group:  group,
+			Person: person,
+		}, nil
+	}
+
+	viewer := groupViewerState{
+		Group:    group,
+		Person:   membership.Person,
+		PersonID: membership.PersonID,
+	}
+	if !membership.Active {
+		viewer.VisibilityCutoff = membership.LeftAt
+	}
+	return viewer, nil
+}
+
+func queryGroupMessageRecords(ctx context.Context, querier interface {
+	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
+}, viewer groupViewerState, unreadOnly bool, limit int) ([]groupMessageRecord, error) {
+	if viewer.PersonID == "" {
+		return []groupMessageRecord{}, nil
+	}
+
+	args := []any{viewer.PersonID, viewer.PersonID, viewer.Group.GroupID}
+	query := `
+SELECT
+  gm.message_id,
+  m.sender_endpoint_id,
+  gm.created_at,
+  m.subject,
+  m.content_type,
+  m.schema_version,
+  m.body_blob_ref,
+  m.body_size,
+  m.body_sha256,
+  gr.first_read_at,
+  CASE
+    WHEN EXISTS (
+      SELECT 1
+      FROM group_message_eligibility AS ge_viewer
+      WHERE ge_viewer.message_id = gm.message_id
+        AND ge_viewer.person_id = ?
+    ) THEN 1
+    ELSE 0
+  END AS viewer_eligible,
+  (
+    SELECT COUNT(*)
+    FROM group_message_eligibility AS ge
+    JOIN group_reads AS gr_eligible
+      ON gr_eligible.message_id = ge.message_id
+     AND gr_eligible.person_id = ge.person_id
+    WHERE ge.message_id = gm.message_id
+  ) AS read_count,
+  gm.eligible_count
+FROM group_messages AS gm
+JOIN messages AS m ON m.message_id = gm.message_id
+LEFT JOIN group_reads AS gr
+  ON gr.message_id = gm.message_id
+ AND gr.person_id = ?
+WHERE gm.group_id = ?
+`
+	if viewer.VisibilityCutoff != nil {
+		query += `
+  AND gm.created_at <= ?
+`
+		args = append(args, *viewer.VisibilityCutoff)
+	}
+	if unreadOnly {
+		query += `
+  AND gr.first_read_at IS NULL
+`
+	}
+	query += `
+ORDER BY gm.created_at ASC, gm.message_id ASC
+`
+	if limit > 0 {
+		query += `
+LIMIT ?
+`
+		args = append(args, limit)
+	}
+
+	rows, err := querier.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("query group messages for %q in %q: %w", viewer.Person, viewer.Group.Address, err)
+	}
+	defer rows.Close()
+
+	records := make([]groupMessageRecord, 0)
+	for rows.Next() {
+		var record groupMessageRecord
+		if err := rows.Scan(
+			&record.MessageID,
+			&record.SenderEndpointID,
+			&record.MessageCreatedAt,
+			&record.Subject,
+			&record.ContentType,
+			&record.SchemaVersion,
+			&record.BodyBlobRef,
+			&record.BodySize,
+			&record.BodySHA256,
+			&record.FirstReadAt,
+			&record.ViewerEligible,
+			&record.ReadCount,
+			&record.EligibleCount,
+		); err != nil {
+			return nil, fmt.Errorf("scan group message row: %w", err)
+		}
+		records = append(records, record)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate group messages: %w", err)
+	}
+	return records, nil
+}
+
+func buildGroupListedMessage(viewer groupViewerState, record groupMessageRecord) GroupListedMessage {
+	message := GroupListedMessage{
+		MessageID:        record.MessageID,
+		GroupID:          viewer.Group.GroupID,
+		GroupAddress:     viewer.Group.Address,
+		Person:           viewer.Person,
+		MessageCreatedAt: record.MessageCreatedAt,
+		Subject:          record.Subject,
+		ContentType:      record.ContentType,
+		SchemaVersion:    record.SchemaVersion,
+		Read:             record.FirstReadAt.Valid,
+		ReadCount:        record.ReadCount,
+		EligibleCount:    record.EligibleCount,
+	}
+	if record.SenderEndpointID.Valid {
+		message.SenderEndpointID = &record.SenderEndpointID.String
+	}
+	if record.FirstReadAt.Valid {
+		message.FirstReadAt = &record.FirstReadAt.String
+	}
+	return message
+}
+
+func buildGroupReceivedMessage(viewer groupViewerState, record groupMessageRecord, body string) GroupReceivedMessage {
+	message := GroupReceivedMessage{
+		MessageID:        record.MessageID,
+		GroupID:          viewer.Group.GroupID,
+		GroupAddress:     viewer.Group.Address,
+		Person:           viewer.Person,
+		MessageCreatedAt: record.MessageCreatedAt,
+		Subject:          record.Subject,
+		ContentType:      record.ContentType,
+		SchemaVersion:    record.SchemaVersion,
+		BodyBlobRef:      record.BodyBlobRef,
+		BodySize:         record.BodySize,
+		BodySHA256:       record.BodySHA256,
+		Body:             body,
+		ReadCount:        record.ReadCount,
+		EligibleCount:    record.EligibleCount,
+		FirstReadAt:      record.FirstReadAt.String,
+	}
+	if record.SenderEndpointID.Valid {
+		message.SenderEndpointID = &record.SenderEndpointID.String
+	}
+	return message
+}
+
+func lookupLatestGroupMembershipByPerson(ctx context.Context, querier interface {
+	QueryRowContext(context.Context, string, ...any) *sql.Row
+}, groupID, person string) (GroupMembershipRecord, bool, error) {
+	var membership GroupMembershipRecord
+	var leftAt sql.NullString
+	err := querier.QueryRowContext(ctx, `
+SELECT gm.membership_id, gm.person_id, p.person, gm.joined_at, gm.left_at, g.address
+FROM group_memberships AS gm
+JOIN persons AS p ON p.person_id = gm.person_id
+JOIN groups AS g ON g.group_id = gm.group_id
+WHERE gm.group_id = ?
+  AND p.person = ?
+ORDER BY gm.joined_at DESC, gm.membership_id DESC
+LIMIT 1
+`, groupID, person).Scan(
+		&membership.MembershipID,
+		&membership.PersonID,
+		&membership.Person,
+		&membership.JoinedAt,
+		&leftAt,
+		&membership.GroupAddress,
+	)
+	if errors.Is(err, sql.ErrNoRows) {
+		return GroupMembershipRecord{}, false, nil
+	}
+	if err != nil {
+		return GroupMembershipRecord{}, false, err
+	}
+	membership.GroupID = groupID
+	membership.Active = !leftAt.Valid
+	if leftAt.Valid {
+		membership.LeftAt = &leftAt.String
+	}
+	return membership, true, nil
 }
 
 func lookupGroupRecord(ctx context.Context, querier interface {

@@ -23,6 +23,12 @@ type WaitParams struct {
 	Timeout   time.Duration
 }
 
+type GroupWaitParams struct {
+	Address string
+	Person  string
+	Timeout time.Duration
+}
+
 func (s *Store) Wait(ctx context.Context, params WaitParams) (ListedDelivery, error) {
 	addresses, err := normalizeAddresses(params.Address, params.Addresses, "--for")
 	if err != nil {

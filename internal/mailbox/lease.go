@@ -66,6 +66,11 @@ type ReceiveParams struct {
 	Addresses []string
 }
 
+type GroupReceiveParams struct {
+	Address string
+	Person  string
+}
+
 type ReceiveBatchParams struct {
 	Address   string
 	Addresses []string
@@ -91,6 +96,25 @@ type ReceivedMessage struct {
 	BodySize            int64   `json:"body_size"`
 	BodySHA256          string  `json:"body_sha256"`
 	Body                string  `json:"body"`
+}
+
+type GroupReceivedMessage struct {
+	MessageID        string  `json:"message_id"`
+	GroupID          string  `json:"group_id"`
+	GroupAddress     string  `json:"group_address"`
+	Person           string  `json:"person"`
+	SenderEndpointID *string `json:"sender_endpoint_id,omitempty"`
+	MessageCreatedAt string  `json:"message_created_at"`
+	Subject          string  `json:"subject"`
+	ContentType      string  `json:"content_type"`
+	SchemaVersion    string  `json:"schema_version"`
+	BodyBlobRef      string  `json:"body_blob_ref"`
+	BodySize         int64   `json:"body_size"`
+	BodySHA256       string  `json:"body_sha256"`
+	Body             string  `json:"body"`
+	ReadCount        int     `json:"read_count"`
+	EligibleCount    int     `json:"eligible_count"`
+	FirstReadAt      string  `json:"first_read_at"`
 }
 
 type ReceiveResult struct {

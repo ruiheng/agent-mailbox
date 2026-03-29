@@ -209,9 +209,11 @@ func (a *App) prepareListCommand(args []string) (preparedCommand, error) {
 	fs.SetOutput(io.Discard)
 
 	var address string
+	var person string
 	var formats outputFlags
 	var state string
 	fs.StringVar(&address, "for", "", "recipient address")
+	fs.StringVar(&person, "as", "", "group reader identity")
 	formats.register(fs, "emit JSON", "emit YAML")
 	fs.StringVar(&state, "state", "", "filter by delivery state")
 
@@ -232,6 +234,32 @@ func (a *App) prepareListCommand(args []string) (preparedCommand, error) {
 	}
 
 	return func(ctx context.Context, store *Store) error {
+		if strings.TrimSpace(person) != "" {
+			if strings.TrimSpace(state) != "" {
+				return errors.New("--state is not supported with --as")
+			}
+			messages, err := store.ListGroupMessages(ctx, GroupListParams{
+				Address: address,
+				Person:  person,
+			})
+			if err != nil {
+				return err
+			}
+			if format != outputFormatText {
+				summaries := make([]groupListedMessageSummary, 0, len(messages))
+				for _, message := range messages {
+					summaries = append(summaries, summarizeGroupListedMessage(message))
+				}
+				return a.writeStructuredOutput(format, summaries)
+			}
+			for _, message := range messages {
+				if err := a.writeGroupListedMessageText(message); err != nil {
+					return err
+				}
+			}
+			return nil
+		}
+
 		deliveries, err := store.List(ctx, params)
 		if err != nil {
 			return err
@@ -253,11 +281,13 @@ func (a *App) prepareRecvCommand(args []string) (preparedCommand, error) {
 	fs.SetOutput(io.Discard)
 
 	var addresses stringListFlag
+	var person string
 	var maxMessages int
 	var full bool
 	var formats outputFlags
 
 	fs.Var(&addresses, "for", "recipient address (repeatable)")
+	fs.StringVar(&person, "as", "", "group reader identity")
 	fs.IntVar(&maxMessages, "max", 1, "maximum number of deliveries to claim")
 	fs.BoolVar(&full, "full", false, "emit the full payload")
 	formats.register(fs, "emit JSON", "emit YAML")
@@ -277,6 +307,7 @@ func (a *App) prepareRecvCommand(args []string) (preparedCommand, error) {
 	if err != nil {
 		return nil, err
 	}
+	person = strings.TrimSpace(person)
 
 	params := ReceiveBatchParams{
 		Addresses: normalizedAddresses,
@@ -284,6 +315,33 @@ func (a *App) prepareRecvCommand(args []string) (preparedCommand, error) {
 	}
 
 	return func(ctx context.Context, store *Store) error {
+		if person != "" {
+			if maxProvided {
+				return errors.New("--max is not supported with --as")
+			}
+			if len(normalizedAddresses) != 1 {
+				return errors.New("--as requires exactly one --for address")
+			}
+
+			message, err := store.ReceiveGroupMessage(ctx, GroupReceiveParams{
+				Address: normalizedAddresses[0],
+				Person:  person,
+			})
+			if err != nil {
+				return err
+			}
+			if format != outputFormatText {
+				if full {
+					return a.writeStructuredOutput(format, message)
+				}
+				return a.writeStructuredOutput(format, summarizeGroupReceivedMessage(message))
+			}
+			if full {
+				return a.writeGroupReceivedMessageFullText(message)
+			}
+			return a.writeGroupReceivedMessageText(summarizeGroupReceivedMessage(message))
+		}
+
 		if !maxProvided {
 			message, err := store.Receive(ctx, ReceiveParams{Addresses: normalizedAddresses})
 			if err != nil {
@@ -373,11 +431,13 @@ func (a *App) prepareWaitCommand(args []string) (preparedCommand, error) {
 	fs.SetOutput(io.Discard)
 
 	var addresses stringListFlag
+	var person string
 	var timeout time.Duration
 	var full bool
 	var formats outputFlags
 
 	fs.Var(&addresses, "for", "recipient address (repeatable)")
+	fs.StringVar(&person, "as", "", "group reader identity")
 	fs.DurationVar(&timeout, "timeout", 0, "maximum time to wait for a matching delivery")
 	fs.BoolVar(&full, "full", false, "emit the full payload")
 	formats.register(fs, "emit JSON", "emit YAML")
@@ -396,6 +456,7 @@ func (a *App) prepareWaitCommand(args []string) (preparedCommand, error) {
 	if err != nil {
 		return nil, err
 	}
+	person = strings.TrimSpace(person)
 
 	params := WaitParams{
 		Addresses: normalizedAddresses,
@@ -403,6 +464,30 @@ func (a *App) prepareWaitCommand(args []string) (preparedCommand, error) {
 	}
 
 	return func(ctx context.Context, store *Store) error {
+		if person != "" {
+			if len(normalizedAddresses) != 1 {
+				return errors.New("--as requires exactly one --for address")
+			}
+			message, err := store.WaitGroupMessage(ctx, GroupWaitParams{
+				Address: normalizedAddresses[0],
+				Person:  person,
+				Timeout: timeout,
+			})
+			if err != nil {
+				return err
+			}
+			if format != outputFormatText {
+				if full {
+					return a.writeStructuredOutput(format, message)
+				}
+				return a.writeStructuredOutput(format, summarizeGroupListedMessage(message))
+			}
+			if full {
+				return a.writeGroupListedMessageText(message)
+			}
+			return a.writeGroupWaitedMessageText(summarizeGroupListedMessage(message))
+		}
+
 		delivery, err := store.Wait(ctx, params)
 		if err != nil {
 			return err
@@ -655,9 +740,11 @@ func (a *App) writeListHelp() {
 	writeHelp(a.stdout, []string{
 		"Usage:",
 		"  agent-mailbox list --for ADDRESS [--state STATE] [--json | --yaml]",
+		"  agent-mailbox list --for GROUP_ADDRESS --as PERSON [--json | --yaml]",
 		"",
 		"Options:",
 		"  --for ADDRESS      Recipient address",
+		"  --as PERSON        Group reader identity",
 		"  --state STATE      Filter by delivery state",
 		"  --json             Emit JSON",
 		"  --yaml             Emit YAML",
@@ -731,9 +818,11 @@ func (a *App) writeRecvHelp() {
 	writeHelp(a.stdout, []string{
 		"Usage:",
 		"  agent-mailbox recv --for ADDRESS [--for ADDRESS ...] [--max COUNT] [--json | --yaml] [--full]",
+		"  agent-mailbox recv --for GROUP_ADDRESS --as PERSON [--json | --yaml] [--full]",
 		"",
 		"Options:",
 		"  --for ADDRESS        Recipient address (repeatable)",
+		"  --as PERSON          Group reader identity",
 		"  --max COUNT          Maximum number of deliveries to claim (up to 10)",
 		"  --json               Emit JSON",
 		"  --yaml               Emit YAML",
@@ -759,9 +848,11 @@ func (a *App) writeWaitHelp() {
 	writeHelp(a.stdout, []string{
 		"Usage:",
 		"  agent-mailbox wait --for ADDRESS [--for ADDRESS ...] [--timeout DURATION] [--json | --yaml] [--full]",
+		"  agent-mailbox wait --for GROUP_ADDRESS --as PERSON [--timeout DURATION] [--json | --yaml] [--full]",
 		"",
 		"Options:",
 		"  --for ADDRESS        Recipient address (repeatable)",
+		"  --as PERSON          Group reader identity",
 		"  --timeout DURATION   Maximum time to wait for a matching delivery (for example 30s, 5m, 120ms, 1m30s)",
 		"  --json               Emit JSON",
 		"  --yaml               Emit YAML",

@@ -144,6 +144,58 @@ func (a *App) writeReceivedMessageFullText(message ReceivedMessage) error {
 	return nil
 }
 
+func (a *App) writeGroupReceivedMessageText(message groupReceivedMessageSummary) error {
+	if _, err := fmt.Fprintf(
+		a.stdout,
+		"message_id=%s group=%s person=%s first_read_at=%s content_type=%s subject=%q read_count=%d eligible_count=%d\n",
+		message.MessageID,
+		message.GroupAddress,
+		message.Person,
+		message.FirstReadAt,
+		message.ContentType,
+		message.Subject,
+		message.ReadCount,
+		message.EligibleCount,
+	); err != nil {
+		return err
+	}
+	if _, err := fmt.Fprint(a.stdout, message.Body); err != nil {
+		return err
+	}
+	if !strings.HasSuffix(message.Body, "\n") {
+		if _, err := fmt.Fprintln(a.stdout); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (a *App) writeGroupReceivedMessageFullText(message GroupReceivedMessage) error {
+	if _, err := fmt.Fprintf(
+		a.stdout,
+		"message_id=%s group=%s person=%s first_read_at=%s content_type=%s subject=%q read_count=%d eligible_count=%d\n",
+		message.MessageID,
+		message.GroupAddress,
+		message.Person,
+		message.FirstReadAt,
+		message.ContentType,
+		message.Subject,
+		message.ReadCount,
+		message.EligibleCount,
+	); err != nil {
+		return err
+	}
+	if _, err := fmt.Fprint(a.stdout, message.Body); err != nil {
+		return err
+	}
+	if !strings.HasSuffix(message.Body, "\n") {
+		if _, err := fmt.Fprintln(a.stdout); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (a *App) writeReceiveResultText(result receiveResultSummary) error {
 	for index, message := range result.Messages {
 		if index > 0 {
@@ -203,6 +255,38 @@ func (a *App) writeWaitedDeliveryText(delivery listedDeliverySummary) error {
 		delivery.RecipientAddress,
 		delivery.ContentType,
 		delivery.Subject,
+	)
+	return err
+}
+
+func (a *App) writeGroupListedMessageText(message GroupListedMessage) error {
+	_, err := fmt.Fprintf(
+		a.stdout,
+		"message_id=%s group=%s person=%s read=%t read_count=%d eligible_count=%d created_at=%s subject=%q\n",
+		message.MessageID,
+		message.GroupAddress,
+		message.Person,
+		message.Read,
+		message.ReadCount,
+		message.EligibleCount,
+		message.MessageCreatedAt,
+		message.Subject,
+	)
+	return err
+}
+
+func (a *App) writeGroupWaitedMessageText(message groupListedMessageSummary) error {
+	_, err := fmt.Fprintf(
+		a.stdout,
+		"message_id=%s group=%s person=%s read=%t read_count=%d eligible_count=%d content_type=%s subject=%q\n",
+		message.MessageID,
+		message.GroupAddress,
+		message.Person,
+		message.Read,
+		message.ReadCount,
+		message.EligibleCount,
+		message.ContentType,
+		message.Subject,
 	)
 	return err
 }

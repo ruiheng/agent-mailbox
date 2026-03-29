@@ -80,6 +80,11 @@ type ListParams struct {
 	State   string
 }
 
+type GroupListParams struct {
+	Address string
+	Person  string
+}
+
 type ListedDelivery struct {
 	DeliveryID          string  `json:"delivery_id"`
 	MessageID           string  `json:"message_id"`
@@ -95,6 +100,22 @@ type ListedDelivery struct {
 	BodyBlobRef         string  `json:"body_blob_ref"`
 	BodySize            int64   `json:"body_size"`
 	BodySHA256          string  `json:"body_sha256"`
+}
+
+type GroupListedMessage struct {
+	MessageID        string  `json:"message_id"`
+	GroupID          string  `json:"group_id"`
+	GroupAddress     string  `json:"group_address"`
+	Person           string  `json:"person"`
+	SenderEndpointID *string `json:"sender_endpoint_id,omitempty"`
+	MessageCreatedAt string  `json:"message_created_at"`
+	Subject          string  `json:"subject"`
+	ContentType      string  `json:"content_type"`
+	SchemaVersion    string  `json:"schema_version"`
+	Read             bool    `json:"read"`
+	FirstReadAt      *string `json:"first_read_at,omitempty"`
+	ReadCount        int     `json:"read_count"`
+	EligibleCount    int     `json:"eligible_count"`
 }
 
 func NewStore(readDB, writeDB, claimDB *sql.DB, blobDir string) *Store {
