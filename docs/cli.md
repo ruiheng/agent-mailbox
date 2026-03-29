@@ -114,6 +114,38 @@ agent-mailbox ack \
   --lease-token <lease_token>
 ```
 
+Group mailbox quick start:
+
+```bash
+agent-mailbox group create --group group/eng
+agent-mailbox group add-member --group group/eng --person alice
+printf 'team sync\n' | agent-mailbox send --to group/eng --group --body-file -
+agent-mailbox list --for group/eng --as alice --json
+agent-mailbox recv --for group/eng --as alice --json
+```
+
+## Group Mailbox
+
+Group mailbox is explicit. It does not reuse lease/ack queue semantics.
+
+Rules:
+
+- create and reserve a group address with `group create`
+- add or remove members with `group add-member` and `group remove-member`
+- use `send --to <group-address> --group` for group messages
+- use `list|wait|recv --for <group-address> --as <person>` for group reads
+- `watch`, `ack`, `release`, `defer`, and `fail` stay personal-mailbox-only
+- `--as` is caller-asserted identity in the trusted local workflow environment;
+  it is not an authentication boundary
+
+Group history semantics:
+
+- new members can see older messages immediately
+- older messages start unread for the new member
+- leaving a group stops future eligibility but keeps historical visibility
+- `eligible_count` is based on membership snapshot at message creation time
+- later joins do not rewrite old messages' `eligible_count`
+
 ## Receive
 
 `recv` is always an immediate claim attempt.
@@ -224,10 +256,12 @@ Notes:
 
 ### `recv`
 
-Claim one or more deliveries for one or more recipient addresses.
+Claim one or more personal deliveries, or receive one unread group message for a
+specific person.
 
 ```bash
 agent-mailbox recv --for <address> [--for <address> ...] [--max 10] [--json | --yaml] [--full]
+agent-mailbox recv --for <group-address> --as <person> [--json | --yaml] [--full]
 ```
 
 Use `--json` or `--yaml` for scripts and agents.
@@ -247,13 +281,24 @@ Notes:
 - with `--max --full`, each `messages[]` entry uses the full legacy payload
 - unseen addresses are ignored until a matching delivery exists
 - `recv` does not wait; use `wait` if you need to block until work appears
+- group mode requires `--as <person>` and exactly one `--for`
+- group mode does not support `--max`
+- group mode returns the oldest unread visible group message for that person and
+  marks it read immediately
+- compact group `recv` output includes `message_id`, `group_id`,
+  `group_address`, `person`, `message_created_at`, `subject`, `content_type`,
+  `body`, `read_count`, `eligible_count`, and `first_read_at`
+- group `recv --full` adds `sender_endpoint_id`, `schema_version`,
+  `body_blob_ref`, `body_size`, and `body_sha256`
 
 ### `wait`
 
-Observe until one matching queued delivery exists, then exit without claiming it.
+Observe until one matching queued delivery exists, or until one unread visible
+group message exists for a specific person.
 
 ```bash
 agent-mailbox wait --for <address> [--for <address> ...] [--timeout 30s] [--json | --yaml] [--full]
+agent-mailbox wait --for <group-address> --as <person> [--timeout 30s] [--json | --yaml] [--full]
 ```
 
 Use `--json` or `--yaml` for scripts and agents.
@@ -269,6 +314,12 @@ Notes:
 - add `--full` to return the full legacy delivery metadata schema used by `list`
   and `watch`
 - `wait` does not claim or reserve the returned delivery; use `recv` to claim work
+- group mode requires `--as <person>` and exactly one `--for`
+- group `wait` stays observe-only; it does not mark the message read
+- compact group `wait` output includes `message_id`, `group_id`,
+  `group_address`, `person`, `message_created_at`, `subject`, `content_type`,
+  `read`, `first_read_at`, `read_count`, and `eligible_count`
+- group `wait --full` adds `sender_endpoint_id` and `schema_version`
 
 ### `watch`
 
@@ -336,10 +387,12 @@ Retry behavior in v1:
 
 ### `list`
 
-Inspect deliveries for one recipient address.
+Inspect queued personal deliveries for one recipient address, or inspect group
+message metadata visible to one person.
 
 ```bash
 agent-mailbox list --for <address> [--state dead_letter] [--json | --yaml]
+agent-mailbox list --for <group-address> --as <person> [--json | --yaml]
 ```
 
 Notes:
@@ -349,6 +402,85 @@ Notes:
 - `list` is a snapshot; use `wait` for one-shot blocking or `watch` for a stream
 - use `--json` or `--yaml` for scripts and agents
 - unseen addresses return an empty result
+- group mode requires `--as <person>`
+- `--state` is not supported with `--as`
+- group `list` returns visible group message metadata oldest-first
+- compact group `list` output includes `message_id`, `group_id`,
+  `group_address`, `person`, `message_created_at`, `subject`, `content_type`,
+  `read`, `first_read_at`, `read_count`, and `eligible_count`
+
+### `group create`
+
+Reserve a group address explicitly.
+
+```bash
+agent-mailbox group create --group <address> [--json | --yaml]
+```
+
+Notes:
+
+- group addresses are explicit objects; there is no lazy create during send
+- creating a group on top of an existing endpoint address fails
+- structured output returns `group_id`, `address`, and `created_at`
+
+### `group add-member`
+
+Add one person to an existing group.
+
+```bash
+agent-mailbox group add-member --group <address> --person <person> [--json | --yaml]
+```
+
+Notes:
+
+- the group must already exist
+- the person record is created automatically on first use
+- adding the same active member twice fails explicitly
+- structured output returns membership metadata including `membership_id`,
+  `group_id`, `group_address`, `person_id`, `person`, `joined_at`, and `active`
+
+### `group remove-member`
+
+Close the active membership for one person in a group.
+
+```bash
+agent-mailbox group remove-member --group <address> --person <person> [--json | --yaml]
+```
+
+Notes:
+
+- removing a person who has no active membership fails explicitly
+- historical visibility remains even after removal
+- structured output returns the membership record with `left_at` and `active=false`
+
+### `group members`
+
+List active and historical membership records for one group.
+
+```bash
+agent-mailbox group members --group <address> [--json | --yaml]
+```
+
+Notes:
+
+- output is ordered newest membership first
+- each entry includes `membership_id`, `group_id`, `group_address`, `person_id`,
+  `person`, `joined_at`, optional `left_at`, and `active`
+
+### `address inspect`
+
+Inspect whether an address is currently unbound, a personal endpoint, or a
+group.
+
+```bash
+agent-mailbox address inspect --address <address> [--json | --yaml]
+```
+
+Notes:
+
+- structured output returns `address`, `kind`, and the relevant id field
+- `kind` is one of `endpoint`, `group`, or `unbound`
+- this is a debugging and introspection command; it does not change routing
 
 ## Exit Codes
 
