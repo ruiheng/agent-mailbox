@@ -718,14 +718,10 @@ SELECT
 FROM deliveries AS d
 JOIN messages AS m ON m.message_id = d.message_id
 WHERE d.recipient_endpoint_id IN (%s)
-  AND (
-    (d.state = 'queued' AND d.visible_at <= ?)
-    OR
-    (d.state = 'leased' AND d.lease_expires_at IS NOT NULL AND d.lease_expires_at <= ?)
-  )
+  AND %s
 ORDER BY d.visible_at ASC, m.created_at ASC, d.delivery_id ASC
 LIMIT 1
-`, placeholders), args...).Scan(
+`, placeholders, claimableDeliveryFilter), args...).Scan(
 		&candidate.DeliveryID,
 		&candidate.MessageID,
 		&candidate.RecipientEndpointID,
