@@ -179,7 +179,10 @@ HAVING oldest_eligible_at <= :stale_before
 ORDER BY oldest_eligible_at ASC, d.recipient_endpoint_id ASC
 ```
 
-This is simple, deterministic, and matches the mailbox truth directly.
+This is simple, deterministic, and matches the mailbox truth directly. The SQL
+sketch orders by endpoint id only as an internal deterministic tiebreaker before
+result labeling. Final user-visible output must be sorted after endpoint rows
+have been mapped back to their chosen caller-scoped address labels.
 
 ## Output Contract
 
