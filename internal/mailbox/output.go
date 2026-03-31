@@ -40,6 +40,17 @@ func (f outputFlags) resolve() (outputFormat, error) {
 	return outputFormatText, nil
 }
 
+func (f outputFlags) resolveStructured() (outputFormat, error) {
+	format, err := f.resolve()
+	if err != nil {
+		return outputFormatText, err
+	}
+	if format == outputFormatText {
+		return outputFormatText, errors.New("either --json or --yaml is required")
+	}
+	return format, nil
+}
+
 func (a *App) writeStructuredOutput(format outputFormat, value any) error {
 	switch format {
 	case outputFormatJSON:

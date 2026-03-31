@@ -511,6 +511,76 @@ func TestSendAndListHappyPath(t *testing.T) {
 	}
 }
 
+func TestAppStaleReturnsStructuredResults(t *testing.T) {
+	t.Parallel()
+
+	stateDir := filepath.Join(t.TempDir(), "mailbox-state")
+
+	runtime, err := OpenRuntime(context.Background(), stateDir)
+	if err != nil {
+		t.Fatalf("OpenRuntime() error = %v", err)
+	}
+
+	store := runtime.Store()
+	if _, err := store.Send(context.Background(), SendParams{
+		ToAddress:     "workflow/stale",
+		FromAddress:   "agent/sender",
+		Subject:       "stale subject",
+		ContentType:   "text/plain",
+		SchemaVersion: "v1",
+		Body:          []byte("stale body"),
+	}); err != nil {
+		t.Fatalf("Send() error = %v", err)
+	}
+
+	oldestEligibleAt := formatTimestamp(time.Now().UTC().Add(-10 * time.Minute))
+	if _, err := runtime.DB().Exec(`
+UPDATE deliveries
+SET visible_at = ?
+WHERE recipient_endpoint_id = (
+  SELECT endpoint_id
+  FROM endpoint_addresses
+  WHERE address = ?
+)
+`, oldestEligibleAt, "workflow/stale"); err != nil {
+		t.Fatalf("Exec(update stale visible_at) error = %v", err)
+	}
+	runtime.Close()
+
+	stdout := &bytes.Buffer{}
+	stderr := &bytes.Buffer{}
+	app := NewApp(strings.NewReader(""), stdout, stderr)
+	if err := app.Run(context.Background(), []string{
+		"--state-dir", stateDir,
+		"stale",
+		"--for", "workflow/stale",
+		"--older-than", "5m",
+		"--json",
+	}); err != nil {
+		t.Fatalf("Run(stale) error = %v", err)
+	}
+
+	var stale []StaleAddress
+	if err := json.Unmarshal(stdout.Bytes(), &stale); err != nil {
+		t.Fatalf("json.Unmarshal(stale output) error = %v; stdout = %q", err, stdout.String())
+	}
+	if len(stale) != 1 {
+		t.Fatalf("len(stale) = %d, want 1", len(stale))
+	}
+	if stale[0].Address != "workflow/stale" {
+		t.Fatalf("stale[0].address = %q, want workflow/stale", stale[0].Address)
+	}
+	if stale[0].OldestEligibleAt != oldestEligibleAt {
+		t.Fatalf("stale[0].oldest_eligible_at = %q, want %q", stale[0].OldestEligibleAt, oldestEligibleAt)
+	}
+	if stale[0].ClaimableCount != 1 {
+		t.Fatalf("stale[0].claimable_count = %d, want 1", stale[0].ClaimableCount)
+	}
+	if stderr.Len() != 0 {
+		t.Fatalf("stderr = %q, want empty", stderr.String())
+	}
+}
+
 func TestSendRejectsEmptyBody(t *testing.T) {
 	t.Parallel()
 
@@ -664,6 +734,34 @@ func TestInvalidCLIPathsDoNotCreateRuntimeState(t *testing.T) {
 			args: []string{"list", "--for", "workflow/reviewer/task-123", "--json", "--yaml"},
 		},
 		{
+			name: "stale missing for",
+			args: []string{"stale", "--older-than", "5m", "--json"},
+		},
+		{
+			name: "stale empty for",
+			args: []string{"stale", "--for", "   ", "--older-than", "5m", "--json"},
+		},
+		{
+			name: "stale missing older-than",
+			args: []string{"stale", "--for", "workflow/reviewer/task-123", "--json"},
+		},
+		{
+			name: "stale zero older-than",
+			args: []string{"stale", "--for", "workflow/reviewer/task-123", "--older-than", "0s", "--json"},
+		},
+		{
+			name: "stale negative older-than",
+			args: []string{"stale", "--for", "workflow/reviewer/task-123", "--older-than", "-1s", "--json"},
+		},
+		{
+			name: "stale missing structured format",
+			args: []string{"stale", "--for", "workflow/reviewer/task-123", "--older-than", "5m"},
+		},
+		{
+			name: "stale conflicting formats",
+			args: []string{"stale", "--for", "workflow/reviewer/task-123", "--older-than", "5m", "--json", "--yaml"},
+		},
+		{
 			name: "recv missing for",
 			args: []string{"recv"},
 		},
@@ -789,9 +887,19 @@ func TestHelpCLIPathsDoNotCreateRuntimeState(t *testing.T) {
 			wantContains: "Usage:\n  agent-mailbox [--state-dir PATH] <command> [options]",
 		},
 		{
+			name:         "root help lists stale",
+			args:         []string{"--help"},
+			wantContains: "  stale               List stale personal inboxes",
+		},
+		{
 			name:         "send help",
 			args:         []string{"send", "--help"},
 			wantContains: "Usage:\n  agent-mailbox send --to ADDRESS --body-file PATH [options] [--json | --yaml] [--full]",
+		},
+		{
+			name:         "stale help",
+			args:         []string{"stale", "--help"},
+			wantContains: "Usage:\n  agent-mailbox stale --for ADDRESS [--for ADDRESS ...] --older-than DURATION [--json | --yaml]",
 		},
 		{
 			name:         "recv help",

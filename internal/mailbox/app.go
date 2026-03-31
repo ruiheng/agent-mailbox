@@ -50,7 +50,7 @@ func (a *App) Run(ctx context.Context, args []string) error {
 		return ErrHelpRequested
 	}
 	if len(rest) == 0 {
-		return errors.New("expected a command: send, recv, wait, watch, ack, release, defer, fail, list, group, or address")
+		return errors.New("expected a command: send, recv, wait, watch, ack, release, defer, fail, list, stale, group, or address")
 	}
 
 	command, err := a.prepareCommand(rest)
@@ -69,7 +69,7 @@ func (a *App) Run(ctx context.Context, args []string) error {
 
 func (a *App) prepareCommand(args []string) (preparedCommand, error) {
 	if len(args) == 0 {
-		return nil, errors.New("expected a command: send, recv, wait, watch, ack, release, defer, fail, list, group, or address")
+		return nil, errors.New("expected a command: send, recv, wait, watch, ack, release, defer, fail, list, stale, group, or address")
 	}
 
 	switch args[0] {
@@ -91,6 +91,8 @@ func (a *App) prepareCommand(args []string) (preparedCommand, error) {
 		return a.prepareFailCommand(args[1:])
 	case "list":
 		return a.prepareListCommand(args[1:])
+	case "stale":
+		return a.prepareStaleCommand(args[1:])
 	case "group":
 		return a.prepareGroupCommand(args[1:])
 	case "address":
@@ -273,6 +275,47 @@ func (a *App) prepareListCommand(args []string) (preparedCommand, error) {
 			fmt.Fprintf(a.stdout, "%s %s %s %s\n", delivery.DeliveryID, delivery.State, delivery.VisibleAt, delivery.Subject)
 		}
 		return nil
+	}, nil
+}
+
+func (a *App) prepareStaleCommand(args []string) (preparedCommand, error) {
+	fs := flag.NewFlagSet("agent-mailbox stale", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+
+	var addresses stringListFlag
+	var olderThan time.Duration
+	var formats outputFlags
+
+	fs.Var(&addresses, "for", "recipient address (repeatable)")
+	fs.DurationVar(&olderThan, "older-than", 0, "staleness threshold")
+	formats.register(fs, "emit JSON", "emit YAML")
+
+	if err := a.parseCommandFlags(fs, args, a.writeStaleHelp); err != nil {
+		return nil, err
+	}
+	normalizedAddresses, err := normalizeAddresses("", []string(addresses), "--for")
+	if err != nil {
+		return nil, err
+	}
+	if olderThan <= 0 {
+		return nil, errors.New("--older-than must be greater than 0")
+	}
+	format, err := formats.resolveStructured()
+	if err != nil {
+		return nil, err
+	}
+
+	params := StaleAddressesParams{
+		Addresses: normalizedAddresses,
+		OlderThan: olderThan,
+	}
+
+	return func(ctx context.Context, store *Store) error {
+		stale, err := store.ListStaleAddresses(ctx, params)
+		if err != nil {
+			return err
+		}
+		return a.writeStructuredOutput(format, stale)
 	}, nil
 }
 
@@ -702,6 +745,7 @@ func (a *App) writeRootHelp() {
 		"  wait                Wait for one delivery without claiming",
 		"  watch               Observe deliveries without claiming",
 		"  list                List deliveries",
+		"  stale               List stale personal inboxes",
 		"  group               Manage group mailboxes",
 		"  address             Inspect address bindings",
 		"  ack                 Acknowledge a leased delivery",
@@ -748,6 +792,19 @@ func (a *App) writeListHelp() {
 		"  --state STATE      Filter by delivery state",
 		"  --json             Emit JSON",
 		"  --yaml             Emit YAML",
+	})
+}
+
+func (a *App) writeStaleHelp() {
+	writeHelp(a.stdout, []string{
+		"Usage:",
+		"  agent-mailbox stale --for ADDRESS [--for ADDRESS ...] --older-than DURATION [--json | --yaml]",
+		"",
+		"Options:",
+		"  --for ADDRESS        Recipient address (repeatable)",
+		"  --older-than DUR     Minimum receivable age before an inbox is stale",
+		"  --json               Emit JSON",
+		"  --yaml               Emit YAML",
 	})
 }
 

@@ -9,7 +9,7 @@ The current MVP is intentionally narrow:
 - one local Unix user on one machine
 - direct mailbox delivery by endpoint address
 - SQLite metadata plus blob-backed message bodies
-- explicit `send`, `recv`, `wait`, `watch`, `ack`, `release`, `defer`, `fail`, and `list`
+- explicit `send`, `recv`, `wait`, `watch`, `list`, `stale`, `ack`, `release`, `defer`, and `fail`
 - no daemon, no network transport, no adapter-specific correctness dependency
 
 ## Status
@@ -91,7 +91,7 @@ The default state directory is:
 - otherwise `~/.local/state/ai-agent/mailbox`
 
 You can set `MAILBOX_STATE_DIR` once, or pass `--state-dir` per command.
-Structured-output commands (`send`, `list`, `recv`, `wait`, and `watch`) accept
+Structured-output commands (`send`, `list`, `recv`, `wait`, `watch`, and `stale`) accept
 either `--json` or `--yaml`, but not both together.
 `send`, `recv`, and `wait` also accept `--full` when you need the full legacy
 payload instead of the default compact view.
@@ -175,9 +175,18 @@ agent-mailbox --state-dir /tmp/mailbox-demo \
 
 `--timeout` uses Go duration syntax such as `30s`, `5m`, `120ms`, or `1m30s`.
 
-Use `--yaml` when you want the same `list`, `recv`, `wait`, or `watch`
+Use `--yaml` when you want the same `list`, `recv`, `wait`, `watch`, or `stale`
 payloads in YAML. `wait` returns one YAML mapping. `watch` returns a YAML
 document stream with one delivery per `---` document.
+
+Find personal inboxes with receivable mail older than a threshold:
+
+```bash
+agent-mailbox --state-dir /tmp/mailbox-demo \
+  stale --for workflow/reviewer/task-123 --older-than 10m --json
+```
+
+`stale` is structured-output-only in v1: use `--json` or `--yaml`.
 
 Ack the leased delivery using the returned `delivery_id` and `lease_token`:
 

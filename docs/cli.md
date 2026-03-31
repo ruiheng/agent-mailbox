@@ -6,7 +6,7 @@ This guide is intentionally short. It covers what a user needs to run the CLI:
 
 - where state lives
 - the normal send/receive flow
-- how immediate receive, observe-only wait, and observe-only watch work
+- how immediate receive, observe-only wait, observe-only watch, and stale-inbox inspection work
 - what each command is for
 
 ## State Directory
@@ -105,6 +105,19 @@ agent-mailbox watch \
 
 `watch` emits delivery metadata only. It never returns message bodies or lease
 tokens. Use `--yaml` to emit the same metadata as a YAML document stream.
+
+Find inboxes with receivable mail older than a threshold:
+
+```bash
+agent-mailbox stale \
+  --for workflow/reviewer/task-123 \
+  --for workflow/reviewer/task-456 \
+  --older-than 10m \
+  --json
+```
+
+`stale` is personal-mailbox-only and structured-output-only in v1. Use
+`--json` or `--yaml`; plain-text mode is intentionally unsupported.
 
 Ack when processing succeeds:
 
@@ -408,6 +421,31 @@ Notes:
 - compact group `list` output includes `message_id`, `group_id`,
   `group_address`, `person`, `message_created_at`, `subject`, `content_type`,
   `read`, `first_read_at`, `read_count`, and `eligible_count`
+
+### `stale`
+
+List personal inboxes whose oldest currently receivable delivery is older than
+the requested threshold.
+
+```bash
+agent-mailbox stale --for <address> [--for <address> ...] --older-than 10m [--json | --yaml]
+```
+
+Use `--json` or `--yaml`. One of them is required.
+
+Notes:
+
+- `--older-than` uses Go duration syntax such as `30s`, `5m`, `120ms`, or `1h`
+- repeat `--for` to check multiple inboxes in one query
+- duplicate `--for` values are ignored after the first occurrence
+- plain-text mode is not supported in v1
+- unseen addresses behave like empty inboxes
+- known group addresses fail explicitly; this command is personal-mailbox-only
+- queued deliveries count when `visible_at <= now`
+- expired leased deliveries count when `lease_expires_at <= now`
+- future invisible deliveries do not count as stale
+- results are ordered by `oldest_eligible_at`, then `address`
+- each result object contains `address`, `oldest_eligible_at`, and `claimable_count`
 
 ### `group create`
 

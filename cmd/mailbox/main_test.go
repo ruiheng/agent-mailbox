@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"os"
@@ -9,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/ruiheng/agent-mailbox/internal/mailbox"
 )
@@ -481,6 +483,88 @@ func TestCLIListStructuredOutputUsesEmptyArraysForExistingEmptyInbox(t *testing.
 	}
 }
 
+func TestCLIStaleJSONOutput(t *testing.T) {
+	stateDir := filepath.Join(t.TempDir(), "mailbox-state")
+	oldestEligibleAt := seedStaleDelivery(t, stateDir, "workflow/stale-json", 10*time.Minute)
+
+	stale := runCLI(t, "", "--state-dir", stateDir,
+		"stale",
+		"--for", "workflow/stale-json",
+		"--older-than", "5m",
+		"--json",
+	)
+	if stale.exitCode != 0 {
+		t.Fatalf("stale --json exit code = %d, stderr = %q", stale.exitCode, stale.stderr)
+	}
+	if stale.stderr != "" {
+		t.Fatalf("stale --json stderr = %q, want empty", stale.stderr)
+	}
+
+	var result []mailbox.StaleAddress
+	if err := json.Unmarshal([]byte(stale.stdout), &result); err != nil {
+		t.Fatalf("json.Unmarshal(stale --json stdout) error = %v; stdout = %q", err, stale.stdout)
+	}
+	if len(result) != 1 {
+		t.Fatalf("len(stale --json result) = %d, want 1", len(result))
+	}
+	if result[0].Address != "workflow/stale-json" {
+		t.Fatalf("stale --json address = %q, want workflow/stale-json", result[0].Address)
+	}
+	if result[0].OldestEligibleAt != oldestEligibleAt {
+		t.Fatalf("stale --json oldest_eligible_at = %q, want %q", result[0].OldestEligibleAt, oldestEligibleAt)
+	}
+	if result[0].ClaimableCount != 1 {
+		t.Fatalf("stale --json claimable_count = %d, want 1", result[0].ClaimableCount)
+	}
+}
+
+func TestCLIStaleYAMLOutput(t *testing.T) {
+	stateDir := filepath.Join(t.TempDir(), "mailbox-state")
+	oldestEligibleAt := seedStaleDelivery(t, stateDir, "workflow/stale-yaml", 10*time.Minute)
+
+	stale := runCLI(t, "", "--state-dir", stateDir,
+		"stale",
+		"--for", "workflow/stale-yaml",
+		"--older-than", "5m",
+		"--yaml",
+	)
+	if stale.exitCode != 0 {
+		t.Fatalf("stale --yaml exit code = %d, stderr = %q", stale.exitCode, stale.stderr)
+	}
+	if stale.stderr != "" {
+		t.Fatalf("stale --yaml stderr = %q, want empty", stale.stderr)
+	}
+	if !strings.HasPrefix(stale.stdout, "-\n  address: \"workflow/stale-yaml\"\n") {
+		t.Fatalf("stale --yaml stdout = %q, want YAML sequence", stale.stdout)
+	}
+	if !strings.Contains(stale.stdout, "  oldest_eligible_at: \""+oldestEligibleAt+"\"\n") {
+		t.Fatalf("stale --yaml stdout = %q, want oldest_eligible_at", stale.stdout)
+	}
+	if !strings.Contains(stale.stdout, "  claimable_count: 1\n") {
+		t.Fatalf("stale --yaml stdout = %q, want claimable_count", stale.stdout)
+	}
+}
+
+func TestCLIStaleRequiresStructuredOutput(t *testing.T) {
+	stateDir := filepath.Join(t.TempDir(), "mailbox-state")
+	seedStaleDelivery(t, stateDir, "workflow/stale-plain", 10*time.Minute)
+
+	stale := runCLI(t, "", "--state-dir", stateDir,
+		"stale",
+		"--for", "workflow/stale-plain",
+		"--older-than", "5m",
+	)
+	if stale.exitCode != 1 {
+		t.Fatalf("stale plain-text exit code = %d, want 1; stderr = %q", stale.exitCode, stale.stderr)
+	}
+	if stale.stdout != "" {
+		t.Fatalf("stale plain-text stdout = %q, want empty", stale.stdout)
+	}
+	if !strings.Contains(stale.stderr, "either --json or --yaml is required") {
+		t.Fatalf("stale plain-text stderr = %q, want structured-output error", stale.stderr)
+	}
+}
+
 func TestCLIWatchStreamsNDJSONWithoutClaiming(t *testing.T) {
 	stateDir := filepath.Join(t.TempDir(), "mailbox-state")
 
@@ -827,9 +911,19 @@ func TestCLIHelpExitsZeroAndPrintsUsage(t *testing.T) {
 			wantContains: "Usage:\n  agent-mailbox [--state-dir PATH] <command> [options]",
 		},
 		{
+			name:         "root help lists stale",
+			args:         []string{"--help"},
+			wantContains: "  stale               List stale personal inboxes",
+		},
+		{
 			name:         "send help",
 			args:         []string{"send", "--help"},
 			wantContains: "Usage:\n  agent-mailbox send --to ADDRESS --body-file PATH [options] [--json | --yaml] [--full]",
+		},
+		{
+			name:         "stale help",
+			args:         []string{"stale", "--help"},
+			wantContains: "Usage:\n  agent-mailbox stale --for ADDRESS [--for ADDRESS ...] --older-than DURATION [--json | --yaml]",
 		},
 		{
 			name:         "recv help",
@@ -904,6 +998,42 @@ func TestCLIHelperProcess(t *testing.T) {
 	os.Args = append([]string{"agent-mailbox"}, os.Args[separator+1:]...)
 	main()
 	os.Exit(0)
+}
+
+func seedStaleDelivery(t *testing.T, stateDir, address string, age time.Duration) string {
+	t.Helper()
+
+	send := runCLI(t, "stale body\n", "--state-dir", stateDir,
+		"send",
+		"--to", address,
+		"--from", "agent/sender",
+		"--subject", "stale subject",
+		"--body-file", "-",
+	)
+	if send.exitCode != 0 {
+		t.Fatalf("send stale seed exit code = %d, stderr = %q", send.exitCode, send.stderr)
+	}
+
+	oldestEligibleAt := time.Now().UTC().Add(-age)
+	runtime, err := mailbox.OpenRuntime(context.Background(), stateDir)
+	if err != nil {
+		t.Fatalf("OpenRuntime(seed stale) error = %v", err)
+	}
+	defer runtime.Close()
+
+	if _, err := runtime.DB().Exec(`
+UPDATE deliveries
+SET visible_at = ?
+WHERE recipient_endpoint_id = (
+  SELECT endpoint_id
+  FROM endpoint_addresses
+  WHERE address = ?
+)
+`, oldestEligibleAt.Format("2006-01-02T15:04:05.000000000Z07:00"), address); err != nil {
+		t.Fatalf("Exec(update stale visible_at) error = %v", err)
+	}
+
+	return oldestEligibleAt.Format("2006-01-02T15:04:05.000000000Z07:00")
 }
 
 type cliResult struct {
