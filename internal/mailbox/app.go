@@ -554,49 +554,114 @@ func (a *App) prepareReadCommand(args []string) (preparedCommand, error) {
 	fs := flag.NewFlagSet("agent-mailbox read", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 
-	var deliveryID string
-	var messageID string
+	var deliveryIDs stringListFlag
+	var messageIDs stringListFlag
+	var addresses stringListFlag
+	var latest bool
+	var state string
+	var limit int
 	var formats outputFlags
-	fs.StringVar(&deliveryID, "delivery", "", "delivery id")
-	fs.StringVar(&messageID, "message", "", "message id")
+	fs.Var(&deliveryIDs, "delivery", "delivery id (repeatable)")
+	fs.Var(&messageIDs, "message", "message id (repeatable)")
+	fs.Var(&addresses, "for", "recipient address (repeatable)")
+	fs.BoolVar(&latest, "latest", false, "read the latest deliveries for one or more inboxes")
+	fs.StringVar(&state, "state", "", "delivery state for --latest (defaults to acked)")
+	fs.IntVar(&limit, "limit", 1, "maximum number of latest deliveries to read")
 	formats.register(fs, "emit JSON", "emit YAML")
 
 	if err := a.parseCommandFlags(fs, args, a.writeReadHelp); err != nil {
 		return nil, err
 	}
-	deliveryID = strings.TrimSpace(deliveryID)
-	messageID = strings.TrimSpace(messageID)
+	normalizedDeliveryIDs, err := normalizeFlagValues([]string(deliveryIDs), "--delivery")
+	if err != nil && !strings.Contains(err.Error(), "is required") {
+		return nil, err
+	}
+	normalizedMessageIDs, err := normalizeFlagValues([]string(messageIDs), "--message")
+	if err != nil && !strings.Contains(err.Error(), "is required") {
+		return nil, err
+	}
+	normalizedAddresses, err := normalizeFlagValues([]string(addresses), "--for")
+	if err != nil && !strings.Contains(err.Error(), "is required") {
+		return nil, err
+	}
+	selectorCount := 0
+	if len(normalizedDeliveryIDs) > 0 {
+		selectorCount++
+	}
+	if len(normalizedMessageIDs) > 0 {
+		selectorCount++
+	}
+	if latest {
+		selectorCount++
+	}
 	switch {
-	case deliveryID == "" && messageID == "":
-		return nil, errors.New("either --delivery or --message is required")
-	case deliveryID != "" && messageID != "":
-		return nil, errors.New("--delivery and --message are mutually exclusive")
+	case selectorCount == 0:
+		return nil, errors.New("one of --delivery, --message, or --latest is required")
+	case selectorCount > 1:
+		return nil, errors.New("--delivery, --message, and --latest are mutually exclusive")
+	case !latest && len(normalizedAddresses) > 0:
+		return nil, errors.New("--for requires --latest")
+	case !latest && strings.TrimSpace(state) != "":
+		return nil, errors.New("--state requires --latest")
+	case !latest && flagWasProvided(fs, "limit"):
+		return nil, errors.New("--limit requires --latest")
+	case latest && len(normalizedAddresses) == 0:
+		return nil, errors.New("--latest requires at least one --for address")
+	case latest && limit <= 0:
+		return nil, errors.New("--limit must be greater than 0")
 	}
 	format, err := formats.resolve()
 	if err != nil {
 		return nil, err
 	}
+	if latest && strings.TrimSpace(state) == "" {
+		state = "acked"
+	}
+	state = strings.TrimSpace(state)
 
 	return func(ctx context.Context, store *Store) error {
-		if messageID != "" {
-			message, err := store.ReadMessage(ctx, messageID)
+		if len(normalizedMessageIDs) > 0 {
+			messages, err := store.ReadMessages(ctx, normalizedMessageIDs)
 			if err != nil {
 				return err
 			}
-			if format != outputFormatText {
-				return a.writeStructuredOutput(format, message)
+			result := readMessageResult{
+				Items:   messages,
+				HasMore: false,
 			}
-			return a.writeReadMessageText(message)
+			if format != outputFormatText {
+				return a.writeStructuredOutput(format, result)
+			}
+			return a.writeReadMessageResultText(result)
 		}
 
-		delivery, err := store.ReadDelivery(ctx, deliveryID)
+		if latest {
+			deliveries, hasMore, err := store.ReadLatestDeliveries(ctx, normalizedAddresses, state, limit)
+			if err != nil {
+				return err
+			}
+			result := readDeliveryResult{
+				Items:   deliveries,
+				HasMore: hasMore,
+			}
+			if format != outputFormatText {
+				return a.writeStructuredOutput(format, result)
+			}
+			return a.writeReadDeliveryResultText(result)
+		}
+
+		deliveries, err := store.ReadDeliveries(ctx, normalizedDeliveryIDs)
 		if err != nil {
 			return err
 		}
-		if format != outputFormatText {
-			return a.writeStructuredOutput(format, delivery)
+		result := readDeliveryResult{
+			Items:   deliveries,
+			HasMore: false,
 		}
-		return a.writeReadDeliveryText(delivery)
+		if format != outputFormatText {
+			return a.writeStructuredOutput(format, result)
+		}
+		return a.writeReadDeliveryResultText(result)
 	}, nil
 }
 
@@ -751,6 +816,14 @@ func normalizeAddresses(address string, addresses []string, flagName string) ([]
 		values = append(values, address)
 	}
 	values = append(values, addresses...)
+
+	return normalizeFlagValues(values, flagName)
+}
+
+func normalizeFlagValues(values []string, flagName string) ([]string, error) {
+	if len(values) == 0 {
+		return nil, fmt.Errorf("%s is required", flagName)
+	}
 
 	normalized := make([]string, 0, len(values))
 	seen := make(map[string]struct{}, len(values))
@@ -943,11 +1016,17 @@ func (a *App) writeRecvHelp() {
 func (a *App) writeReadHelp() {
 	writeHelp(a.stdout, []string{
 		"Usage:",
-		"  agent-mailbox read (--delivery ID | --message ID) [--json | --yaml]",
+		"  agent-mailbox read --message ID [--message ID ...] [--json | --yaml]",
+		"  agent-mailbox read --delivery ID [--delivery ID ...] [--json | --yaml]",
+		"  agent-mailbox read --latest --for ADDRESS [--for ADDRESS ...] [--state STATE] [--limit N] [--json | --yaml]",
 		"",
 		"Options:",
-		"  --delivery ID       Delivery id to read",
-		"  --message ID        Message id to read",
+		"  --message ID        Message id to read (repeatable)",
+		"  --delivery ID       Delivery id to read (repeatable)",
+		"  --latest            Read the latest deliveries for one or more inboxes",
+		"  --for ADDRESS       Recipient address for --latest (repeatable)",
+		"  --state STATE       Delivery state for --latest (defaults to acked)",
+		"  --limit N           Maximum number of latest deliveries to read",
 		"  --json              Emit JSON",
 		"  --yaml              Emit YAML",
 	})

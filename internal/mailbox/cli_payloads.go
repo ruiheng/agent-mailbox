@@ -35,6 +35,16 @@ type receiveResultSummary struct {
 	HasMore  bool                     `json:"has_more"`
 }
 
+type readMessageResult struct {
+	Items   []ReadMessage `json:"items"`
+	HasMore bool          `json:"has_more"`
+}
+
+type readDeliveryResult struct {
+	Items   []ReadDelivery `json:"items"`
+	HasMore bool           `json:"has_more"`
+}
+
 type listedDeliverySummary struct {
 	DeliveryID       string `json:"delivery_id"`
 	RecipientAddress string `json:"recipient_address"`

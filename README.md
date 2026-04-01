@@ -220,6 +220,14 @@ agent-mailbox --state-dir /tmp/mailbox-demo \
 not update group read tracking; group `recv` remains the operation that records
 reads and advances group unread/read state.
 
+For the common "read the previous message from this inbox" case, skip `list`
+and read the latest acked delivery in one step:
+
+```bash
+agent-mailbox --state-dir /tmp/mailbox-demo \
+  read --latest --for workflow/reviewer/task-123 --json
+```
+
 For the full command reference, see [`docs/cli.md`](docs/cli.md).
 
 `recv` v1 contract for multiple `--for` flags:

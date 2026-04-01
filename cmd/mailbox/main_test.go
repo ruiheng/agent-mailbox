@@ -100,15 +100,21 @@ func TestCLISendRecvAckFlow(t *testing.T) {
 		t.Fatalf("read acked exit code = %d, stderr = %q", read.exitCode, read.stderr)
 	}
 
-	var stored map[string]any
+	var stored readResult
 	if err := json.Unmarshal([]byte(read.stdout), &stored); err != nil {
 		t.Fatalf("json.Unmarshal(read acked stdout) error = %v; stdout = %q", err, read.stdout)
 	}
-	if stored["state"] != "acked" {
-		t.Fatalf("read acked state = %v, want acked", stored["state"])
+	if stored.HasMore {
+		t.Fatal("read acked has_more = true, want false")
 	}
-	if stored["body"] != "hello reviewer\n" {
-		t.Fatalf("read acked body = %v, want hello reviewer\\n", stored["body"])
+	if len(stored.Items) != 1 {
+		t.Fatalf("len(read acked items) = %d, want 1", len(stored.Items))
+	}
+	if stored.Items[0]["state"] != "acked" {
+		t.Fatalf("read acked state = %v, want acked", stored.Items[0]["state"])
+	}
+	if stored.Items[0]["body"] != "hello reviewer\n" {
+		t.Fatalf("read acked body = %v, want hello reviewer\\n", stored.Items[0]["body"])
 	}
 
 	if deliveries[0]["message_id"] == "" {
@@ -123,15 +129,194 @@ func TestCLISendRecvAckFlow(t *testing.T) {
 		t.Fatalf("read by message exit code = %d, stderr = %q", readByMessage.exitCode, readByMessage.stderr)
 	}
 
-	var storedMessage map[string]any
+	var storedMessage readResult
 	if err := json.Unmarshal([]byte(readByMessage.stdout), &storedMessage); err != nil {
 		t.Fatalf("json.Unmarshal(read by message stdout) error = %v; stdout = %q", err, readByMessage.stdout)
 	}
-	if storedMessage["message_id"] != deliveries[0]["message_id"] {
-		t.Fatalf("read by message_id = %v, want %v", storedMessage["message_id"], deliveries[0]["message_id"])
+	if len(storedMessage.Items) != 1 {
+		t.Fatalf("len(read by message items) = %d, want 1", len(storedMessage.Items))
 	}
-	if storedMessage["body"] != "hello reviewer\n" {
-		t.Fatalf("read by message body = %v, want hello reviewer\\n", storedMessage["body"])
+	if storedMessage.Items[0]["message_id"] != deliveries[0]["message_id"] {
+		t.Fatalf("read by message_id = %v, want %v", storedMessage.Items[0]["message_id"], deliveries[0]["message_id"])
+	}
+	if storedMessage.Items[0]["body"] != "hello reviewer\n" {
+		t.Fatalf("read by message body = %v, want hello reviewer\\n", storedMessage.Items[0]["body"])
+	}
+
+	readLatest := runCLI(t, "", "--state-dir", stateDir,
+		"read",
+		"--latest",
+		"--for", "workflow/reviewer/task-123",
+		"--json",
+	)
+	if readLatest.exitCode != 0 {
+		t.Fatalf("read latest acked exit code = %d, stderr = %q", readLatest.exitCode, readLatest.stderr)
+	}
+
+	var latest readResult
+	if err := json.Unmarshal([]byte(readLatest.stdout), &latest); err != nil {
+		t.Fatalf("json.Unmarshal(read latest acked stdout) error = %v; stdout = %q", err, readLatest.stdout)
+	}
+	if len(latest.Items) != 1 {
+		t.Fatalf("len(read latest acked items) = %d, want 1", len(latest.Items))
+	}
+	if latest.Items[0]["delivery_id"] != message.DeliveryID {
+		t.Fatalf("read latest acked delivery_id = %v, want %s", latest.Items[0]["delivery_id"], message.DeliveryID)
+	}
+	if latest.Items[0]["body"] != "hello reviewer\n" {
+		t.Fatalf("read latest acked body = %v, want hello reviewer\\n", latest.Items[0]["body"])
+	}
+}
+
+func TestCLIReadLatestReturnsLatestAckedByDefault(t *testing.T) {
+	stateDir := filepath.Join(t.TempDir(), "mailbox-state")
+
+	firstSend := runCLI(t, "first body\n", "--state-dir", stateDir,
+		"send",
+		"--to", "workflow/history",
+		"--from", "agent/sender",
+		"--subject", "first",
+		"--body-file", "-",
+		"--json",
+		"--full",
+	)
+	if firstSend.exitCode != 0 {
+		t.Fatalf("first send exit code = %d, stderr = %q", firstSend.exitCode, firstSend.stderr)
+	}
+
+	firstRecv := runCLI(t, "", "--state-dir", stateDir,
+		"recv",
+		"--for", "workflow/history",
+		"--json",
+	)
+	if firstRecv.exitCode != 0 {
+		t.Fatalf("first recv exit code = %d, stderr = %q", firstRecv.exitCode, firstRecv.stderr)
+	}
+	firstMessage := decodeReceivedMessage(t, firstRecv.stdout)
+	firstAck := runCLI(t, "", "--state-dir", stateDir,
+		"ack",
+		"--delivery", firstMessage.DeliveryID,
+		"--lease-token", firstMessage.LeaseToken,
+	)
+	if firstAck.exitCode != 0 {
+		t.Fatalf("first ack exit code = %d, stderr = %q", firstAck.exitCode, firstAck.stderr)
+	}
+
+	secondSend := runCLI(t, "second body\n", "--state-dir", stateDir,
+		"send",
+		"--to", "workflow/history",
+		"--from", "agent/sender",
+		"--subject", "second",
+		"--body-file", "-",
+	)
+	if secondSend.exitCode != 0 {
+		t.Fatalf("second send exit code = %d, stderr = %q", secondSend.exitCode, secondSend.stderr)
+	}
+	secondRecv := runCLI(t, "", "--state-dir", stateDir,
+		"recv",
+		"--for", "workflow/history",
+		"--json",
+	)
+	if secondRecv.exitCode != 0 {
+		t.Fatalf("second recv exit code = %d, stderr = %q", secondRecv.exitCode, secondRecv.stderr)
+	}
+	secondMessage := decodeReceivedMessage(t, secondRecv.stdout)
+	secondAck := runCLI(t, "", "--state-dir", stateDir,
+		"ack",
+		"--delivery", secondMessage.DeliveryID,
+		"--lease-token", secondMessage.LeaseToken,
+	)
+	if secondAck.exitCode != 0 {
+		t.Fatalf("second ack exit code = %d, stderr = %q", secondAck.exitCode, secondAck.stderr)
+	}
+
+	readLatest := runCLI(t, "", "--state-dir", stateDir,
+		"read",
+		"--latest",
+		"--for", "workflow/history",
+		"--json",
+	)
+	if readLatest.exitCode != 0 {
+		t.Fatalf("read latest exit code = %d, stderr = %q", readLatest.exitCode, readLatest.stderr)
+	}
+
+	var latest readResult
+	if err := json.Unmarshal([]byte(readLatest.stdout), &latest); err != nil {
+		t.Fatalf("json.Unmarshal(read latest stdout) error = %v; stdout = %q", err, readLatest.stdout)
+	}
+	if !latest.HasMore {
+		t.Fatal("read latest has_more = false, want true")
+	}
+	if len(latest.Items) != 1 {
+		t.Fatalf("len(read latest items) = %d, want 1", len(latest.Items))
+	}
+	if latest.Items[0]["delivery_id"] != secondMessage.DeliveryID {
+		t.Fatalf("read latest delivery_id = %v, want %s", latest.Items[0]["delivery_id"], secondMessage.DeliveryID)
+	}
+	if latest.Items[0]["body"] != "second body\n" {
+		t.Fatalf("read latest body = %v, want second body\\n", latest.Items[0]["body"])
+	}
+}
+
+func TestCLIReadLatestHonorsLimitAndReportsMoreAvailable(t *testing.T) {
+	stateDir := filepath.Join(t.TempDir(), "mailbox-state")
+
+	for _, body := range []string{"first body\n", "second body\n", "third body\n"} {
+		send := runCLI(t, body, "--state-dir", stateDir,
+			"send",
+			"--to", "workflow/history-limit",
+			"--from", "agent/sender",
+			"--subject", strings.TrimSpace(body),
+			"--body-file", "-",
+		)
+		if send.exitCode != 0 {
+			t.Fatalf("send %q exit code = %d, stderr = %q", body, send.exitCode, send.stderr)
+		}
+		recv := runCLI(t, "", "--state-dir", stateDir,
+			"recv",
+			"--for", "workflow/history-limit",
+			"--json",
+		)
+		if recv.exitCode != 0 {
+			t.Fatalf("recv %q exit code = %d, stderr = %q", body, recv.exitCode, recv.stderr)
+		}
+		message := decodeReceivedMessage(t, recv.stdout)
+		ack := runCLI(t, "", "--state-dir", stateDir,
+			"ack",
+			"--delivery", message.DeliveryID,
+			"--lease-token", message.LeaseToken,
+		)
+		if ack.exitCode != 0 {
+			t.Fatalf("ack %q exit code = %d, stderr = %q", body, ack.exitCode, ack.stderr)
+		}
+	}
+
+	readLatest := runCLI(t, "", "--state-dir", stateDir,
+		"read",
+		"--latest",
+		"--for", "workflow/history-limit",
+		"--limit", "2",
+		"--json",
+	)
+	if readLatest.exitCode != 0 {
+		t.Fatalf("read latest limit exit code = %d, stderr = %q", readLatest.exitCode, readLatest.stderr)
+	}
+
+	var result readResult
+	if err := json.Unmarshal([]byte(readLatest.stdout), &result); err != nil {
+		t.Fatalf("json.Unmarshal(read latest limit stdout) error = %v; stdout = %q", err, readLatest.stdout)
+	}
+	if !result.HasMore {
+		t.Fatal("read latest limit has_more = false, want true")
+	}
+	if len(result.Items) != 2 {
+		t.Fatalf("len(read latest limit items) = %d, want 2", len(result.Items))
+	}
+	if result.Items[0]["body"] != "third body\n" {
+		t.Fatalf("read latest limit first body = %v, want third body\\n", result.Items[0]["body"])
+	}
+	if result.Items[1]["body"] != "second body\n" {
+		t.Fatalf("read latest limit second body = %v, want second body\\n", result.Items[1]["body"])
 	}
 }
 
@@ -1000,7 +1185,7 @@ func TestCLIHelpExitsZeroAndPrintsUsage(t *testing.T) {
 		{
 			name:         "read help",
 			args:         []string{"read", "--help"},
-			wantContains: "Usage:\n  agent-mailbox read (--delivery ID | --message ID) [--json | --yaml]",
+			wantContains: "Usage:\n  agent-mailbox read --message ID [--message ID ...] [--json | --yaml]",
 		},
 		{
 			name:         "watch help",
@@ -1162,6 +1347,11 @@ type receivedMessageSummary struct {
 type receiveResultSummary struct {
 	Messages []receivedMessageSummary `json:"messages"`
 	HasMore  bool                     `json:"has_more"`
+}
+
+type readResult struct {
+	Items   []map[string]any `json:"items"`
+	HasMore bool             `json:"has_more"`
 }
 
 func decodeReceiveResult(t *testing.T, raw string) receiveResultSummary {

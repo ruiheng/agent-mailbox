@@ -144,6 +144,15 @@ agent-mailbox read \
   --json
 ```
 
+Read the latest previously acked delivery for one inbox in one step:
+
+```bash
+agent-mailbox read \
+  --latest \
+  --for workflow/reviewer/task-123 \
+  --json
+```
+
 Group mailbox quick start:
 
 ```bash
@@ -374,10 +383,13 @@ Notes:
 
 ### `read`
 
-Read one persisted message body, or one personal delivery with its delivery metadata.
+Read one or more persisted messages, one or more deliveries by id, or the
+latest deliveries for one or more inboxes.
 
 ```bash
-agent-mailbox read (--delivery <id> | --message <id>) [--json | --yaml]
+agent-mailbox read --message <id> [--message <id> ...] [--json | --yaml]
+agent-mailbox read --delivery <id> [--delivery <id> ...] [--json | --yaml]
+agent-mailbox read --latest --for <address> [--for <address> ...] [--state <state>] [--limit <n>] [--json | --yaml]
 ```
 
 Use `--json` or `--yaml` for scripts and agents.
@@ -387,12 +399,16 @@ Notes:
 - `--message` reads by message identity, which matches the body-bearing object
 - `--message` is a raw trusted-environment body read and does not update group
   read tracking
-- `--delivery` reads by one delivery record, regardless of whether it is
+- `--delivery` reads by one or more delivery records, regardless of whether they are
   `queued`, `leased`, `acked`, or `dead_letter`
+- `--latest` requires at least one `--for`
+- `--latest` defaults to `--state acked` and `--limit 1`
+- `--latest` searches the union of the requested inboxes and returns newest-first
+- structured output always returns an object with `items` and `has_more`
 - returns the persisted body after verifying the blob size and sha256
-- plain-text output prints one metadata line and then the body
-- `--message` structured output returns message metadata plus `body`
-- `--delivery` structured output also includes delivery metadata such as
+- plain-text output prints one item after another, separated by `---`
+- `--message` items return message metadata plus `body`
+- `--delivery` and `--latest` items also include delivery metadata such as
   `state`, recipient, and `acked_at` when present
 
 ### `ack`

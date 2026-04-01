@@ -306,6 +306,44 @@ func (a *App) writeReadMessageText(message ReadMessage) error {
 	return nil
 }
 
+func (a *App) writeReadMessageResultText(result readMessageResult) error {
+	for index, message := range result.Items {
+		if index > 0 {
+			if _, err := io.WriteString(a.stdout, "---\n"); err != nil {
+				return err
+			}
+		}
+		if err := a.writeReadMessageText(message); err != nil {
+			return err
+		}
+	}
+	if result.HasMore {
+		if _, err := io.WriteString(a.stdout, "notice=more_items_available\n"); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (a *App) writeReadDeliveryResultText(result readDeliveryResult) error {
+	for index, delivery := range result.Items {
+		if index > 0 {
+			if _, err := io.WriteString(a.stdout, "---\n"); err != nil {
+				return err
+			}
+		}
+		if err := a.writeReadDeliveryText(delivery); err != nil {
+			return err
+		}
+	}
+	if result.HasMore {
+		if _, err := io.WriteString(a.stdout, "notice=more_items_available\n"); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (a *App) writeListedDeliveryText(delivery ListedDelivery) error {
 	if delivery.AckedAt != nil {
 		_, err := fmt.Fprintf(

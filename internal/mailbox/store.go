@@ -616,6 +616,105 @@ WHERE m.message_id = ?
 	return result, nil
 }
 
+func (s *Store) ReadDeliveries(ctx context.Context, deliveryIDs []string) ([]ReadDelivery, error) {
+	results := make([]ReadDelivery, 0, len(deliveryIDs))
+	for _, deliveryID := range deliveryIDs {
+		delivery, err := s.ReadDelivery(ctx, deliveryID)
+		if err != nil {
+			return nil, err
+		}
+		results = append(results, delivery)
+	}
+	return results, nil
+}
+
+func (s *Store) ReadMessages(ctx context.Context, messageIDs []string) ([]ReadMessage, error) {
+	results := make([]ReadMessage, 0, len(messageIDs))
+	for _, messageID := range messageIDs {
+		message, err := s.ReadMessage(ctx, messageID)
+		if err != nil {
+			return nil, err
+		}
+		results = append(results, message)
+	}
+	return results, nil
+}
+
+func (s *Store) ReadLatestDeliveries(ctx context.Context, addresses []string, state string, limit int) ([]ReadDelivery, bool, error) {
+	if len(addresses) == 0 {
+		return []ReadDelivery{}, false, nil
+	}
+	if limit <= 0 {
+		return nil, false, errors.New("limit must be greater than 0")
+	}
+	state = strings.TrimSpace(state)
+	if state == "" {
+		return nil, false, errors.New("delivery state is required")
+	}
+
+	recipients, err := s.resolveRecipients(ctx, addresses)
+	if err != nil {
+		return nil, false, err
+	}
+	if len(recipients) == 0 {
+		return []ReadDelivery{}, false, nil
+	}
+
+	recipientEndpointIDs := make([]string, 0, len(recipients))
+	for _, recipient := range recipients {
+		recipientEndpointIDs = append(recipientEndpointIDs, recipient.EndpointID)
+	}
+
+	placeholders := strings.TrimSuffix(strings.Repeat("?,", len(recipientEndpointIDs)), ",")
+	args := make([]any, 0, len(recipientEndpointIDs)+2)
+	for _, recipientEndpointID := range recipientEndpointIDs {
+		args = append(args, recipientEndpointID)
+	}
+	args = append(args, state, limit+1)
+
+	orderClause := "ORDER BY d.visible_at DESC, m.created_at DESC, d.delivery_id DESC"
+	if state == "acked" {
+		orderClause = "ORDER BY d.acked_at DESC, m.created_at DESC, d.delivery_id DESC"
+	}
+
+	rows, err := s.readDB.QueryContext(ctx, fmt.Sprintf(`
+SELECT d.delivery_id
+FROM deliveries AS d
+JOIN messages AS m ON m.message_id = d.message_id
+WHERE d.recipient_endpoint_id IN (%s)
+  AND d.state = ?
+%s
+LIMIT ?
+`, placeholders, orderClause), args...)
+	if err != nil {
+		return nil, false, fmt.Errorf("load latest deliveries for state %q: %w", state, err)
+	}
+	defer rows.Close()
+
+	deliveryIDs := make([]string, 0, limit+1)
+	for rows.Next() {
+		var deliveryID string
+		if err := rows.Scan(&deliveryID); err != nil {
+			return nil, false, fmt.Errorf("scan latest delivery id: %w", err)
+		}
+		deliveryIDs = append(deliveryIDs, deliveryID)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, false, fmt.Errorf("iterate latest delivery ids: %w", err)
+	}
+
+	hasMore := len(deliveryIDs) > limit
+	if hasMore {
+		deliveryIDs = deliveryIDs[:limit]
+	}
+
+	deliveries, err := s.ReadDeliveries(ctx, deliveryIDs)
+	if err != nil {
+		return nil, false, err
+	}
+	return deliveries, hasMore, nil
+}
+
 func (s *Store) lookupEndpointID(ctx context.Context, querier interface {
 	QueryRowContext(context.Context, string, ...any) *sql.Row
 }, address string) (string, bool, error) {

@@ -794,6 +794,26 @@ func TestInvalidCLIPathsDoNotCreateRuntimeState(t *testing.T) {
 			args: []string{"read", "--delivery", "dlv_123", "--message", "msg_123"},
 		},
 		{
+			name: "read state without latest",
+			args: []string{"read", "--state", "acked"},
+		},
+		{
+			name: "read for without latest",
+			args: []string{"read", "--for", "workflow/reviewer/task-123"},
+		},
+		{
+			name: "read limit without latest",
+			args: []string{"read", "--limit", "2"},
+		},
+		{
+			name: "read latest missing for",
+			args: []string{"read", "--latest"},
+		},
+		{
+			name: "read conflicting latest and message selectors",
+			args: []string{"read", "--latest", "--for", "workflow/reviewer/task-123", "--message", "msg_123"},
+		},
+		{
 			name: "watch missing for",
 			args: []string{"watch", "--json"},
 		},
@@ -917,7 +937,7 @@ func TestHelpCLIPathsDoNotCreateRuntimeState(t *testing.T) {
 		{
 			name:         "read help",
 			args:         []string{"read", "--help"},
-			wantContains: "Usage:\n  agent-mailbox read (--delivery ID | --message ID) [--json | --yaml]",
+			wantContains: "Usage:\n  agent-mailbox read --message ID [--message ID ...] [--json | --yaml]",
 		},
 		{
 			name:         "watch help",
