@@ -168,7 +168,7 @@ func TestCLISendRecvAckFlow(t *testing.T) {
 	}
 }
 
-func TestCLIReadLatestReturnsLatestAckedByDefault(t *testing.T) {
+func TestCLIReadLatestDefaultsToAnyState(t *testing.T) {
 	stateDir := filepath.Join(t.TempDir(), "mailbox-state")
 
 	firstSend := runCLI(t, "first body\n", "--state-dir", stateDir,
@@ -230,6 +230,17 @@ func TestCLIReadLatestReturnsLatestAckedByDefault(t *testing.T) {
 		t.Fatalf("second ack exit code = %d, stderr = %q", secondAck.exitCode, secondAck.stderr)
 	}
 
+	queuedSend := runCLI(t, "queued body\n", "--state-dir", stateDir,
+		"send",
+		"--to", "workflow/history",
+		"--from", "agent/sender",
+		"--subject", "queued",
+		"--body-file", "-",
+	)
+	if queuedSend.exitCode != 0 {
+		t.Fatalf("queued send exit code = %d, stderr = %q", queuedSend.exitCode, queuedSend.stderr)
+	}
+
 	readLatest := runCLI(t, "", "--state-dir", stateDir,
 		"read",
 		"--latest",
@@ -250,11 +261,11 @@ func TestCLIReadLatestReturnsLatestAckedByDefault(t *testing.T) {
 	if len(latest.Items) != 1 {
 		t.Fatalf("len(read latest items) = %d, want 1", len(latest.Items))
 	}
-	if latest.Items[0]["delivery_id"] != secondMessage.DeliveryID {
-		t.Fatalf("read latest delivery_id = %v, want %s", latest.Items[0]["delivery_id"], secondMessage.DeliveryID)
+	if latest.Items[0]["state"] != "queued" {
+		t.Fatalf("read latest state = %v, want queued", latest.Items[0]["state"])
 	}
-	if latest.Items[0]["body"] != "second body\n" {
-		t.Fatalf("read latest body = %v, want second body\\n", latest.Items[0]["body"])
+	if latest.Items[0]["body"] != "queued body\n" {
+		t.Fatalf("read latest body = %v, want queued body\\n", latest.Items[0]["body"])
 	}
 }
 

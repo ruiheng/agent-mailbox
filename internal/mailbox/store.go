@@ -648,9 +648,6 @@ func (s *Store) ReadLatestDeliveries(ctx context.Context, addresses []string, st
 		return nil, false, errors.New("limit must be greater than 0")
 	}
 	state = strings.TrimSpace(state)
-	if state == "" {
-		return nil, false, errors.New("delivery state is required")
-	}
 
 	recipients, err := s.resolveRecipients(ctx, addresses)
 	if err != nil {
@@ -670,19 +667,26 @@ func (s *Store) ReadLatestDeliveries(ctx context.Context, addresses []string, st
 	for _, recipientEndpointID := range recipientEndpointIDs {
 		args = append(args, recipientEndpointID)
 	}
-	args = append(args, state, limit+1)
 
 	orderClause := "ORDER BY d.visible_at DESC, m.created_at DESC, d.delivery_id DESC"
 	if state == "acked" {
 		orderClause = "ORDER BY d.acked_at DESC, m.created_at DESC, d.delivery_id DESC"
+	} else if state == "" {
+		orderClause = "ORDER BY m.created_at DESC, d.delivery_id DESC"
 	}
+
+	whereClause := "WHERE d.recipient_endpoint_id IN (%s)"
+	if state != "" {
+		whereClause += "\n  AND d.state = ?"
+		args = append(args, state)
+	}
+	args = append(args, limit+1)
 
 	rows, err := s.readDB.QueryContext(ctx, fmt.Sprintf(`
 SELECT d.delivery_id
 FROM deliveries AS d
 JOIN messages AS m ON m.message_id = d.message_id
-WHERE d.recipient_endpoint_id IN (%s)
-  AND d.state = ?
+`+whereClause+`
 %s
 LIMIT ?
 `, placeholders, orderClause), args...)

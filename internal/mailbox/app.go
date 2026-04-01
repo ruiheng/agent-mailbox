@@ -614,9 +614,6 @@ func (a *App) prepareReadCommand(args []string) (preparedCommand, error) {
 	if err != nil {
 		return nil, err
 	}
-	if latest && strings.TrimSpace(state) == "" {
-		state = "acked"
-	}
 	state = strings.TrimSpace(state)
 
 	return func(ctx context.Context, store *Store) error {
@@ -1025,7 +1022,7 @@ func (a *App) writeReadHelp() {
 		"  --delivery ID       Delivery id to read (repeatable)",
 		"  --latest            Read the latest deliveries for one or more inboxes",
 		"  --for ADDRESS       Recipient address for --latest (repeatable)",
-		"  --state STATE       Delivery state for --latest (defaults to acked)",
+		"  --state STATE       Optional delivery state filter for --latest (defaults to any)",
 		"  --limit N           Maximum number of latest deliveries to read",
 		"  --json              Emit JSON",
 		"  --yaml              Emit YAML",

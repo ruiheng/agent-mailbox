@@ -144,7 +144,7 @@ agent-mailbox read \
   --json
 ```
 
-Read the latest previously acked delivery for one inbox in one step:
+Read the latest delivery for one inbox in one step:
 
 ```bash
 agent-mailbox read \
@@ -402,7 +402,7 @@ Notes:
 - `--delivery` reads by one or more delivery records, regardless of whether they are
   `queued`, `leased`, `acked`, or `dead_letter`
 - `--latest` requires at least one `--for`
-- `--latest` defaults to `--state acked` and `--limit 1`
+- `--latest` defaults to no state filter (`any`) and `--limit 1`
 - `--latest` searches the union of the requested inboxes and returns newest-first
 - structured output always returns an object with `items` and `has_more`
 - returns the persisted body after verifying the blob size and sha256

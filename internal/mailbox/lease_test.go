@@ -211,6 +211,47 @@ func TestReadLatestDeliveriesReturnsMostRecentAckedForAddress(t *testing.T) {
 	}
 }
 
+func TestReadLatestDeliveriesDefaultsToAnyState(t *testing.T) {
+	t.Parallel()
+
+	runtime, store := newLeaseTestStore(t)
+	defer runtime.Close()
+
+	current := time.Date(2026, 3, 18, 12, 0, 0, 0, time.UTC)
+	store.now = func() time.Time {
+		return current
+	}
+
+	mustSendMessage(t, store, "workflow/reviewer/task-123", "agent/sender", "older acked", "older acked body")
+	firstReceived, err := store.Receive(context.Background(), ReceiveParams{Address: "workflow/reviewer/task-123"})
+	if err != nil {
+		t.Fatalf("Receive(first) error = %v", err)
+	}
+	if _, err := store.Ack(context.Background(), firstReceived.DeliveryID, firstReceived.LeaseToken); err != nil {
+		t.Fatalf("Ack(first) error = %v", err)
+	}
+
+	current = current.Add(time.Minute)
+	queued := mustSendMessage(t, store, "workflow/reviewer/task-123", "agent/sender", "new queued", "new queued body")
+
+	read, hasMore, err := store.ReadLatestDeliveries(context.Background(), []string{"workflow/reviewer/task-123"}, "", 1)
+	if err != nil {
+		t.Fatalf("ReadLatestDeliveries(any) error = %v", err)
+	}
+	if !hasMore {
+		t.Fatalf("ReadLatestDeliveries(any) has_more = false, want true")
+	}
+	if len(read) != 1 {
+		t.Fatalf("len(ReadLatestDeliveries(any)) = %d, want 1", len(read))
+	}
+	if read[0].DeliveryID != queued.DeliveryID {
+		t.Fatalf("ReadLatestDeliveries(any) delivery_id = %q, want %q", read[0].DeliveryID, queued.DeliveryID)
+	}
+	if read[0].State != "queued" {
+		t.Fatalf("ReadLatestDeliveries(any) state = %q, want queued", read[0].State)
+	}
+}
+
 func TestReleaseDeferAndReceiveTimeout(t *testing.T) {
 	t.Parallel()
 
