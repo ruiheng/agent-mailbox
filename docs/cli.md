@@ -127,6 +127,23 @@ agent-mailbox ack \
   --lease-token <lease_token>
 ```
 
+List already-acked deliveries later:
+
+```bash
+agent-mailbox list \
+  --for workflow/reviewer/task-123 \
+  --state acked \
+  --json
+```
+
+Read one persisted delivery body later:
+
+```bash
+agent-mailbox read \
+  --message <message_id> \
+  --json
+```
+
 Group mailbox quick start:
 
 ```bash
@@ -355,6 +372,29 @@ Notes:
 - plain-text output includes `recipient_address=...`
 - `watch` is for observation only; use `recv` to claim work
 
+### `read`
+
+Read one persisted message body, or one personal delivery with its delivery metadata.
+
+```bash
+agent-mailbox read (--delivery <id> | --message <id>) [--json | --yaml]
+```
+
+Use `--json` or `--yaml` for scripts and agents.
+
+Notes:
+
+- `--message` reads by message identity, which matches the body-bearing object
+- `--message` is a raw trusted-environment body read and does not update group
+  read tracking
+- `--delivery` reads by one delivery record, regardless of whether it is
+  `queued`, `leased`, `acked`, or `dead_letter`
+- returns the persisted body after verifying the blob size and sha256
+- plain-text output prints one metadata line and then the body
+- `--message` structured output returns message metadata plus `body`
+- `--delivery` structured output also includes delivery metadata such as
+  `state`, recipient, and `acked_at` when present
+
 ### `ack`
 
 Mark a leased delivery as complete.
@@ -404,14 +444,15 @@ Inspect queued personal deliveries for one recipient address, or inspect group
 message metadata visible to one person.
 
 ```bash
-agent-mailbox list --for <address> [--state dead_letter] [--json | --yaml]
+agent-mailbox list --for <address> [--state queued|leased|acked|dead_letter] [--json | --yaml]
 agent-mailbox list --for <group-address> --as <person> [--json | --yaml]
 ```
 
 Notes:
 
 - default output shows currently claimable queued deliveries
-- `--state dead_letter` shows dead-lettered deliveries
+- `--state queued|leased|acked|dead_letter` filters to that personal delivery state
+- `acked` results include `acked_at` in structured output and plain text
 - `list` is a snapshot; use `wait` for one-shot blocking or `watch` for a stream
 - use `--json` or `--yaml` for scripts and agents
 - unseen addresses return an empty result

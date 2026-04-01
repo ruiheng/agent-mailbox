@@ -245,7 +245,81 @@ func (a *App) writeReceiveResultFullText(result ReceiveResult) error {
 	return nil
 }
 
+func (a *App) writeReadDeliveryText(delivery ReadDelivery) error {
+	if delivery.AckedAt != nil {
+		if _, err := fmt.Fprintf(
+			a.stdout,
+			"delivery_id=%s recipient_address=%s state=%s visible_at=%s acked_at=%s content_type=%s subject=%q\n",
+			delivery.DeliveryID,
+			delivery.RecipientAddress,
+			delivery.State,
+			delivery.VisibleAt,
+			*delivery.AckedAt,
+			delivery.ContentType,
+			delivery.Subject,
+		); err != nil {
+			return err
+		}
+	} else {
+		if _, err := fmt.Fprintf(
+			a.stdout,
+			"delivery_id=%s recipient_address=%s state=%s visible_at=%s content_type=%s subject=%q\n",
+			delivery.DeliveryID,
+			delivery.RecipientAddress,
+			delivery.State,
+			delivery.VisibleAt,
+			delivery.ContentType,
+			delivery.Subject,
+		); err != nil {
+			return err
+		}
+	}
+	if _, err := fmt.Fprint(a.stdout, delivery.Body); err != nil {
+		return err
+	}
+	if !strings.HasSuffix(delivery.Body, "\n") {
+		if _, err := fmt.Fprintln(a.stdout); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (a *App) writeReadMessageText(message ReadMessage) error {
+	if _, err := fmt.Fprintf(
+		a.stdout,
+		"message_id=%s content_type=%s subject=%q\n",
+		message.MessageID,
+		message.ContentType,
+		message.Subject,
+	); err != nil {
+		return err
+	}
+	if _, err := fmt.Fprint(a.stdout, message.Body); err != nil {
+		return err
+	}
+	if !strings.HasSuffix(message.Body, "\n") {
+		if _, err := fmt.Fprintln(a.stdout); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (a *App) writeListedDeliveryText(delivery ListedDelivery) error {
+	if delivery.AckedAt != nil {
+		_, err := fmt.Fprintf(
+			a.stdout,
+			"delivery_id=%s recipient_address=%s state=%s visible_at=%s acked_at=%s subject=%q\n",
+			delivery.DeliveryID,
+			delivery.RecipientAddress,
+			delivery.State,
+			delivery.VisibleAt,
+			*delivery.AckedAt,
+			delivery.Subject,
+		)
+		return err
+	}
 	_, err := fmt.Fprintf(
 		a.stdout,
 		"delivery_id=%s recipient_address=%s state=%s visible_at=%s subject=%q\n",

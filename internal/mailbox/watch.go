@@ -203,6 +203,7 @@ SELECT
   m.sender_endpoint_id,
   d.state,
   d.visible_at,
+  d.acked_at,
   m.created_at,
   m.subject,
   m.content_type,
@@ -239,6 +240,7 @@ ORDER BY d.visible_at ASC, m.created_at ASC, d.delivery_id ASC
 	deliveries := make([]ListedDelivery, 0)
 	for rows.Next() {
 		var delivery ListedDelivery
+		var ackedAt sql.NullString
 		var senderID sql.NullString
 		if err := rows.Scan(
 			&delivery.DeliveryID,
@@ -247,6 +249,7 @@ ORDER BY d.visible_at ASC, m.created_at ASC, d.delivery_id ASC
 			&senderID,
 			&delivery.State,
 			&delivery.VisibleAt,
+			&ackedAt,
 			&delivery.MessageCreatedAt,
 			&delivery.Subject,
 			&delivery.ContentType,
@@ -260,6 +263,9 @@ ORDER BY d.visible_at ASC, m.created_at ASC, d.delivery_id ASC
 		delivery.RecipientAddress = addressByEndpointID[delivery.RecipientEndpointID]
 		if senderID.Valid {
 			delivery.SenderEndpointID = &senderID.String
+		}
+		if ackedAt.Valid {
+			delivery.AckedAt = &ackedAt.String
 		}
 		deliveries = append(deliveries, delivery)
 	}

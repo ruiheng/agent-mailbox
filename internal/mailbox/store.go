@@ -93,6 +93,7 @@ type ListedDelivery struct {
 	SenderEndpointID    *string `json:"sender_endpoint_id,omitempty"`
 	State               string  `json:"state"`
 	VisibleAt           string  `json:"visible_at"`
+	AckedAt             *string `json:"acked_at,omitempty"`
 	MessageCreatedAt    string  `json:"message_created_at"`
 	Subject             string  `json:"subject"`
 	ContentType         string  `json:"content_type"`
@@ -100,6 +101,38 @@ type ListedDelivery struct {
 	BodyBlobRef         string  `json:"body_blob_ref"`
 	BodySize            int64   `json:"body_size"`
 	BodySHA256          string  `json:"body_sha256"`
+}
+
+type ReadDelivery struct {
+	DeliveryID          string  `json:"delivery_id"`
+	MessageID           string  `json:"message_id"`
+	RecipientAddress    string  `json:"recipient_address"`
+	RecipientEndpointID string  `json:"recipient_endpoint_id"`
+	SenderEndpointID    *string `json:"sender_endpoint_id,omitempty"`
+	State               string  `json:"state"`
+	VisibleAt           string  `json:"visible_at"`
+	AckedAt             *string `json:"acked_at,omitempty"`
+	MessageCreatedAt    string  `json:"message_created_at"`
+	Subject             string  `json:"subject"`
+	ContentType         string  `json:"content_type"`
+	SchemaVersion       string  `json:"schema_version"`
+	BodyBlobRef         string  `json:"body_blob_ref"`
+	BodySize            int64   `json:"body_size"`
+	BodySHA256          string  `json:"body_sha256"`
+	Body                string  `json:"body"`
+}
+
+type ReadMessage struct {
+	MessageID        string  `json:"message_id"`
+	SenderEndpointID *string `json:"sender_endpoint_id,omitempty"`
+	MessageCreatedAt string  `json:"message_created_at"`
+	Subject          string  `json:"subject"`
+	ContentType      string  `json:"content_type"`
+	SchemaVersion    string  `json:"schema_version"`
+	BodyBlobRef      string  `json:"body_blob_ref"`
+	BodySize         int64   `json:"body_size"`
+	BodySHA256       string  `json:"body_sha256"`
+	Body             string  `json:"body"`
 }
 
 type GroupListedMessage struct {
@@ -461,6 +494,126 @@ func (s *Store) List(ctx context.Context, params ListParams) ([]ListedDelivery, 
 		return nil, err
 	}
 	return s.listDeliveriesForRecipients(ctx, recipients, strings.TrimSpace(params.State))
+}
+
+func (s *Store) ReadDelivery(ctx context.Context, deliveryID string) (ReadDelivery, error) {
+	deliveryID = strings.TrimSpace(deliveryID)
+	if deliveryID == "" {
+		return ReadDelivery{}, errors.New("delivery id is required")
+	}
+
+	var result ReadDelivery
+	var senderID sql.NullString
+	var ackedAt sql.NullString
+	err := s.readDB.QueryRowContext(ctx, `
+SELECT
+  d.delivery_id,
+  d.message_id,
+  ea.address,
+  d.recipient_endpoint_id,
+  m.sender_endpoint_id,
+  d.state,
+  d.visible_at,
+  d.acked_at,
+  m.created_at,
+  m.subject,
+  m.content_type,
+  m.schema_version,
+  m.body_blob_ref,
+  m.body_size,
+  m.body_sha256
+FROM deliveries AS d
+JOIN messages AS m ON m.message_id = d.message_id
+JOIN endpoint_addresses AS ea ON ea.endpoint_id = d.recipient_endpoint_id
+WHERE d.delivery_id = ?
+`, deliveryID).Scan(
+		&result.DeliveryID,
+		&result.MessageID,
+		&result.RecipientAddress,
+		&result.RecipientEndpointID,
+		&senderID,
+		&result.State,
+		&result.VisibleAt,
+		&ackedAt,
+		&result.MessageCreatedAt,
+		&result.Subject,
+		&result.ContentType,
+		&result.SchemaVersion,
+		&result.BodyBlobRef,
+		&result.BodySize,
+		&result.BodySHA256,
+	)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return ReadDelivery{}, fmt.Errorf("delivery %q not found", deliveryID)
+		}
+		return ReadDelivery{}, fmt.Errorf("load delivery %q: %w", deliveryID, err)
+	}
+	if senderID.Valid {
+		result.SenderEndpointID = &senderID.String
+	}
+	if ackedAt.Valid {
+		result.AckedAt = &ackedAt.String
+	}
+
+	body, err := s.readBlob(result.BodyBlobRef, result.BodySize, result.BodySHA256)
+	if err != nil {
+		return ReadDelivery{}, err
+	}
+	result.Body = string(body)
+
+	return result, nil
+}
+
+func (s *Store) ReadMessage(ctx context.Context, messageID string) (ReadMessage, error) {
+	messageID = strings.TrimSpace(messageID)
+	if messageID == "" {
+		return ReadMessage{}, errors.New("message id is required")
+	}
+
+	var result ReadMessage
+	var senderID sql.NullString
+	err := s.readDB.QueryRowContext(ctx, `
+SELECT
+  m.message_id,
+  m.sender_endpoint_id,
+  m.created_at,
+  m.subject,
+  m.content_type,
+  m.schema_version,
+  m.body_blob_ref,
+  m.body_size,
+  m.body_sha256
+FROM messages AS m
+WHERE m.message_id = ?
+`, messageID).Scan(
+		&result.MessageID,
+		&senderID,
+		&result.MessageCreatedAt,
+		&result.Subject,
+		&result.ContentType,
+		&result.SchemaVersion,
+		&result.BodyBlobRef,
+		&result.BodySize,
+		&result.BodySHA256,
+	)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return ReadMessage{}, fmt.Errorf("message %q not found", messageID)
+		}
+		return ReadMessage{}, fmt.Errorf("load message %q: %w", messageID, err)
+	}
+	if senderID.Valid {
+		result.SenderEndpointID = &senderID.String
+	}
+
+	body, err := s.readBlob(result.BodyBlobRef, result.BodySize, result.BodySHA256)
+	if err != nil {
+		return ReadMessage{}, err
+	}
+	result.Body = string(body)
+
+	return result, nil
 }
 
 func (s *Store) lookupEndpointID(ctx context.Context, querier interface {

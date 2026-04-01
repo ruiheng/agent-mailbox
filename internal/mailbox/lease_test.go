@@ -58,10 +58,91 @@ func TestReceiveReclaimsExpiredLeaseAndRejectsStaleToken(t *testing.T) {
 	if acked.State != "acked" {
 		t.Fatalf("Ack(current token) state = %q, want acked", acked.State)
 	}
+	if acked.AckedAt == "" {
+		t.Fatal("Ack(current token) acked_at = empty, want timestamp")
+	}
+
+	ackedDeliveries, err := store.List(context.Background(), ListParams{Address: "workflow/reviewer/task-123", State: "acked"})
+	if err != nil {
+		t.Fatalf("List(acked) error = %v", err)
+	}
+	if len(ackedDeliveries) != 1 {
+		t.Fatalf("len(acked deliveries) = %d, want 1", len(ackedDeliveries))
+	}
+	if ackedDeliveries[0].State != "acked" {
+		t.Fatalf("acked delivery state = %q, want acked", ackedDeliveries[0].State)
+	}
+	if ackedDeliveries[0].AckedAt == nil {
+		t.Fatal("acked delivery acked_at = nil, want timestamp")
+	}
+	if *ackedDeliveries[0].AckedAt != acked.AckedAt {
+		t.Fatalf("acked delivery acked_at = %q, want %q", *ackedDeliveries[0].AckedAt, acked.AckedAt)
+	}
 
 	eventTypes := readDeliveryEventTypes(t, runtime, sent.DeliveryID)
 	want := []string{"delivery_queued", "delivery_leased", "delivery_leased", "delivery_acked"}
 	assertStringSlicesEqual(t, eventTypes, want)
+}
+
+func TestReadDeliveryReturnsBodyForAckedDelivery(t *testing.T) {
+	t.Parallel()
+
+	runtime, store := newLeaseTestStore(t)
+	defer runtime.Close()
+
+	sent := mustSendMessage(t, store, "workflow/reviewer/task-123", "agent/sender", "review request", "hello reviewer")
+
+	message, err := store.Receive(context.Background(), ReceiveParams{Address: "workflow/reviewer/task-123"})
+	if err != nil {
+		t.Fatalf("Receive() error = %v", err)
+	}
+	acked, err := store.Ack(context.Background(), message.DeliveryID, message.LeaseToken)
+	if err != nil {
+		t.Fatalf("Ack() error = %v", err)
+	}
+
+	read, err := store.ReadDelivery(context.Background(), sent.DeliveryID)
+	if err != nil {
+		t.Fatalf("ReadDelivery() error = %v", err)
+	}
+	if read.DeliveryID != sent.DeliveryID {
+		t.Fatalf("ReadDelivery() delivery_id = %q, want %q", read.DeliveryID, sent.DeliveryID)
+	}
+	if read.State != "acked" {
+		t.Fatalf("ReadDelivery() state = %q, want acked", read.State)
+	}
+	if read.Body != "hello reviewer" {
+		t.Fatalf("ReadDelivery() body = %q, want hello reviewer", read.Body)
+	}
+	if read.AckedAt == nil {
+		t.Fatal("ReadDelivery() acked_at = nil, want timestamp")
+	}
+	if *read.AckedAt != acked.AckedAt {
+		t.Fatalf("ReadDelivery() acked_at = %q, want %q", *read.AckedAt, acked.AckedAt)
+	}
+}
+
+func TestReadMessageReturnsBodyByMessageID(t *testing.T) {
+	t.Parallel()
+
+	runtime, store := newLeaseTestStore(t)
+	defer runtime.Close()
+
+	sent := mustSendMessage(t, store, "workflow/reviewer/task-123", "agent/sender", "review request", "hello reviewer")
+
+	read, err := store.ReadMessage(context.Background(), sent.MessageID)
+	if err != nil {
+		t.Fatalf("ReadMessage() error = %v", err)
+	}
+	if read.MessageID != sent.MessageID {
+		t.Fatalf("ReadMessage() message_id = %q, want %q", read.MessageID, sent.MessageID)
+	}
+	if read.Body != "hello reviewer" {
+		t.Fatalf("ReadMessage() body = %q, want hello reviewer", read.Body)
+	}
+	if read.Subject != "review request" {
+		t.Fatalf("ReadMessage() subject = %q, want review request", read.Subject)
+	}
 }
 
 func TestReleaseDeferAndReceiveTimeout(t *testing.T) {

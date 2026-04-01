@@ -50,7 +50,7 @@ func (a *App) Run(ctx context.Context, args []string) error {
 		return ErrHelpRequested
 	}
 	if len(rest) == 0 {
-		return errors.New("expected a command: send, recv, wait, watch, ack, release, defer, fail, list, stale, group, or address")
+		return errors.New("expected a command: send, recv, wait, watch, read, ack, release, defer, fail, list, stale, group, or address")
 	}
 
 	command, err := a.prepareCommand(rest)
@@ -69,7 +69,7 @@ func (a *App) Run(ctx context.Context, args []string) error {
 
 func (a *App) prepareCommand(args []string) (preparedCommand, error) {
 	if len(args) == 0 {
-		return nil, errors.New("expected a command: send, recv, wait, watch, ack, release, defer, fail, list, stale, group, or address")
+		return nil, errors.New("expected a command: send, recv, wait, watch, read, ack, release, defer, fail, list, stale, group, or address")
 	}
 
 	switch args[0] {
@@ -81,6 +81,8 @@ func (a *App) prepareCommand(args []string) (preparedCommand, error) {
 		return a.prepareWaitCommand(args[1:])
 	case "watch":
 		return a.prepareWatchCommand(args[1:])
+	case "read":
+		return a.prepareReadCommand(args[1:])
 	case "ack":
 		return a.prepareAckCommand(args[1:])
 	case "release":
@@ -548,6 +550,56 @@ func (a *App) prepareWaitCommand(args []string) (preparedCommand, error) {
 	}, nil
 }
 
+func (a *App) prepareReadCommand(args []string) (preparedCommand, error) {
+	fs := flag.NewFlagSet("agent-mailbox read", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+
+	var deliveryID string
+	var messageID string
+	var formats outputFlags
+	fs.StringVar(&deliveryID, "delivery", "", "delivery id")
+	fs.StringVar(&messageID, "message", "", "message id")
+	formats.register(fs, "emit JSON", "emit YAML")
+
+	if err := a.parseCommandFlags(fs, args, a.writeReadHelp); err != nil {
+		return nil, err
+	}
+	deliveryID = strings.TrimSpace(deliveryID)
+	messageID = strings.TrimSpace(messageID)
+	switch {
+	case deliveryID == "" && messageID == "":
+		return nil, errors.New("either --delivery or --message is required")
+	case deliveryID != "" && messageID != "":
+		return nil, errors.New("--delivery and --message are mutually exclusive")
+	}
+	format, err := formats.resolve()
+	if err != nil {
+		return nil, err
+	}
+
+	return func(ctx context.Context, store *Store) error {
+		if messageID != "" {
+			message, err := store.ReadMessage(ctx, messageID)
+			if err != nil {
+				return err
+			}
+			if format != outputFormatText {
+				return a.writeStructuredOutput(format, message)
+			}
+			return a.writeReadMessageText(message)
+		}
+
+		delivery, err := store.ReadDelivery(ctx, deliveryID)
+		if err != nil {
+			return err
+		}
+		if format != outputFormatText {
+			return a.writeStructuredOutput(format, delivery)
+		}
+		return a.writeReadDeliveryText(delivery)
+	}, nil
+}
+
 func (a *App) prepareAckCommand(args []string) (preparedCommand, error) {
 	fs := flag.NewFlagSet("agent-mailbox ack", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
@@ -744,6 +796,7 @@ func (a *App) writeRootHelp() {
 		"  recv                Claim the next delivery",
 		"  wait                Wait for one delivery without claiming",
 		"  watch               Observe deliveries without claiming",
+		"  read                Read one persisted personal message or delivery",
 		"  list                List deliveries",
 		"  stale               List stale personal inboxes",
 		"  group               Manage group mailboxes",
@@ -789,7 +842,7 @@ func (a *App) writeListHelp() {
 		"Options:",
 		"  --for ADDRESS      Recipient address",
 		"  --as PERSON        Group reader identity",
-		"  --state STATE      Filter by delivery state",
+		"  --state STATE      Filter by delivery state (queued, leased, acked, dead_letter)",
 		"  --json             Emit JSON",
 		"  --yaml             Emit YAML",
 	})
@@ -884,6 +937,19 @@ func (a *App) writeRecvHelp() {
 		"  --json               Emit JSON",
 		"  --yaml               Emit YAML",
 		"  --full               Emit the full payload",
+	})
+}
+
+func (a *App) writeReadHelp() {
+	writeHelp(a.stdout, []string{
+		"Usage:",
+		"  agent-mailbox read (--delivery ID | --message ID) [--json | --yaml]",
+		"",
+		"Options:",
+		"  --delivery ID       Delivery id to read",
+		"  --message ID        Message id to read",
+		"  --json              Emit JSON",
+		"  --yaml              Emit YAML",
 	})
 }
 

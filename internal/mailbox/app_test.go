@@ -786,6 +786,14 @@ func TestInvalidCLIPathsDoNotCreateRuntimeState(t *testing.T) {
 			args: []string{"recv", "--for", "workflow/reviewer/task-123", "--json", "--yaml"},
 		},
 		{
+			name: "read missing selector",
+			args: []string{"read"},
+		},
+		{
+			name: "read conflicting selectors",
+			args: []string{"read", "--delivery", "dlv_123", "--message", "msg_123"},
+		},
+		{
 			name: "watch missing for",
 			args: []string{"watch", "--json"},
 		},
@@ -907,9 +915,19 @@ func TestHelpCLIPathsDoNotCreateRuntimeState(t *testing.T) {
 			wantContains: "Usage:\n  agent-mailbox recv --for ADDRESS [--for ADDRESS ...] [--max COUNT] [--json | --yaml] [--full]",
 		},
 		{
+			name:         "read help",
+			args:         []string{"read", "--help"},
+			wantContains: "Usage:\n  agent-mailbox read (--delivery ID | --message ID) [--json | --yaml]",
+		},
+		{
 			name:         "watch help",
 			args:         []string{"watch", "--help"},
 			wantContains: "Usage:\n  agent-mailbox watch --for ADDRESS [--for ADDRESS ...] [--state STATE] [--timeout DURATION] [--json | --yaml]",
+		},
+		{
+			name:         "list help mentions acked state",
+			args:         []string{"list", "--help"},
+			wantContains: "  --state STATE      Filter by delivery state (queued, leased, acked, dead_letter)",
 		},
 		{
 			name:         "wait help",

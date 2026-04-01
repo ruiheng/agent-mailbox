@@ -66,6 +66,73 @@ func TestCLISendRecvAckFlow(t *testing.T) {
 	if !strings.Contains(ack.stdout, "state=acked") {
 		t.Fatalf("ack stdout = %q, want state=acked", ack.stdout)
 	}
+
+	list := runCLI(t, "", "--state-dir", stateDir,
+		"list",
+		"--for", "workflow/reviewer/task-123",
+		"--state", "acked",
+		"--json",
+	)
+	if list.exitCode != 0 {
+		t.Fatalf("list acked exit code = %d, stderr = %q", list.exitCode, list.stderr)
+	}
+
+	var deliveries []map[string]any
+	if err := json.Unmarshal([]byte(list.stdout), &deliveries); err != nil {
+		t.Fatalf("json.Unmarshal(list acked stdout) error = %v; stdout = %q", err, list.stdout)
+	}
+	if len(deliveries) != 1 {
+		t.Fatalf("len(list acked deliveries) = %d, want 1", len(deliveries))
+	}
+	if deliveries[0]["state"] != "acked" {
+		t.Fatalf("list acked state = %v, want acked", deliveries[0]["state"])
+	}
+	if deliveries[0]["acked_at"] == "" {
+		t.Fatalf("list acked payload = %v, want acked_at", deliveries[0])
+	}
+
+	read := runCLI(t, "", "--state-dir", stateDir,
+		"read",
+		"--delivery", message.DeliveryID,
+		"--json",
+	)
+	if read.exitCode != 0 {
+		t.Fatalf("read acked exit code = %d, stderr = %q", read.exitCode, read.stderr)
+	}
+
+	var stored map[string]any
+	if err := json.Unmarshal([]byte(read.stdout), &stored); err != nil {
+		t.Fatalf("json.Unmarshal(read acked stdout) error = %v; stdout = %q", err, read.stdout)
+	}
+	if stored["state"] != "acked" {
+		t.Fatalf("read acked state = %v, want acked", stored["state"])
+	}
+	if stored["body"] != "hello reviewer\n" {
+		t.Fatalf("read acked body = %v, want hello reviewer\\n", stored["body"])
+	}
+
+	if deliveries[0]["message_id"] == "" {
+		t.Fatalf("list acked payload = %v, want message_id", deliveries[0])
+	}
+	readByMessage := runCLI(t, "", "--state-dir", stateDir,
+		"read",
+		"--message", deliveries[0]["message_id"].(string),
+		"--json",
+	)
+	if readByMessage.exitCode != 0 {
+		t.Fatalf("read by message exit code = %d, stderr = %q", readByMessage.exitCode, readByMessage.stderr)
+	}
+
+	var storedMessage map[string]any
+	if err := json.Unmarshal([]byte(readByMessage.stdout), &storedMessage); err != nil {
+		t.Fatalf("json.Unmarshal(read by message stdout) error = %v; stdout = %q", err, readByMessage.stdout)
+	}
+	if storedMessage["message_id"] != deliveries[0]["message_id"] {
+		t.Fatalf("read by message_id = %v, want %v", storedMessage["message_id"], deliveries[0]["message_id"])
+	}
+	if storedMessage["body"] != "hello reviewer\n" {
+		t.Fatalf("read by message body = %v, want hello reviewer\\n", storedMessage["body"])
+	}
 }
 
 func TestCLIRecvYAMLOutput(t *testing.T) {
@@ -931,9 +998,19 @@ func TestCLIHelpExitsZeroAndPrintsUsage(t *testing.T) {
 			wantContains: "Usage:\n  agent-mailbox recv --for ADDRESS [--for ADDRESS ...] [--max COUNT] [--json | --yaml] [--full]",
 		},
 		{
+			name:         "read help",
+			args:         []string{"read", "--help"},
+			wantContains: "Usage:\n  agent-mailbox read (--delivery ID | --message ID) [--json | --yaml]",
+		},
+		{
 			name:         "watch help",
 			args:         []string{"watch", "--help"},
 			wantContains: "Usage:\n  agent-mailbox watch --for ADDRESS [--for ADDRESS ...] [--state STATE] [--timeout DURATION] [--json | --yaml]",
+		},
+		{
+			name:         "list help mentions acked state",
+			args:         []string{"list", "--help"},
+			wantContains: "  --state STATE      Filter by delivery state (queued, leased, acked, dead_letter)",
 		},
 		{
 			name:         "wait help",

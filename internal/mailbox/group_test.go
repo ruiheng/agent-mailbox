@@ -99,6 +99,46 @@ func TestGroupMembershipLifecycle(t *testing.T) {
 	}
 }
 
+func TestReadMessageReturnsGroupMessageBodyWithoutRecordingRead(t *testing.T) {
+	t.Parallel()
+
+	runtime, err := OpenRuntime(context.Background(), filepath.Join(t.TempDir(), "mailbox-state"))
+	if err != nil {
+		t.Fatalf("OpenRuntime() error = %v", err)
+	}
+	defer runtime.Close()
+
+	store := runtime.Store()
+	group, err := store.CreateGroup(context.Background(), "group/ops")
+	if err != nil {
+		t.Fatalf("CreateGroup() error = %v", err)
+	}
+	if _, err := store.AddGroupMember(context.Background(), group.Address, "alice"); err != nil {
+		t.Fatalf("AddGroupMember(alice) error = %v", err)
+	}
+
+	sent := mustSendGroupMessage(t, store, group.Address, "agent/sender", "first", "first body")
+
+	read, err := store.ReadMessage(context.Background(), sent.MessageID)
+	if err != nil {
+		t.Fatalf("ReadMessage(group message) error = %v", err)
+	}
+	if read.MessageID != sent.MessageID {
+		t.Fatalf("ReadMessage(group message) message_id = %q, want %q", read.MessageID, sent.MessageID)
+	}
+	if read.Body != "first body" {
+		t.Fatalf("ReadMessage(group message) body = %q, want first body", read.Body)
+	}
+
+	var readCount int
+	if err := runtime.DB().QueryRow(`SELECT COUNT(*) FROM group_reads`).Scan(&readCount); err != nil {
+		t.Fatalf("count group_reads error = %v", err)
+	}
+	if readCount != 0 {
+		t.Fatalf("group_reads count = %d, want 0", readCount)
+	}
+}
+
 func TestGroupAndEndpointNamespaceCollision(t *testing.T) {
 	t.Parallel()
 

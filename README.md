@@ -195,6 +195,31 @@ agent-mailbox --state-dir /tmp/mailbox-demo \
   ack --delivery <delivery_id> --lease-token <lease_token>
 ```
 
+List previously acked deliveries for one inbox:
+
+```bash
+agent-mailbox --state-dir /tmp/mailbox-demo \
+  list --for workflow/reviewer/task-123 --state acked --json
+```
+
+Read one persisted delivery body later by `delivery_id`:
+
+```bash
+agent-mailbox --state-dir /tmp/mailbox-demo \
+  read --delivery <delivery_id> --json
+```
+
+Read the same body directly by `message_id`:
+
+```bash
+agent-mailbox --state-dir /tmp/mailbox-demo \
+  read --message <message_id> --json
+```
+
+`read --message` is a raw body read in the trusted local environment. It does
+not update group read tracking; group `recv` remains the operation that records
+reads and advances group unread/read state.
+
 For the full command reference, see [`docs/cli.md`](docs/cli.md).
 
 `recv` v1 contract for multiple `--for` flags:
