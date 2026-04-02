@@ -621,7 +621,7 @@ func TestProcessActiveReminderSubscriptionsConfirmsThenCooldowns(t *testing.T) {
 	if err != nil {
 		t.Fatalf("buildReminderSubscription() error = %v", err)
 	}
-	service.state.reminderSubscriptions[subscription.Key] = subscription
+	service.reminders.setSubscription(subscription)
 
 	if err := service.processActiveReminderSubscriptions(context.Background()); err != nil {
 		t.Fatalf("processActiveReminderSubscriptions(first) error = %v", err)
@@ -714,7 +714,7 @@ func TestProcessActiveReminderSubscriptionsSuppressesRecentLocalActivity(t *test
 	if err != nil {
 		t.Fatalf("buildReminderSubscription() error = %v", err)
 	}
-	service.state.reminderSubscriptions[subscription.Key] = subscription
+	service.reminders.setSubscription(subscription)
 
 	if err := service.processActiveReminderSubscriptions(context.Background()); err != nil {
 		t.Fatalf("processActiveReminderSubscriptions(first) error = %v", err)
@@ -800,7 +800,7 @@ func TestProcessActiveReminderSubscriptionsCombinesPersonalAndGroupSelectors(t *
 	if err != nil {
 		t.Fatalf("buildReminderSubscription() error = %v", err)
 	}
-	service.state.reminderSubscriptions[subscription.Key] = subscription
+	service.reminders.setSubscription(subscription)
 
 	if err := service.processActiveReminderSubscriptions(context.Background()); err != nil {
 		t.Fatalf("processActiveReminderSubscriptions(first) error = %v", err)
@@ -864,7 +864,7 @@ func TestProcessActiveReminderSubscriptionsRetriesAfterFailedNotifyWithoutCooldo
 	if err != nil {
 		t.Fatalf("buildReminderSubscription() error = %v", err)
 	}
-	service.state.reminderSubscriptions[subscription.Key] = subscription
+	service.reminders.setSubscription(subscription)
 
 	if err := service.processActiveReminderSubscriptions(context.Background()); err != nil {
 		t.Fatalf("processActiveReminderSubscriptions(first) error = %v", err)
@@ -877,7 +877,10 @@ func TestProcessActiveReminderSubscriptionsRetriesAfterFailedNotifyWithoutCooldo
 	if sendCount != 1 {
 		t.Fatalf("sendCount after failed notify = %d, want 1", sendCount)
 	}
-	runtime := service.state.reminderSubscriptions[subscription.Key].Runtime
+	runtime, ok := service.reminders.subscriptionRuntime(subscription.Key)
+	if !ok {
+		t.Fatalf("subscription runtime missing for key %q", subscription.Key)
+	}
 	if runtime.LastNotifiedAt != "" {
 		t.Fatalf("LastNotifiedAt after failed notify = %q, want empty", runtime.LastNotifiedAt)
 	}
@@ -892,7 +895,10 @@ func TestProcessActiveReminderSubscriptionsRetriesAfterFailedNotifyWithoutCooldo
 	if sendCount != 2 {
 		t.Fatalf("sendCount after retry = %d, want 2", sendCount)
 	}
-	runtime = service.state.reminderSubscriptions[subscription.Key].Runtime
+	runtime, ok = service.reminders.subscriptionRuntime(subscription.Key)
+	if !ok {
+		t.Fatalf("subscription runtime missing for key %q", subscription.Key)
+	}
 	if runtime.LastNotifiedAt == "" {
 		t.Fatal("LastNotifiedAt after successful retry = empty, want cooldown stamp")
 	}
@@ -939,7 +945,7 @@ func TestMailboxStatusIncludesPassiveReminderHints(t *testing.T) {
 	if err != nil {
 		t.Fatalf("buildReminderSubscription() error = %v", err)
 	}
-	service.state.reminderSubscriptions[subscription.Key] = subscription
+	service.reminders.setSubscription(subscription)
 
 	status := callTool(t, service.Server(), "mailbox_status", nil)
 	reminders := status["reminders"].(map[string]any)
@@ -996,7 +1002,7 @@ func TestMailboxSendOmitsPassiveRemindersWhenStaleCheckFails(t *testing.T) {
 	if err != nil {
 		t.Fatalf("buildReminderSubscription() error = %v", err)
 	}
-	service.state.reminderSubscriptions[subscription.Key] = subscription
+	service.reminders.setSubscription(subscription)
 
 	output := callTool(t, service.Server(), "mailbox_send", map[string]any{
 		"to_address":   "agent-deck/self",
