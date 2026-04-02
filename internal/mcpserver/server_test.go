@@ -3,11 +3,13 @@ package mcpserver
 import (
 	"context"
 	"encoding/json"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+	"github.com/ruiheng/agent-mailbox/internal/mailbox"
 )
 
 type fakeRunner struct {
@@ -257,6 +259,51 @@ func TestAgentDeckEnsureSessionStartsInactiveTarget(t *testing.T) {
 	}
 	if got := output["listener_status"]; got != "started_waiting" {
 		t.Fatalf("listener_status = %v, want started_waiting", got)
+	}
+}
+
+func TestMailboxRunnerUsesConfiguredStateDir(t *testing.T) {
+	t.Parallel()
+
+	stateDir := filepath.Join(t.TempDir(), "mailbox-state")
+	service := newService(Options{
+		StateDir: stateDir,
+		CommandRunner: &fakeRunner{t: t, handler: func(args []string, input string) (RunResult, error) {
+			t.Fatalf("unexpected command call: %v", args)
+			return RunResult{}, nil
+		}},
+	})
+	service.state.boundAddresses = []string{"agent-deck/self"}
+	service.state.defaultSender = "agent-deck/self"
+	service.state.autoBindAttempted = true
+
+	output := callTool(t, service.Server(), "mailbox_send", map[string]any{
+		"to_address": "agent-deck/self",
+		"subject":    "delegate",
+		"body":       "body",
+	})
+	if got := output["delivery_id"]; got == nil || got == "" {
+		t.Fatalf("delivery_id = %v, want non-empty", got)
+	}
+
+	runtime, err := mailbox.OpenRuntime(context.Background(), stateDir)
+	if err != nil {
+		t.Fatalf("OpenRuntime() error = %v", err)
+	}
+	defer runtime.Close()
+
+	deliveries, err := runtime.Store().List(context.Background(), mailbox.ListParams{
+		Address: "agent-deck/self",
+		State:   "queued",
+	})
+	if err != nil {
+		t.Fatalf("List() error = %v", err)
+	}
+	if len(deliveries) != 1 {
+		t.Fatalf("queued deliveries = %d, want 1", len(deliveries))
+	}
+	if deliveries[0].Subject != "delegate" {
+		t.Fatalf("queued subject = %q, want delegate", deliveries[0].Subject)
 	}
 }
 

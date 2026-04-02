@@ -54,6 +54,7 @@ type RunResult struct {
 type Options struct {
 	MailboxRunner Runner
 	CommandRunner Runner
+	StateDir      string
 }
 
 type Service struct {
@@ -193,7 +194,9 @@ type osCommandRunner struct {
 	cwd string
 }
 
-type mailboxAppRunner struct{}
+type mailboxAppRunner struct {
+	prefixArgs []string
+}
 
 func New(opts Options) *mcp.Server {
 	return newService(opts).Server()
@@ -201,7 +204,7 @@ func New(opts Options) *mcp.Server {
 
 func newService(opts Options) *Service {
 	if opts.MailboxRunner == nil {
-		opts.MailboxRunner = mailboxAppRunner{}
+		opts.MailboxRunner = mailboxAppRunner{prefixArgs: stateDirArgs(opts.StateDir)}
 	}
 	if opts.CommandRunner == nil {
 		opts.CommandRunner = osCommandRunner{cwd: currentWorkingDir()}
@@ -312,11 +315,13 @@ func (r osCommandRunner) Run(ctx context.Context, args []string, input string) (
 	return RunResult{}, err
 }
 
-func (mailboxAppRunner) Run(ctx context.Context, args []string, input string) (RunResult, error) {
+func (r mailboxAppRunner) Run(ctx context.Context, args []string, input string) (RunResult, error) {
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
 	app := mailbox.NewApp(strings.NewReader(input), &stdout, &stderr)
-	err := app.Run(ctx, args)
+	forwarded := append([]string(nil), r.prefixArgs...)
+	forwarded = append(forwarded, args...)
+	err := app.Run(ctx, forwarded)
 	switch {
 	case err == nil, errors.Is(err, mailbox.ErrHelpRequested):
 		return RunResult{ExitCode: 0, Stdout: stdout.String(), Stderr: stderr.String()}, nil
@@ -328,6 +333,14 @@ func (mailboxAppRunner) Run(ctx context.Context, args []string, input string) (R
 		}
 		return RunResult{ExitCode: 1, Stdout: stdout.String(), Stderr: stderr.String()}, nil
 	}
+}
+
+func stateDirArgs(stateDir string) []string {
+	trimmed := strings.TrimSpace(stateDir)
+	if trimmed == "" {
+		return nil
+	}
+	return []string{"--state-dir", trimmed}
 }
 
 func (s *Service) mailboxBind(ctx context.Context, _ *mcp.CallToolRequest, input mailboxBindInput) (*mcp.CallToolResult, map[string]any, error) {

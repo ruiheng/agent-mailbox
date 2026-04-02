@@ -16,7 +16,7 @@ type App struct {
 	stdin  io.Reader
 	stdout io.Writer
 	stderr io.Writer
-	runMCP func(context.Context) error
+	runMCP func(context.Context, string) error
 }
 
 func New(stdin io.Reader, stdout, stderr io.Writer) *App {
@@ -24,8 +24,8 @@ func New(stdin io.Reader, stdout, stderr io.Writer) *App {
 		stdin:  stdin,
 		stdout: stdout,
 		stderr: stderr,
-		runMCP: func(ctx context.Context) error {
-			server := mcpserver.New(mcpserver.Options{})
+		runMCP: func(ctx context.Context, stateDir string) error {
+			server := mcpserver.New(mcpserver.Options{StateDir: stateDir})
 			return server.Run(ctx, &mcp.StdioTransport{})
 		},
 	}
@@ -44,7 +44,7 @@ func (a *App) Run(ctx context.Context, args []string) error {
 		return errors.New("expected a command: mcp, send, recv, wait, watch, read, ack, renew, release, defer, fail, list, stale, group, or address")
 	}
 	if rest[0] == "mcp" {
-		return a.runMCPCommand(ctx, rest[1:])
+		return a.runMCPCommand(ctx, stateDir, rest[1:])
 	}
 
 	forwarded := append([]string(nil), rest...)
@@ -70,7 +70,7 @@ func parseGlobalArgs(args []string) (string, []string, bool, error) {
 	return stateDir, fs.Args(), false, nil
 }
 
-func (a *App) runMCPCommand(ctx context.Context, args []string) error {
+func (a *App) runMCPCommand(ctx context.Context, stateDir string, args []string) error {
 	if len(args) > 0 {
 		if len(args) == 1 && isHelpArg(args[0]) {
 			a.writeMCPHelp()
@@ -78,7 +78,7 @@ func (a *App) runMCPCommand(ctx context.Context, args []string) error {
 		}
 		return fmt.Errorf("mcp does not accept arguments")
 	}
-	return a.runMCP(ctx)
+	return a.runMCP(ctx, stateDir)
 }
 
 func isHelpArg(value string) bool {

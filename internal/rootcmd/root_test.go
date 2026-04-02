@@ -48,7 +48,7 @@ func TestRunMCPInvokesRunner(t *testing.T) {
 		stdin:  strings.NewReader(""),
 		stdout: &bytes.Buffer{},
 		stderr: &bytes.Buffer{},
-		runMCP: func(context.Context) error {
+		runMCP: func(context.Context, string) error {
 			called = true
 			return nil
 		},
@@ -59,6 +59,29 @@ func TestRunMCPInvokesRunner(t *testing.T) {
 	}
 	if !called {
 		t.Fatal("Run(mcp) did not invoke MCP runner")
+	}
+}
+
+func TestRunMCPForwardsStateDir(t *testing.T) {
+	t.Parallel()
+
+	var gotStateDir string
+	app := &App{
+		stdin:  strings.NewReader(""),
+		stdout: &bytes.Buffer{},
+		stderr: &bytes.Buffer{},
+		runMCP: func(_ context.Context, stateDir string) error {
+			gotStateDir = stateDir
+			return nil
+		},
+	}
+
+	stateDir := t.TempDir()
+	if err := app.Run(context.Background(), []string{"--state-dir", stateDir, "mcp"}); err != nil {
+		t.Fatalf("Run(--state-dir mcp) error = %v", err)
+	}
+	if gotStateDir != stateDir {
+		t.Fatalf("mcp state dir = %q, want %q", gotStateDir, stateDir)
 	}
 }
 
