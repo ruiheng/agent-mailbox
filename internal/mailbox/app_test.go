@@ -421,8 +421,7 @@ func TestSendAndListHappyPath(t *testing.T) {
 
 			sendStdout := &bytes.Buffer{}
 			sendApp := NewApp(strings.NewReader(tc.stdin), sendStdout, &bytes.Buffer{})
-			if err := sendApp.Run(context.Background(), []string{
-				"--state-dir", stateDir,
+			if err := sendApp.RunWithStateDir(context.Background(), stateDir, []string{
 				"send",
 				"--to", "workflow/reviewer/task-123",
 				"--from", "agent/sender",
@@ -440,8 +439,7 @@ func TestSendAndListHappyPath(t *testing.T) {
 
 			listStdout := &bytes.Buffer{}
 			listApp := NewApp(strings.NewReader(""), listStdout, &bytes.Buffer{})
-			if err := listApp.Run(context.Background(), []string{
-				"--state-dir", stateDir,
+			if err := listApp.RunWithStateDir(context.Background(), stateDir, []string{
 				"list",
 				"--for", "workflow/reviewer/task-123",
 				"--json",
@@ -550,8 +548,7 @@ WHERE recipient_endpoint_id = (
 	stdout := &bytes.Buffer{}
 	stderr := &bytes.Buffer{}
 	app := NewApp(strings.NewReader(""), stdout, stderr)
-	if err := app.Run(context.Background(), []string{
-		"--state-dir", stateDir,
+	if err := app.RunWithStateDir(context.Background(), stateDir, []string{
 		"stale",
 		"--for", "workflow/stale",
 		"--older-than", "5m",
@@ -659,8 +656,7 @@ func TestAppRunStaleGroupViewJSON(t *testing.T) {
 	stdout := &bytes.Buffer{}
 	stderr := &bytes.Buffer{}
 	app := NewApp(strings.NewReader(""), stdout, stderr)
-	if err := app.Run(context.Background(), []string{
-		"--state-dir", stateDir,
+	if err := app.RunWithStateDir(context.Background(), stateDir, []string{
 		"stale",
 		"--for", group.Address,
 		"--as", "alice",
@@ -725,8 +721,7 @@ func TestAppSendRejectsEmptyBodyInput(t *testing.T) {
 			}
 
 			app := NewApp(strings.NewReader(tc.stdin), &bytes.Buffer{}, &bytes.Buffer{})
-			err := app.Run(context.Background(), []string{
-				"--state-dir", stateDir,
+			err := app.RunWithStateDir(context.Background(), stateDir, []string{
 				"send",
 				"--to", "workflow/reviewer/task-123",
 				"--from", "agent/sender",
@@ -957,7 +952,7 @@ func TestInvalidCLIPathsDoNotCreateRuntimeState(t *testing.T) {
 
 			stateDir := filepath.Join(t.TempDir(), "mailbox-state")
 			app := NewApp(strings.NewReader(""), &bytes.Buffer{}, &bytes.Buffer{})
-			err := app.Run(context.Background(), append([]string{"--state-dir", stateDir}, tc.args...))
+			err := app.RunWithStateDir(context.Background(), stateDir, tc.args)
 			if err == nil {
 				t.Fatal("Run() error = nil, want non-nil")
 			}
@@ -977,16 +972,6 @@ func TestHelpCLIPathsDoNotCreateRuntimeState(t *testing.T) {
 		args         []string
 		wantContains string
 	}{
-		{
-			name:         "root help",
-			args:         []string{"--help"},
-			wantContains: "Usage:\n  agent-mailbox [--state-dir PATH] <command> [options]",
-		},
-		{
-			name:         "root help lists stale",
-			args:         []string{"--help"},
-			wantContains: "  stale               List stale inbox views",
-		},
 		{
 			name:         "send help",
 			args:         []string{"send", "--help"},
@@ -1033,9 +1018,9 @@ func TestHelpCLIPathsDoNotCreateRuntimeState(t *testing.T) {
 			stderr := &bytes.Buffer{}
 			app := NewApp(strings.NewReader(""), stdout, stderr)
 
-			err := app.Run(context.Background(), append([]string{"--state-dir", stateDir}, tc.args...))
+			err := app.RunWithStateDir(context.Background(), stateDir, tc.args)
 			if !errors.Is(err, ErrHelpRequested) {
-				t.Fatalf("Run() error = %v, want ErrHelpRequested", err)
+				t.Fatalf("RunWithStateDir() error = %v, want ErrHelpRequested", err)
 			}
 			if !strings.Contains(stdout.String(), tc.wantContains) {
 				t.Fatalf("stdout = %q, want substring %q", stdout.String(), tc.wantContains)

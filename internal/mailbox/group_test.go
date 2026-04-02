@@ -204,8 +204,7 @@ func TestGroupControlPlaneCLI(t *testing.T) {
 
 	createStdout := &bytes.Buffer{}
 	createApp := NewApp(strings.NewReader(""), createStdout, &bytes.Buffer{})
-	if err := createApp.Run(context.Background(), []string{
-		"--state-dir", stateDir,
+	if err := createApp.RunWithStateDir(context.Background(), stateDir, []string{
 		"group",
 		"create",
 		"--group", "group/ops",
@@ -224,8 +223,7 @@ func TestGroupControlPlaneCLI(t *testing.T) {
 
 	addStdout := &bytes.Buffer{}
 	addApp := NewApp(strings.NewReader(""), addStdout, &bytes.Buffer{})
-	if err := addApp.Run(context.Background(), []string{
-		"--state-dir", stateDir,
+	if err := addApp.RunWithStateDir(context.Background(), stateDir, []string{
 		"group",
 		"add-member",
 		"--group", "group/ops",
@@ -245,8 +243,7 @@ func TestGroupControlPlaneCLI(t *testing.T) {
 
 	membersStdout := &bytes.Buffer{}
 	membersApp := NewApp(strings.NewReader(""), membersStdout, &bytes.Buffer{})
-	if err := membersApp.Run(context.Background(), []string{
-		"--state-dir", stateDir,
+	if err := membersApp.RunWithStateDir(context.Background(), stateDir, []string{
 		"group",
 		"members",
 		"--group", "group/ops",
@@ -268,8 +265,7 @@ func TestGroupControlPlaneCLI(t *testing.T) {
 
 	inspectStdout := &bytes.Buffer{}
 	inspectApp := NewApp(strings.NewReader(""), inspectStdout, &bytes.Buffer{})
-	if err := inspectApp.Run(context.Background(), []string{
-		"--state-dir", stateDir,
+	if err := inspectApp.RunWithStateDir(context.Background(), stateDir, []string{
 		"address",
 		"inspect",
 		"--address", "group/ops",
@@ -290,8 +286,7 @@ func TestGroupControlPlaneCLI(t *testing.T) {
 	}
 
 	sendApp := NewApp(strings.NewReader("hello endpoint"), &bytes.Buffer{}, &bytes.Buffer{})
-	if err := sendApp.Run(context.Background(), []string{
-		"--state-dir", stateDir,
+	if err := sendApp.RunWithStateDir(context.Background(), stateDir, []string{
 		"send",
 		"--to", "workflow/personal",
 		"--body-file", "-",
@@ -301,8 +296,7 @@ func TestGroupControlPlaneCLI(t *testing.T) {
 
 	endpointInspectStdout := &bytes.Buffer{}
 	endpointInspectApp := NewApp(strings.NewReader(""), endpointInspectStdout, &bytes.Buffer{})
-	if err := endpointInspectApp.Run(context.Background(), []string{
-		"--state-dir", stateDir,
+	if err := endpointInspectApp.RunWithStateDir(context.Background(), stateDir, []string{
 		"address",
 		"inspect",
 		"--address", "workflow/personal",
@@ -324,8 +318,7 @@ func TestGroupControlPlaneCLI(t *testing.T) {
 
 	unboundStdout := &bytes.Buffer{}
 	unboundApp := NewApp(strings.NewReader(""), unboundStdout, &bytes.Buffer{})
-	if err := unboundApp.Run(context.Background(), []string{
-		"--state-dir", stateDir,
+	if err := unboundApp.RunWithStateDir(context.Background(), stateDir, []string{
 		"address",
 		"inspect",
 		"--address", "group/missing",
@@ -535,8 +528,7 @@ func TestSendCLIShapesStayCompatibleForPersonalAndGroup(t *testing.T) {
 	stateDir := filepath.Join(t.TempDir(), "mailbox-state")
 
 	createApp := NewApp(strings.NewReader(""), &bytes.Buffer{}, &bytes.Buffer{})
-	if err := createApp.Run(context.Background(), []string{
-		"--state-dir", stateDir,
+	if err := createApp.RunWithStateDir(context.Background(), stateDir, []string{
 		"group",
 		"create",
 		"--group", "group/ops",
@@ -545,8 +537,7 @@ func TestSendCLIShapesStayCompatibleForPersonalAndGroup(t *testing.T) {
 	}
 
 	addApp := NewApp(strings.NewReader(""), &bytes.Buffer{}, &bytes.Buffer{})
-	if err := addApp.Run(context.Background(), []string{
-		"--state-dir", stateDir,
+	if err := addApp.RunWithStateDir(context.Background(), stateDir, []string{
 		"group",
 		"add-member",
 		"--group", "group/ops",
@@ -557,8 +548,7 @@ func TestSendCLIShapesStayCompatibleForPersonalAndGroup(t *testing.T) {
 
 	personalStdout := &bytes.Buffer{}
 	personalApp := NewApp(strings.NewReader("personal body"), personalStdout, &bytes.Buffer{})
-	if err := personalApp.Run(context.Background(), []string{
-		"--state-dir", stateDir,
+	if err := personalApp.RunWithStateDir(context.Background(), stateDir, []string{
 		"send",
 		"--to", "workflow/personal",
 		"--body-file", "-",
@@ -580,8 +570,7 @@ func TestSendCLIShapesStayCompatibleForPersonalAndGroup(t *testing.T) {
 
 	groupStdout := &bytes.Buffer{}
 	groupApp := NewApp(strings.NewReader("group body"), groupStdout, &bytes.Buffer{})
-	if err := groupApp.Run(context.Background(), []string{
-		"--state-dir", stateDir,
+	if err := groupApp.RunWithStateDir(context.Background(), stateDir, []string{
 		"send",
 		"--to", "group/ops",
 		"--group",
@@ -972,8 +961,7 @@ func TestGroupReadCLIShapesStayExplicitWithAs(t *testing.T) {
 	stateDir := filepath.Join(t.TempDir(), "mailbox-state")
 
 	createApp := NewApp(strings.NewReader(""), &bytes.Buffer{}, &bytes.Buffer{})
-	if err := createApp.Run(context.Background(), []string{
-		"--state-dir", stateDir,
+	if err := createApp.RunWithStateDir(context.Background(), stateDir, []string{
 		"group",
 		"create",
 		"--group", "group/cli",
@@ -982,8 +970,7 @@ func TestGroupReadCLIShapesStayExplicitWithAs(t *testing.T) {
 	}
 
 	addApp := NewApp(strings.NewReader(""), &bytes.Buffer{}, &bytes.Buffer{})
-	if err := addApp.Run(context.Background(), []string{
-		"--state-dir", stateDir,
+	if err := addApp.RunWithStateDir(context.Background(), stateDir, []string{
 		"group",
 		"add-member",
 		"--group", "group/cli",
@@ -993,8 +980,7 @@ func TestGroupReadCLIShapesStayExplicitWithAs(t *testing.T) {
 	}
 
 	sendApp := NewApp(strings.NewReader("group body"), &bytes.Buffer{}, &bytes.Buffer{})
-	if err := sendApp.Run(context.Background(), []string{
-		"--state-dir", stateDir,
+	if err := sendApp.RunWithStateDir(context.Background(), stateDir, []string{
 		"send",
 		"--to", "group/cli",
 		"--group",
@@ -1005,8 +991,7 @@ func TestGroupReadCLIShapesStayExplicitWithAs(t *testing.T) {
 
 	listStdout := &bytes.Buffer{}
 	listApp := NewApp(strings.NewReader(""), listStdout, &bytes.Buffer{})
-	if err := listApp.Run(context.Background(), []string{
-		"--state-dir", stateDir,
+	if err := listApp.RunWithStateDir(context.Background(), stateDir, []string{
 		"list",
 		"--for", "group/cli",
 		"--as", "alice",
@@ -1037,8 +1022,7 @@ func TestGroupReadCLIShapesStayExplicitWithAs(t *testing.T) {
 
 	waitStdout := &bytes.Buffer{}
 	waitApp := NewApp(strings.NewReader(""), waitStdout, &bytes.Buffer{})
-	if err := waitApp.Run(context.Background(), []string{
-		"--state-dir", stateDir,
+	if err := waitApp.RunWithStateDir(context.Background(), stateDir, []string{
 		"wait",
 		"--for", "group/cli",
 		"--as", "alice",
@@ -1060,8 +1044,7 @@ func TestGroupReadCLIShapesStayExplicitWithAs(t *testing.T) {
 
 	recvStdout := &bytes.Buffer{}
 	recvApp := NewApp(strings.NewReader(""), recvStdout, &bytes.Buffer{})
-	if err := recvApp.Run(context.Background(), []string{
-		"--state-dir", stateDir,
+	if err := recvApp.RunWithStateDir(context.Background(), stateDir, []string{
 		"recv",
 		"--for", "group/cli",
 		"--as", "alice",

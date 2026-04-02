@@ -48,10 +48,7 @@ func (a *App) Run(ctx context.Context, args []string) error {
 	}
 
 	forwarded := append([]string(nil), rest...)
-	if stateDir != "" {
-		forwarded = append([]string{"--state-dir", stateDir}, forwarded...)
-	}
-	return mailbox.NewApp(a.stdin, a.stdout, a.stderr).Run(ctx, forwarded)
+	return mailbox.NewApp(a.stdin, a.stdout, a.stderr).RunWithStateDir(ctx, stateDir, forwarded)
 }
 
 func parseGlobalArgs(args []string) (string, []string, bool, error) {

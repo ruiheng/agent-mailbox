@@ -41,19 +41,15 @@ func (f *stringListFlag) Set(value string) error {
 }
 
 func (a *App) Run(ctx context.Context, args []string) error {
-	stateDir, rest, helpRequested, err := parseGlobalArgs(args)
-	if err != nil {
-		return err
-	}
-	if helpRequested {
-		a.writeRootHelp()
-		return ErrHelpRequested
-	}
-	if len(rest) == 0 {
+	return a.RunWithStateDir(ctx, "", args)
+}
+
+func (a *App) RunWithStateDir(ctx context.Context, stateDir string, args []string) error {
+	if len(args) == 0 {
 		return errors.New("expected a command: send, recv, wait, watch, read, ack, renew, release, defer, fail, list, stale, group, or address")
 	}
 
-	command, err := a.prepareCommand(rest)
+	command, err := a.prepareCommand(args)
 	if err != nil {
 		return err
 	}
@@ -104,22 +100,6 @@ func (a *App) prepareCommand(args []string) (preparedCommand, error) {
 	default:
 		return nil, fmt.Errorf("unknown command %q", args[0])
 	}
-}
-
-func parseGlobalArgs(args []string) (string, []string, bool, error) {
-	fs := flag.NewFlagSet("agent-mailbox", flag.ContinueOnError)
-	fs.SetOutput(io.Discard)
-
-	var stateDir string
-	fs.StringVar(&stateDir, "state-dir", "", "override mailbox state directory")
-
-	if err := fs.Parse(args); err != nil {
-		if errors.Is(err, flag.ErrHelp) {
-			return "", nil, true, nil
-		}
-		return "", nil, false, err
-	}
-	return stateDir, fs.Args(), false, nil
 }
 
 func (a *App) prepareSendCommand(args []string) (preparedCommand, error) {
@@ -178,17 +158,7 @@ func (a *App) prepareSendCommand(args []string) (preparedCommand, error) {
 		if err != nil {
 			return err
 		}
-
-		if format != outputFormatText {
-			if full {
-				return a.writeStructuredOutput(format, fullSendResult(result))
-			}
-			return a.writeStructuredOutput(format, summarizeSendResult(result))
-		}
-		if full {
-			return a.writeSendResultFullText(fullSendResult(result))
-		}
-		return a.writeSendResultText(summarizeSendResult(result))
+		return a.writeSendOutput(format, full, result)
 	}, nil
 }
 
@@ -394,16 +364,7 @@ func (a *App) prepareRecvCommand(args []string) (preparedCommand, error) {
 			if err != nil {
 				return err
 			}
-			if format != outputFormatText {
-				if full {
-					return a.writeStructuredOutput(format, message)
-				}
-				return a.writeStructuredOutput(format, summarizeGroupReceivedMessage(message))
-			}
-			if full {
-				return a.writeGroupReceivedMessageFullText(message)
-			}
-			return a.writeGroupReceivedMessageText(summarizeGroupReceivedMessage(message))
+			return a.writeGroupReceiveOutput(format, full, message)
 		}
 
 		if !maxProvided {
@@ -411,35 +372,14 @@ func (a *App) prepareRecvCommand(args []string) (preparedCommand, error) {
 			if err != nil {
 				return err
 			}
-
-			if format != outputFormatText {
-				if full {
-					return a.writeStructuredOutput(format, message)
-				}
-				return a.writeStructuredOutput(format, summarizeReceivedMessage(message))
-			}
-			if full {
-				return a.writeReceivedMessageFullText(message)
-			}
-			return a.writeReceivedMessageText(summarizeReceivedMessage(message))
+			return a.writeReceiveOutput(format, full, message)
 		}
 
 		result, err := ops.ReceiveBatch(ctx, params)
 		if err != nil {
 			return err
 		}
-
-		if format != outputFormatText {
-			if full {
-				return a.writeStructuredOutput(format, result)
-			}
-			return a.writeStructuredOutput(format, summarizeReceiveResult(result))
-		}
-		if full {
-			return a.writeReceiveResultFullText(result)
-		}
-
-		return a.writeReceiveResultText(summarizeReceiveResult(result))
+		return a.writeReceiveBatchOutput(format, full, result)
 	}, nil
 }
 
@@ -541,32 +481,14 @@ func (a *App) prepareWaitCommand(args []string) (preparedCommand, error) {
 			if err != nil {
 				return err
 			}
-			if format != outputFormatText {
-				if full {
-					return a.writeStructuredOutput(format, message)
-				}
-				return a.writeStructuredOutput(format, summarizeGroupListedMessage(message))
-			}
-			if full {
-				return a.writeGroupListedMessageText(message)
-			}
-			return a.writeGroupWaitedMessageText(summarizeGroupListedMessage(message))
+			return a.writeGroupWaitOutput(format, full, message)
 		}
 
 		delivery, err := ops.Wait(ctx, params)
 		if err != nil {
 			return err
 		}
-		if format != outputFormatText {
-			if full {
-				return a.writeStructuredOutput(format, delivery)
-			}
-			return a.writeStructuredOutput(format, summarizeListedDelivery(delivery))
-		}
-		if full {
-			return a.writeListedDeliveryText(delivery)
-		}
-		return a.writeWaitedDeliveryText(summarizeListedDelivery(delivery))
+		return a.writeWaitOutput(format, full, delivery)
 	}, nil
 }
 
@@ -909,35 +831,6 @@ func (a *App) parseCommandFlags(fs *flag.FlagSet, args []string, writeHelp func(
 
 func isHelpArg(value string) bool {
 	return value == "-h" || value == "--help"
-}
-
-func (a *App) writeRootHelp() {
-	writeHelp(a.stdout, []string{
-		"Usage:",
-		"  agent-mailbox [--state-dir PATH] <command> [options]",
-		"",
-		"Commands:",
-		"  send                Send a message to an address",
-		"  recv                Claim the next delivery",
-		"  wait                Wait for one delivery without claiming",
-		"  watch               Observe deliveries without claiming",
-		"  read                Read one persisted personal message or delivery",
-		"  list                List deliveries",
-		"  stale               List stale inbox views",
-		"  group               Manage group mailboxes",
-		"  address             Inspect address bindings",
-		"  ack                 Acknowledge a leased delivery",
-		"  renew               Extend a leased delivery",
-		"  release             Return a leased delivery to the queue",
-		"  defer               Hide a leased delivery until a future time",
-		"  fail                Record a failed delivery attempt",
-		"",
-		"Global options:",
-		"  --state-dir PATH    Override mailbox state directory",
-		"  --help              Show help",
-		"",
-		"Use \"agent-mailbox <command> --help\" for command-specific details.",
-	})
 }
 
 func (a *App) writeSendHelp() {
