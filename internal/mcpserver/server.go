@@ -951,22 +951,18 @@ func (s *Service) mailboxFail(ctx context.Context, _ *mcp.CallToolRequest, input
 }
 
 func (s *Service) mailboxToolResult(ctx context.Context, result map[string]any) (*mcp.CallToolResult, map[string]any, error) {
-	updated, err := s.withPassiveReminderPayload(ctx, result)
-	if err != nil {
-		return nil, nil, err
-	}
-	return nil, updated, nil
+	return nil, s.withPassiveReminderPayloadBestEffort(ctx, result), nil
 }
 
-func (s *Service) withPassiveReminderPayload(ctx context.Context, result map[string]any) (map[string]any, error) {
+func (s *Service) withPassiveReminderPayloadBestEffort(ctx context.Context, result map[string]any) map[string]any {
 	payload, err := s.passiveReminderPayload(ctx)
 	if err != nil {
-		return nil, err
+		return result
 	}
 	if payload != nil {
 		result["reminders"] = payload
 	}
-	return result, nil
+	return result
 }
 
 func (s *Service) passiveReminderPayload(ctx context.Context) (map[string]any, error) {
