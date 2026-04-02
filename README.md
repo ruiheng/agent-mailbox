@@ -51,6 +51,12 @@ Show the available build targets:
 make help
 ```
 
+Build the stdio MCP server:
+
+```bash
+make build-mcp
+```
+
 ## Install
 
 Install into `/usr/local/bin`:
@@ -72,6 +78,52 @@ If you use a user-local prefix, make sure `"$HOME/.local/bin"` is in your
 
 For day-to-day CLI usage, examples, receive semantics, exit codes, and command
 reference, see [`docs/cli.md`](docs/cli.md).
+
+## MCP Server
+
+This repo also ships an in-repo Go stdio MCP server that mirrors the mailbox
+and agent-deck tool surface previously hosted out of tree.
+
+Build it locally:
+
+```bash
+make build-mcp
+```
+
+This produces:
+
+```text
+./bin/agent-mailbox-mcp
+```
+
+Run it directly:
+
+```bash
+make run-mcp
+```
+
+Example MCP config:
+
+```toml
+[mcp_servers.agent_mailbox]
+command = "/absolute/path/to/agent-mailbox/bin/agent-mailbox-mcp"
+```
+
+The Go MCP entrypoint keeps the existing tool names:
+
+- `mailbox_bind`
+- `mailbox_status`
+- `mailbox_send`
+- `mailbox_wait`
+- `mailbox_recv`
+- `mailbox_list`
+- `mailbox_read`
+- `mailbox_ack`
+- `mailbox_release`
+- `mailbox_defer`
+- `mailbox_fail`
+- `agent_deck_resolve_session`
+- `agent_deck_ensure_session`
 
 ## Quick Start
 
