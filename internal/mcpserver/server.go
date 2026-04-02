@@ -20,17 +20,19 @@ import (
 )
 
 const (
-	serverName               = "agent_mailbox"
-	serverVersion            = "0.4.0"
-	syncCmdTimeout           = 30 * time.Second
-	ensureSessionShowTimeout = 30 * time.Second
-	notificationDelivery     = "delivery_available"
-	notificationStaleUnread  = "stale_unread"
-	defaultListenerMessage   = "If agent_mailbox is not bound yet, first run agent-deck session current --json and call mailbox_bind for this session. When a wakeup message arrives, use the 'check-agent-mail' skill and execute its requested action."
-	defaultNotifyMessage     = "Use the 'check-agent-mail' skill now. Receive the pending message and execute its requested action."
-	mailboxRecoveryHint      = "If you forget the mailbox details or next action after ack, use `mailbox_read` on the latest `acked` delivery for this session. For older mail, use `mailbox_list` with `state: acked` and then `mailbox_read` by delivery id."
-	serverInstructions       = "Bootstrap this MCP process once per agent-managed session. If it is not bound yet, run `agent-deck session current --json`, take the current session id, and call `mailbox_bind`. Use `agent-deck/<id>` as the default sender. Pass `default_workdir` when you want later `agent_deck_ensure_session` calls to create sessions in the current project. `mailbox_wait` is not recommended for normal workflow; prefer `mailbox_recv`. Later reuse the bound addresses until MCP state is lost."
-	unsetValue               = "<unset>"
+	serverName                  = "agent_mailbox"
+	serverVersion               = "0.4.0"
+	syncCmdTimeout              = 30 * time.Second
+	ensureSessionShowTimeout    = 30 * time.Second
+	defaultReminderPollInterval = 30 * time.Second
+	defaultReminderConfirmDelay = 2 * time.Second
+	notificationDelivery        = "delivery_available"
+	notificationStaleUnread     = "stale_unread"
+	defaultListenerMessage      = "If agent_mailbox is not bound yet, first run agent-deck session current --json and call mailbox_bind for this session. When a wakeup message arrives, use the 'check-agent-mail' skill and execute its requested action."
+	defaultNotifyMessage        = "Use the 'check-agent-mail' skill now. Receive the pending message and execute its requested action."
+	mailboxRecoveryHint         = "If you forget the mailbox details or next action after ack, use `mailbox_read` on the latest `acked` delivery for this session. For older mail, use `mailbox_list` with `state: acked` and then `mailbox_read` by delivery id."
+	serverInstructions          = "Bootstrap this MCP process once per agent-managed session. If it is not bound yet, run `agent-deck session current --json`, take the current session id, and call `mailbox_bind`. Use `agent-deck/<id>` as the default sender. Pass `default_workdir` when you want later `agent_deck_ensure_session` calls to create sessions in the current project. `mailbox_wait` is not recommended for normal workflow; prefer `mailbox_recv`. Later reuse the bound addresses until MCP state is lost."
+	unsetValue                  = "<unset>"
 )
 
 var (
@@ -55,16 +57,25 @@ type RunResult struct {
 }
 
 type Options struct {
-	MailboxRunner Runner
-	CommandRunner Runner
-	StateDir      string
+	MailboxRunner             Runner
+	CommandRunner             Runner
+	StateDir                  string
+	Now                       func() time.Time
+	ReminderPollInterval      time.Duration
+	ReminderConfirmDelay      time.Duration
+	DisableActiveReminderLoop bool
 }
 
 type Service struct {
-	mailboxRunner Runner
-	commandRunner Runner
-	notifiers     map[string]managerNotifier
-	state         *serverState
+	mailboxRunner             Runner
+	commandRunner             Runner
+	notifiers                 map[string]managerNotifier
+	state                     *serverState
+	now                       func() time.Time
+	reminderPollInterval      time.Duration
+	reminderConfirmDelay      time.Duration
+	disableActiveReminderLoop bool
+	activeReminderLoopOnce    sync.Once
 }
 
 type serverState struct {
@@ -121,14 +132,17 @@ type mailboxSendInput struct {
 }
 
 type mailboxReminderSubscribeInput struct {
-	Addresses []string `json:"addresses"`
-	Route     string   `json:"route"`
-	OlderThan string   `json:"older_than"`
+	Addresses  []string                 `json:"addresses,omitempty"`
+	GroupViews []reminderGroupViewInput `json:"group_views,omitempty"`
+	Route      string                   `json:"route"`
+	OlderThan  string                   `json:"older_than"`
+	ActivePush bool                     `json:"active_push,omitempty"`
 }
 
 type mailboxReminderUnsubscribeInput struct {
-	Addresses []string `json:"addresses"`
-	Route     string   `json:"route"`
+	Addresses  []string                 `json:"addresses,omitempty"`
+	GroupViews []reminderGroupViewInput `json:"group_views,omitempty"`
+	Route      string                   `json:"route"`
 }
 
 type mailboxReminderStatusInput struct{}
@@ -202,7 +216,18 @@ type parsedAddress struct {
 }
 
 type reminderSelector struct {
-	Addresses []string `json:"addresses"`
+	Addresses  []string            `json:"addresses,omitempty"`
+	GroupViews []reminderGroupView `json:"group_views,omitempty"`
+}
+
+type reminderGroupViewInput struct {
+	GroupAddress string `json:"group_address"`
+	AsPerson     string `json:"as_person"`
+}
+
+type reminderGroupView struct {
+	GroupAddress string `json:"group_address"`
+	AsPerson     string `json:"as_person"`
 }
 
 type reminderRouteConfig struct {
@@ -214,6 +239,7 @@ type reminderRouteConfig struct {
 type reminderPolicy struct {
 	OlderThan    time.Duration `json:"-"`
 	OlderThanRaw string        `json:"older_than"`
+	ActivePush   bool          `json:"active_push,omitempty"`
 }
 
 type reminderRuntime struct {
@@ -222,6 +248,9 @@ type reminderRuntime struct {
 	LastStaleCount     int    `json:"last_stale_count"`
 	LastClaimableCount int    `json:"last_claimable_count"`
 	LastOldestEligible string `json:"last_oldest_eligible_at,omitempty"`
+	PendingSince       string `json:"pending_since,omitempty"`
+	LastSuppressedAt   string `json:"last_suppressed_at,omitempty"`
+	LastNotifiedAt     string `json:"last_notified_at,omitempty"`
 }
 
 type reminderSubscription struct {
@@ -234,6 +263,7 @@ type reminderSubscription struct {
 
 type staleAddress struct {
 	Address          string `json:"address"`
+	Person           string `json:"person,omitempty"`
 	OldestEligibleAt string `json:"oldest_eligible_at"`
 	ClaimableCount   int    `json:"claimable_count"`
 }
@@ -251,13 +281,14 @@ type reminderStatusEntry struct {
 }
 
 type passiveReminderSubscription struct {
-	SubscriptionKey   string   `json:"subscription_key"`
-	SelectorAddresses []string `json:"selector_addresses"`
-	Route             string   `json:"route"`
-	OlderThan         string   `json:"older_than"`
-	StaleAddressCount int      `json:"stale_address_count"`
-	ClaimableCount    int      `json:"claimable_count"`
-	OldestEligibleAt  string   `json:"oldest_eligible_at,omitempty"`
+	SubscriptionKey    string              `json:"subscription_key"`
+	SelectorAddresses  []string            `json:"selector_addresses,omitempty"`
+	SelectorGroupViews []reminderGroupView `json:"selector_group_views,omitempty"`
+	Route              string              `json:"route"`
+	OlderThan          string              `json:"older_than"`
+	StaleAddressCount  int                 `json:"stale_address_count"`
+	ClaimableCount     int                 `json:"claimable_count"`
+	OldestEligibleAt   string              `json:"oldest_eligible_at,omitempty"`
 }
 
 type passiveReminderPayload struct {
@@ -285,8 +316,15 @@ type notificationOutcome struct {
 	Err    error
 }
 
+type notificationProbe struct {
+	Status   string
+	Scheme   string
+	Wakeable bool
+}
+
 type managerNotifier interface {
 	Name() string
+	Probe(ctx context.Context, route notificationRoute) notificationProbe
 	Notify(ctx context.Context, event notificationEvent) notificationOutcome
 }
 
@@ -326,6 +364,21 @@ func newService(opts Options) *Service {
 		state: &serverState{
 			reminderSubscriptions: map[string]reminderSubscription{},
 		},
+		now:                       opts.Now,
+		reminderPollInterval:      opts.ReminderPollInterval,
+		reminderConfirmDelay:      opts.ReminderConfirmDelay,
+		disableActiveReminderLoop: opts.DisableActiveReminderLoop,
+	}
+	if service.now == nil {
+		service.now = func() time.Time {
+			return time.Now().UTC()
+		}
+	}
+	if service.reminderPollInterval <= 0 {
+		service.reminderPollInterval = defaultReminderPollInterval
+	}
+	if service.reminderConfirmDelay <= 0 {
+		service.reminderConfirmDelay = defaultReminderConfirmDelay
 	}
 	service.notifiers = map[string]managerNotifier{
 		"agent-deck": agentDeckNotifier{service: service},
@@ -508,21 +561,24 @@ func (s *Service) mailboxStatus(ctx context.Context, _ *mcp.CallToolRequest, _ m
 }
 
 func (s *Service) mailboxReminderSubscribe(ctx context.Context, _ *mcp.CallToolRequest, input mailboxReminderSubscribeInput) (*mcp.CallToolResult, map[string]any, error) {
-	subscription, err := buildReminderSubscription(input.Addresses, input.Route, input.OlderThan)
+	subscription, err := buildReminderSubscription(input.Addresses, input.GroupViews, input.Route, input.OlderThan, input.ActivePush)
 	if err != nil {
 		return nil, nil, err
 	}
 
-	staleEntries, err := s.listStaleAddresses(ctx, subscription.Selector.Addresses, subscription.Policy)
+	staleEntries, err := s.listStaleEntries(ctx, subscription.Selector, subscription.Policy)
 	if err != nil {
 		return nil, nil, err
 	}
-	subscription.Runtime = nextReminderRuntime(reminderRuntime{}, time.Now().UTC(), staleEntries)
+	subscription.Runtime = nextReminderRuntime(reminderRuntime{}, s.now().UTC(), staleEntries)
 
 	s.state.mu.Lock()
 	_, existed := s.state.reminderSubscriptions[subscription.Key]
 	s.state.reminderSubscriptions[subscription.Key] = subscription
 	s.state.mu.Unlock()
+	if subscription.Policy.ActivePush {
+		s.startActiveReminderLoop()
+	}
 
 	return nil, map[string]any{
 		"status":       "subscribed",
@@ -532,7 +588,7 @@ func (s *Service) mailboxReminderSubscribe(ctx context.Context, _ *mcp.CallToolR
 }
 
 func (s *Service) mailboxReminderUnsubscribe(_ context.Context, _ *mcp.CallToolRequest, input mailboxReminderUnsubscribeInput) (*mcp.CallToolResult, map[string]any, error) {
-	subscriptionKey, err := reminderSubscriptionKey(input.Addresses, input.Route)
+	subscriptionKey, err := reminderSubscriptionKey(input.Addresses, input.GroupViews, input.Route)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -552,11 +608,11 @@ func (s *Service) mailboxReminderUnsubscribe(_ context.Context, _ *mcp.CallToolR
 func (s *Service) mailboxReminderStatus(ctx context.Context, _ *mcp.CallToolRequest, _ mailboxReminderStatusInput) (*mcp.CallToolResult, map[string]any, error) {
 	subscriptions := s.reminderSubscriptionsSnapshot()
 	entries := make([]reminderStatusEntry, 0, len(subscriptions))
-	now := time.Now().UTC()
+	now := s.now().UTC()
 	updatedRuntime := make(map[string]reminderRuntime, len(subscriptions))
 
 	for _, subscription := range subscriptions {
-		staleEntries, err := s.listStaleAddresses(ctx, subscription.Selector.Addresses, subscription.Policy)
+		staleEntries, err := s.listStaleEntries(ctx, subscription.Selector, subscription.Policy)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -661,8 +717,54 @@ func (s *Service) notifyRoute(ctx context.Context, event notificationEvent) noti
 	return outcome
 }
 
+func (s *Service) probeRoute(ctx context.Context, route notificationRoute) notificationProbe {
+	notifier, ok := s.notifiers[route.Manager]
+	if !ok {
+		return notificationProbe{
+			Status: "unsupported",
+			Scheme: route.Manager,
+		}
+	}
+	probe := notifier.Probe(ctx, route)
+	if probe.Scheme == "" {
+		probe.Scheme = notifier.Name()
+	}
+	return probe
+}
+
 func (n agentDeckNotifier) Name() string {
 	return "agent-deck"
+}
+
+func (n agentDeckNotifier) Probe(ctx context.Context, route notificationRoute) notificationProbe {
+	targetSession, err := n.service.resolveSessionShowBestEffort(ctx, route.Target)
+	if err != nil {
+		return notificationProbe{
+			Status: "failed",
+			Scheme: n.Name(),
+		}
+	}
+	if targetSession == nil {
+		return notificationProbe{
+			Status: "not_found",
+			Scheme: n.Name(),
+		}
+	}
+
+	status := strings.TrimSpace(targetSession.Status)
+	switch status {
+	case "waiting", "idle":
+		return notificationProbe{
+			Status:   "wakeable",
+			Scheme:   n.Name(),
+			Wakeable: true,
+		}
+	default:
+		return notificationProbe{
+			Status: "suppressed_local_activity",
+			Scheme: n.Name(),
+		}
+	}
 }
 
 func (n agentDeckNotifier) Notify(ctx context.Context, event notificationEvent) notificationOutcome {
@@ -712,6 +814,105 @@ func (n agentDeckNotifier) Notify(ctx context.Context, event notificationEvent) 
 		Status: "sent",
 		Scheme: n.Name(),
 	}
+}
+
+func (s *Service) startActiveReminderLoop() {
+	if s.disableActiveReminderLoop {
+		return
+	}
+	s.activeReminderLoopOnce.Do(func() {
+		go s.runActiveReminderLoop()
+	})
+}
+
+func (s *Service) runActiveReminderLoop() {
+	ticker := time.NewTicker(s.reminderPollInterval)
+	defer ticker.Stop()
+	for range ticker.C {
+		_ = s.processActiveReminderSubscriptions(context.Background())
+	}
+}
+
+func (s *Service) processActiveReminderSubscriptions(ctx context.Context) error {
+	subscriptions := s.reminderSubscriptionsSnapshot()
+	if len(subscriptions) == 0 {
+		return nil
+	}
+
+	now := s.now().UTC()
+	updatedRuntime := make(map[string]reminderRuntime, len(subscriptions))
+	for _, subscription := range subscriptions {
+		if !subscription.Policy.ActivePush {
+			continue
+		}
+		staleEntries, err := s.listStaleEntries(ctx, subscription.Selector, subscription.Policy)
+		if err != nil {
+			continue
+		}
+		updatedRuntime[subscription.Key] = s.processActiveReminderSubscription(ctx, subscription, now, staleEntries)
+	}
+	s.updateReminderRuntime(updatedRuntime)
+	return nil
+}
+
+func (s *Service) processActiveReminderSubscription(ctx context.Context, subscription reminderSubscription, now time.Time, staleEntries []staleAddress) reminderRuntime {
+	runtime := nextReminderRuntime(subscription.Runtime, now, staleEntries)
+	if len(staleEntries) == 0 {
+		runtime.PendingSince = ""
+		return runtime
+	}
+
+	route := notificationRoute{
+		Manager: subscription.Route.Manager,
+		Target:  subscription.Route.Target,
+	}
+	probe := s.probeRoute(ctx, route)
+	if !probe.Wakeable {
+		runtime.PendingSince = ""
+		if probe.Status == "suppressed_local_activity" {
+			runtime.LastSuppressedAt = now.Format(time.RFC3339)
+		}
+		return runtime
+	}
+
+	if inReminderCooldown(runtime.LastNotifiedAt, now, subscription.Policy.cooldown()) {
+		return runtime
+	}
+
+	if runtime.PendingSince == "" {
+		runtime.PendingSince = now.Format(time.RFC3339)
+		return runtime
+	}
+
+	pendingSince, err := time.Parse(time.RFC3339, runtime.PendingSince)
+	if err != nil {
+		runtime.PendingSince = now.Format(time.RFC3339)
+		return runtime
+	}
+	if now.Sub(pendingSince) < s.reminderConfirmDelay {
+		return runtime
+	}
+
+	outcome := s.notifyRoute(ctx, notificationEvent{
+		Kind:  notificationStaleUnread,
+		Route: route,
+	})
+	runtime.PendingSince = ""
+	if outcome.Status != "" {
+		runtime.LastNotifiedAt = now.Format(time.RFC3339)
+	}
+	return runtime
+}
+
+func inReminderCooldown(lastNotifiedAt string, now time.Time, cooldown time.Duration) bool {
+	if cooldown <= 0 || strings.TrimSpace(lastNotifiedAt) == "" {
+		return false
+	}
+	notifiedAt, err := time.Parse(time.RFC3339, lastNotifiedAt)
+	if err != nil {
+		return false
+	}
+	return now.Sub(notifiedAt) < cooldown
 }
 
 func (s *Service) mailboxWait(ctx context.Context, _ *mcp.CallToolRequest, input mailboxWaitInput) (*mcp.CallToolResult, map[string]any, error) {
@@ -971,11 +1172,11 @@ func (s *Service) passiveReminderPayload(ctx context.Context) (map[string]any, e
 		return nil, nil
 	}
 
-	now := time.Now().UTC()
+	now := s.now().UTC()
 	updatedRuntime := make(map[string]reminderRuntime, len(subscriptions))
 	staleSubscriptions := make([]passiveReminderSubscription, 0, len(subscriptions))
 	for _, subscription := range subscriptions {
-		staleEntries, err := s.listStaleAddresses(ctx, subscription.Selector.Addresses, subscription.Policy)
+		staleEntries, err := s.listStaleEntries(ctx, subscription.Selector, subscription.Policy)
 		if err != nil {
 			return nil, err
 		}
@@ -986,13 +1187,14 @@ func (s *Service) passiveReminderPayload(ctx context.Context) (map[string]any, e
 		}
 		summary := reminderCurrentSummary(staleEntries)
 		staleSubscriptions = append(staleSubscriptions, passiveReminderSubscription{
-			SubscriptionKey:   subscription.Key,
-			SelectorAddresses: append([]string(nil), subscription.Selector.Addresses...),
-			Route:             subscription.Route.Address,
-			OlderThan:         subscription.Policy.OlderThanRaw,
-			StaleAddressCount: summary.StaleAddressCount,
-			ClaimableCount:    summary.ClaimableCount,
-			OldestEligibleAt:  summary.OldestEligibleAt,
+			SubscriptionKey:    subscription.Key,
+			SelectorAddresses:  append([]string(nil), subscription.Selector.Addresses...),
+			SelectorGroupViews: append([]reminderGroupView(nil), subscription.Selector.GroupViews...),
+			Route:              subscription.Route.Address,
+			OlderThan:          subscription.Policy.OlderThanRaw,
+			StaleAddressCount:  summary.StaleAddressCount,
+			ClaimableCount:     summary.ClaimableCount,
+			OldestEligibleAt:   summary.OldestEligibleAt,
 		})
 	}
 
@@ -1058,10 +1260,41 @@ func (s *Service) updateReminderRuntime(runtimeByKey map[string]reminderRuntime)
 	}
 }
 
-func (s *Service) listStaleAddresses(ctx context.Context, addresses []string, policy reminderPolicy) ([]staleAddress, error) {
+func (s *Service) listStaleEntries(ctx context.Context, selector reminderSelector, policy reminderPolicy) ([]staleAddress, error) {
+	staleEntries := make([]staleAddress, 0, len(selector.Addresses)+len(selector.GroupViews))
+	if len(selector.Addresses) > 0 {
+		personalEntries, err := s.listStaleAddresses(ctx, selector.Addresses, "", policy)
+		if err != nil {
+			return nil, err
+		}
+		staleEntries = append(staleEntries, personalEntries...)
+	}
+	for _, groupView := range selector.GroupViews {
+		groupEntries, err := s.listStaleAddresses(ctx, []string{groupView.GroupAddress}, groupView.AsPerson, policy)
+		if err != nil {
+			return nil, err
+		}
+		staleEntries = append(staleEntries, groupEntries...)
+	}
+	sort.Slice(staleEntries, func(i, j int) bool {
+		if staleEntries[i].OldestEligibleAt != staleEntries[j].OldestEligibleAt {
+			return staleEntries[i].OldestEligibleAt < staleEntries[j].OldestEligibleAt
+		}
+		if staleEntries[i].Address != staleEntries[j].Address {
+			return staleEntries[i].Address < staleEntries[j].Address
+		}
+		return staleEntries[i].Person < staleEntries[j].Person
+	})
+	return staleEntries, nil
+}
+
+func (s *Service) listStaleAddresses(ctx context.Context, addresses []string, person string, policy reminderPolicy) ([]staleAddress, error) {
 	args := []string{"stale", "--older-than", policy.OlderThanRaw}
 	for _, address := range addresses {
 		args = append(args, "--for", address)
+	}
+	if strings.TrimSpace(person) != "" {
+		args = append(args, "--as", strings.TrimSpace(person))
 	}
 	args = append(args, "--json")
 
@@ -1640,8 +1873,8 @@ func validateSendReceipt(ids sendReceipt, output string) (sendReceipt, error) {
 	return sendReceipt{}, fmt.Errorf("agent-mailbox send returned incomplete receipt: missing delivery_id :: %s", detail)
 }
 
-func buildReminderSubscription(addresses []string, route, olderThan string) (reminderSubscription, error) {
-	selectorAddresses, err := normalizeReminderAddresses(addresses)
+func buildReminderSubscription(addresses []string, groupViews []reminderGroupViewInput, route, olderThan string, activePush bool) (reminderSubscription, error) {
+	selector, err := normalizeReminderSelector(addresses, groupViews)
 	if err != nil {
 		return reminderSubscription{}, err
 	}
@@ -1649,22 +1882,20 @@ func buildReminderSubscription(addresses []string, route, olderThan string) (rem
 	if err != nil {
 		return reminderSubscription{}, err
 	}
-	policy, err := normalizeReminderPolicy(olderThan)
+	policy, err := normalizeReminderPolicy(olderThan, activePush)
 	if err != nil {
 		return reminderSubscription{}, err
 	}
 	return reminderSubscription{
-		Key: reminderKey(selectorAddresses, routeConfig.Address),
-		Selector: reminderSelector{
-			Addresses: selectorAddresses,
-		},
-		Route:  routeConfig,
-		Policy: policy,
+		Key:      reminderKey(selector, routeConfig.Address),
+		Selector: selector,
+		Route:    routeConfig,
+		Policy:   policy,
 	}, nil
 }
 
-func reminderSubscriptionKey(addresses []string, route string) (string, error) {
-	selectorAddresses, err := normalizeReminderAddresses(addresses)
+func reminderSubscriptionKey(addresses []string, groupViews []reminderGroupViewInput, route string) (string, error) {
+	selector, err := normalizeReminderSelector(addresses, groupViews)
 	if err != nil {
 		return "", err
 	}
@@ -1672,16 +1903,59 @@ func reminderSubscriptionKey(addresses []string, route string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return reminderKey(selectorAddresses, routeConfig.Address), nil
+	return reminderKey(selector, routeConfig.Address), nil
 }
 
-func normalizeReminderAddresses(addresses []string) ([]string, error) {
-	out := dedupe(addresses)
-	if len(out) == 0 {
-		return nil, errors.New("mailbox reminder requires at least one address")
+func normalizeReminderSelector(addresses []string, groupViews []reminderGroupViewInput) (reminderSelector, error) {
+	normalizedAddresses := dedupe(addresses)
+	if len(normalizedAddresses) > 0 {
+		sort.Strings(normalizedAddresses)
 	}
-	sort.Strings(out)
-	return out, nil
+	normalizedGroupViews, err := normalizeReminderGroupViews(groupViews)
+	if err != nil {
+		return reminderSelector{}, err
+	}
+	if len(normalizedAddresses) == 0 && len(normalizedGroupViews) == 0 {
+		return reminderSelector{}, errors.New("mailbox reminder requires at least one selector")
+	}
+	return reminderSelector{
+		Addresses:  normalizedAddresses,
+		GroupViews: normalizedGroupViews,
+	}, nil
+}
+
+func normalizeReminderGroupViews(groupViews []reminderGroupViewInput) ([]reminderGroupView, error) {
+	if len(groupViews) == 0 {
+		return nil, nil
+	}
+	normalized := make([]reminderGroupView, 0, len(groupViews))
+	seen := map[string]bool{}
+	for _, groupView := range groupViews {
+		groupAddress := strings.TrimSpace(groupView.GroupAddress)
+		asPerson := strings.TrimSpace(groupView.AsPerson)
+		if groupAddress == "" {
+			return nil, errors.New("mailbox reminder group view requires group_address")
+		}
+		if asPerson == "" {
+			return nil, errors.New("mailbox reminder group view requires as_person")
+		}
+		key := groupAddress + "\x00" + asPerson
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		normalized = append(normalized, reminderGroupView{
+			GroupAddress: groupAddress,
+			AsPerson:     asPerson,
+		})
+	}
+	sort.Slice(normalized, func(i, j int) bool {
+		if normalized[i].GroupAddress != normalized[j].GroupAddress {
+			return normalized[i].GroupAddress < normalized[j].GroupAddress
+		}
+		return normalized[i].AsPerson < normalized[j].AsPerson
+	})
+	return normalized, nil
 }
 
 func normalizeReminderRoute(route string) (reminderRouteConfig, error) {
@@ -1700,7 +1974,7 @@ func normalizeReminderRoute(route string) (reminderRouteConfig, error) {
 	}, nil
 }
 
-func normalizeReminderPolicy(olderThan string) (reminderPolicy, error) {
+func normalizeReminderPolicy(olderThan string, activePush bool) (reminderPolicy, error) {
 	trimmed := strings.TrimSpace(olderThan)
 	if trimmed == "" {
 		return reminderPolicy{}, errors.New("mailbox reminder requires older_than")
@@ -1715,16 +1989,28 @@ func normalizeReminderPolicy(olderThan string) (reminderPolicy, error) {
 	return reminderPolicy{
 		OlderThan:    duration,
 		OlderThanRaw: trimmed,
+		ActivePush:   activePush,
 	}, nil
 }
 
-func reminderKey(addresses []string, route string) string {
-	return route + "\x00" + strings.Join(addresses, "\x00")
+func (p reminderPolicy) cooldown() time.Duration {
+	return p.OlderThan
+}
+
+func reminderKey(selector reminderSelector, route string) string {
+	parts := []string{route, "addresses"}
+	parts = append(parts, selector.Addresses...)
+	parts = append(parts, "groups")
+	for _, groupView := range selector.GroupViews {
+		parts = append(parts, groupView.GroupAddress, groupView.AsPerson)
+	}
+	return strings.Join(parts, "\x00")
 }
 
 func cloneReminderSubscription(subscription reminderSubscription) reminderSubscription {
 	cloned := subscription
 	cloned.Selector.Addresses = append([]string(nil), subscription.Selector.Addresses...)
+	cloned.Selector.GroupViews = append([]reminderGroupView(nil), subscription.Selector.GroupViews...)
 	return cloned
 }
 

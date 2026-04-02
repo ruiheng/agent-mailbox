@@ -187,6 +187,95 @@ func TestListStaleAddressesRejectsKnownGroupAddress(t *testing.T) {
 	}
 }
 
+func TestListStaleAddressesReturnsStaleGroupViewUsingUnreadVisibility(t *testing.T) {
+	t.Parallel()
+
+	runtime, store := newLeaseTestStore(t)
+	defer runtime.Close()
+
+	group, err := store.CreateGroup(context.Background(), "group/history-stale")
+	if err != nil {
+		t.Fatalf("CreateGroup() error = %v", err)
+	}
+
+	current := time.Date(2026, 3, 31, 15, 0, 0, 0, time.UTC)
+	store.now = func() time.Time { return current }
+
+	preJoin := mustSendGroupMessage(t, store, group.Address, "agent/sender", "pre-join", "pre-join body")
+
+	current = current.Add(time.Second)
+	if _, err := store.AddGroupMember(context.Background(), group.Address, "alice"); err != nil {
+		t.Fatalf("AddGroupMember(alice) error = %v", err)
+	}
+
+	current = current.Add(time.Second)
+	duringMembership := mustSendGroupMessage(t, store, group.Address, "agent/sender", "during-membership", "during body")
+
+	current = current.Add(time.Second)
+	if _, err := store.RemoveGroupMember(context.Background(), group.Address, "alice"); err != nil {
+		t.Fatalf("RemoveGroupMember(alice) error = %v", err)
+	}
+
+	current = current.Add(10 * time.Minute)
+
+	stale, err := store.ListStaleAddresses(context.Background(), StaleAddressesParams{
+		GroupViews: []GroupStaleView{{
+			Address: group.Address,
+			Person:  "alice",
+		}},
+		OlderThan: 5 * time.Minute,
+	})
+	if err != nil {
+		t.Fatalf("ListStaleAddresses(group view) error = %v", err)
+	}
+	if len(stale) != 1 {
+		t.Fatalf("len(ListStaleAddresses(group view)) = %d, want 1", len(stale))
+	}
+	if stale[0].Address != group.Address {
+		t.Fatalf("stale[0].address = %q, want %q", stale[0].Address, group.Address)
+	}
+	if stale[0].Person != "alice" {
+		t.Fatalf("stale[0].person = %q, want alice", stale[0].Person)
+	}
+	if stale[0].OldestEligibleAt != preJoin.MessageCreatedAt {
+		t.Fatalf("stale[0].oldest_eligible_at = %q, want %q", stale[0].OldestEligibleAt, preJoin.MessageCreatedAt)
+	}
+	if stale[0].ClaimableCount != 2 {
+		t.Fatalf("stale[0].claimable_count = %d, want 2", stale[0].ClaimableCount)
+	}
+
+	if duringMembership.MessageCreatedAt <= stale[0].OldestEligibleAt {
+		t.Fatalf("during-membership timestamp = %q, want newer than %q", duringMembership.MessageCreatedAt, stale[0].OldestEligibleAt)
+	}
+}
+
+func TestListStaleAddressesReturnsEmptyForGroupViewerWithoutHistory(t *testing.T) {
+	t.Parallel()
+
+	runtime, store := newLeaseTestStore(t)
+	defer runtime.Close()
+
+	group, err := store.CreateGroup(context.Background(), "group/no-history")
+	if err != nil {
+		t.Fatalf("CreateGroup() error = %v", err)
+	}
+	mustSendGroupMessage(t, store, group.Address, "agent/sender", "message", "body")
+
+	stale, err := store.ListStaleAddresses(context.Background(), StaleAddressesParams{
+		GroupViews: []GroupStaleView{{
+			Address: group.Address,
+			Person:  "carol",
+		}},
+		OlderThan: time.Minute,
+	})
+	if err != nil {
+		t.Fatalf("ListStaleAddresses(group unseen viewer) error = %v", err)
+	}
+	if len(stale) != 0 {
+		t.Fatalf("len(ListStaleAddresses(group unseen viewer)) = %d, want 0", len(stale))
+	}
+}
+
 func addAddressAlias(t *testing.T, runtime *Runtime, endpointID, address string) {
 	t.Helper()
 

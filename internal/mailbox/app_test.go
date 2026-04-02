@@ -630,6 +630,70 @@ func TestSendRejectsEmptyBody(t *testing.T) {
 	}
 }
 
+func TestAppRunStaleGroupViewJSON(t *testing.T) {
+	t.Parallel()
+
+	stateDir := filepath.Join(t.TempDir(), "mailbox-state")
+	runtime, err := OpenRuntime(context.Background(), stateDir)
+	if err != nil {
+		t.Fatalf("OpenRuntime() error = %v", err)
+	}
+
+	store := runtime.Store()
+	group, err := store.CreateGroup(context.Background(), "group/stale")
+	if err != nil {
+		t.Fatalf("CreateGroup() error = %v", err)
+	}
+	if _, err := store.AddGroupMember(context.Background(), group.Address, "alice"); err != nil {
+		t.Fatalf("AddGroupMember(alice) error = %v", err)
+	}
+	store.now = func() time.Time {
+		return time.Date(2026, 3, 31, 16, 0, 0, 0, time.UTC)
+	}
+	message := mustSendGroupMessage(t, store, group.Address, "agent/sender", "stale subject", "stale body")
+	store.now = func() time.Time {
+		return time.Date(2026, 3, 31, 16, 10, 0, 0, time.UTC)
+	}
+	runtime.Close()
+
+	stdout := &bytes.Buffer{}
+	stderr := &bytes.Buffer{}
+	app := NewApp(strings.NewReader(""), stdout, stderr)
+	if err := app.Run(context.Background(), []string{
+		"--state-dir", stateDir,
+		"stale",
+		"--for", group.Address,
+		"--as", "alice",
+		"--older-than", "5m",
+		"--json",
+	}); err != nil {
+		t.Fatalf("Run(stale group) error = %v", err)
+	}
+
+	var stale []StaleAddress
+	if err := json.Unmarshal(stdout.Bytes(), &stale); err != nil {
+		t.Fatalf("json.Unmarshal(stale group output) error = %v; stdout = %q", err, stdout.String())
+	}
+	if len(stale) != 1 {
+		t.Fatalf("len(stale group) = %d, want 1", len(stale))
+	}
+	if stale[0].Address != group.Address {
+		t.Fatalf("stale[0].address = %q, want %q", stale[0].Address, group.Address)
+	}
+	if stale[0].Person != "alice" {
+		t.Fatalf("stale[0].person = %q, want alice", stale[0].Person)
+	}
+	if stale[0].OldestEligibleAt != message.MessageCreatedAt {
+		t.Fatalf("stale[0].oldest_eligible_at = %q, want %q", stale[0].OldestEligibleAt, message.MessageCreatedAt)
+	}
+	if stale[0].ClaimableCount != 1 {
+		t.Fatalf("stale[0].claimable_count = %d, want 1", stale[0].ClaimableCount)
+	}
+	if stderr.Len() != 0 {
+		t.Fatalf("stderr = %q, want empty", stderr.String())
+	}
+}
+
 func TestAppSendRejectsEmptyBodyInput(t *testing.T) {
 	t.Parallel()
 
@@ -760,6 +824,10 @@ func TestInvalidCLIPathsDoNotCreateRuntimeState(t *testing.T) {
 		{
 			name: "stale conflicting formats",
 			args: []string{"stale", "--for", "workflow/reviewer/task-123", "--older-than", "5m", "--json", "--yaml"},
+		},
+		{
+			name: "stale group multiple for",
+			args: []string{"stale", "--for", "group/ops", "--for", "group/dev", "--as", "alice", "--older-than", "5m", "--json"},
 		},
 		{
 			name: "recv missing for",
@@ -917,7 +985,7 @@ func TestHelpCLIPathsDoNotCreateRuntimeState(t *testing.T) {
 		{
 			name:         "root help lists stale",
 			args:         []string{"--help"},
-			wantContains: "  stale               List stale personal inboxes",
+			wantContains: "  stale               List stale inbox views",
 		},
 		{
 			name:         "send help",
@@ -927,7 +995,7 @@ func TestHelpCLIPathsDoNotCreateRuntimeState(t *testing.T) {
 		{
 			name:         "stale help",
 			args:         []string{"stale", "--help"},
-			wantContains: "Usage:\n  agent-mailbox stale --for ADDRESS [--for ADDRESS ...] --older-than DURATION [--json | --yaml]",
+			wantContains: "Usage:\n  agent-mailbox stale --for ADDRESS [--for ADDRESS ...] --older-than DURATION [--json | --yaml]\n  agent-mailbox stale --for GROUP_ADDRESS --as PERSON --older-than DURATION [--json | --yaml]",
 		},
 		{
 			name:         "recv help",

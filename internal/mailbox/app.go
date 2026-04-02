@@ -287,10 +287,12 @@ func (a *App) prepareStaleCommand(args []string) (preparedCommand, error) {
 	fs.SetOutput(io.Discard)
 
 	var addresses stringListFlag
+	var person string
 	var olderThan time.Duration
 	var formats outputFlags
 
 	fs.Var(&addresses, "for", "recipient address (repeatable)")
+	fs.StringVar(&person, "as", "", "group reader identity")
 	fs.DurationVar(&olderThan, "older-than", 0, "staleness threshold")
 	formats.register(fs, "emit JSON", "emit YAML")
 
@@ -304,14 +306,25 @@ func (a *App) prepareStaleCommand(args []string) (preparedCommand, error) {
 	if olderThan <= 0 {
 		return nil, errors.New("--older-than must be greater than 0")
 	}
+	person = strings.TrimSpace(person)
+	if person != "" && len(normalizedAddresses) != 1 {
+		return nil, errors.New("--as requires exactly one --for address")
+	}
 	format, err := formats.resolveStructured()
 	if err != nil {
 		return nil, err
 	}
 
 	params := StaleAddressesParams{
-		Addresses: normalizedAddresses,
 		OlderThan: olderThan,
+	}
+	if person != "" {
+		params.GroupViews = []GroupStaleView{{
+			Address: normalizedAddresses[0],
+			Person:  person,
+		}}
+	} else {
+		params.Addresses = normalizedAddresses
 	}
 
 	return func(ctx context.Context, store *Store) error {
@@ -899,7 +912,7 @@ func (a *App) writeRootHelp() {
 		"  watch               Observe deliveries without claiming",
 		"  read                Read one persisted personal message or delivery",
 		"  list                List deliveries",
-		"  stale               List stale personal inboxes",
+		"  stale               List stale inbox views",
 		"  group               Manage group mailboxes",
 		"  address             Inspect address bindings",
 		"  ack                 Acknowledge a leased delivery",
@@ -954,9 +967,11 @@ func (a *App) writeStaleHelp() {
 	writeHelp(a.stdout, []string{
 		"Usage:",
 		"  agent-mailbox stale --for ADDRESS [--for ADDRESS ...] --older-than DURATION [--json | --yaml]",
+		"  agent-mailbox stale --for GROUP_ADDRESS --as PERSON --older-than DURATION [--json | --yaml]",
 		"",
 		"Options:",
 		"  --for ADDRESS        Recipient address (repeatable)",
+		"  --as PERSON          Group reader identity",
 		"  --older-than DUR     Minimum receivable age before an inbox is stale",
 		"  --json               Emit JSON",
 		"  --yaml               Emit YAML",
