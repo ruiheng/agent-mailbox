@@ -246,6 +246,33 @@ Use `list` for a one-shot snapshot, `wait` for a one-shot observe-only block,
 `watch` for observe-only streaming metadata, and `recv` when the consumer is
 ready to claim work and receive a lease token.
 
+## Cron Wake Helper
+
+For cron-style wakeups of live `agent-deck` sessions, use:
+
+```bash
+scripts/wake-stale-agent-deck-sessions.sh \
+  --older-than 10m \
+  --confirm-delay 2 \
+  --state-dir /tmp/mailbox-demo
+```
+
+The script:
+
+- lists `waiting` and `idle` sessions
+- runs `agent-mailbox stale` for their `agent-deck/<session-id>` inboxes
+- waits briefly, rechecks both session status and staleness, then sends
+  `agent-deck session send --no-wait` only if the session is still idle/waiting
+
+Install it into a bin directory:
+
+```bash
+scripts/wake-stale-agent-deck-sessions.sh install --prefix "$HOME/.local"
+```
+
+`--all-mail-states` tells the script to pass `--all` through to `agent-deck list`,
+so it includes sessions that the default list view may hide.
+
 ## Local State Layout
 
 The mailbox state directory contains:
