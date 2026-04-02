@@ -722,6 +722,87 @@ func TestProcessActiveReminderSubscriptionsCombinesPersonalAndGroupSelectors(t *
 	}
 }
 
+func TestProcessActiveReminderSubscriptionsRetriesAfterFailedNotifyWithoutCooldown(t *testing.T) {
+	current := time.Date(2026, 4, 3, 4, 0, 0, 0, time.UTC)
+	sendCount := 0
+
+	mailboxRunner := &fakeRunner{t: t, handler: func(args []string, input string) (RunResult, error) {
+		wantArgs := []string{
+			"stale",
+			"--older-than", "10m",
+			"--for", "agent-deck/worker",
+			"--json",
+		}
+		if strings.Join(args, "\x00") != strings.Join(wantArgs, "\x00") {
+			t.Fatalf("mailbox args = %v, want %v", args, wantArgs)
+		}
+		return RunResult{ExitCode: 0, Stdout: `[{"address":"agent-deck/worker","oldest_eligible_at":"2026-04-03T03:40:00Z","claimable_count":1}]`}, nil
+	}}
+
+	commandRunner := &fakeRunner{t: t, handler: func(args []string, input string) (RunResult, error) {
+		switch {
+		case strings.Join(args, "\x00") == strings.Join([]string{"agent-deck", "session", "show", "worker", "--json"}, "\x00"):
+			return RunResult{ExitCode: 0, Stdout: `{"id":"worker","title":"coder-123","status":"waiting"}`}, nil
+		case len(args) == 6 && args[0] == "agent-deck" && args[1] == "session" && args[2] == "send":
+			sendCount++
+			if sendCount == 1 {
+				return RunResult{ExitCode: 1, Stderr: "wakeup failed"}, nil
+			}
+			return RunResult{ExitCode: 0}, nil
+		default:
+			t.Fatalf("unexpected command args: %v", args)
+			return RunResult{}, nil
+		}
+	}}
+
+	service := newService(Options{
+		MailboxRunner:             mailboxRunner,
+		CommandRunner:             commandRunner,
+		Now:                       func() time.Time { return current },
+		ReminderConfirmDelay:      2 * time.Second,
+		DisableActiveReminderLoop: true,
+	})
+	subscription, err := buildReminderSubscription([]string{"agent-deck/worker"}, nil, "agent-deck/worker", "10m", true)
+	if err != nil {
+		t.Fatalf("buildReminderSubscription() error = %v", err)
+	}
+	service.state.reminderSubscriptions[subscription.Key] = subscription
+
+	if err := service.processActiveReminderSubscriptions(context.Background()); err != nil {
+		t.Fatalf("processActiveReminderSubscriptions(first) error = %v", err)
+	}
+
+	current = current.Add(3 * time.Second)
+	if err := service.processActiveReminderSubscriptions(context.Background()); err != nil {
+		t.Fatalf("processActiveReminderSubscriptions(failed notify) error = %v", err)
+	}
+	if sendCount != 1 {
+		t.Fatalf("sendCount after failed notify = %d, want 1", sendCount)
+	}
+	runtime := service.state.reminderSubscriptions[subscription.Key].Runtime
+	if runtime.LastNotifiedAt != "" {
+		t.Fatalf("LastNotifiedAt after failed notify = %q, want empty", runtime.LastNotifiedAt)
+	}
+	if runtime.PendingSince == "" {
+		t.Fatal("PendingSince after failed notify = empty, want preserved pending retry state")
+	}
+
+	current = current.Add(time.Second)
+	if err := service.processActiveReminderSubscriptions(context.Background()); err != nil {
+		t.Fatalf("processActiveReminderSubscriptions(retry) error = %v", err)
+	}
+	if sendCount != 2 {
+		t.Fatalf("sendCount after retry = %d, want 2", sendCount)
+	}
+	runtime = service.state.reminderSubscriptions[subscription.Key].Runtime
+	if runtime.LastNotifiedAt == "" {
+		t.Fatal("LastNotifiedAt after successful retry = empty, want cooldown stamp")
+	}
+	if runtime.PendingSince != "" {
+		t.Fatalf("PendingSince after successful retry = %q, want empty", runtime.PendingSince)
+	}
+}
+
 func TestMailboxStatusIncludesPassiveReminderHints(t *testing.T) {
 	mailboxRunner := &fakeRunner{t: t, handler: func(args []string, input string) (RunResult, error) {
 		wantArgs := []string{

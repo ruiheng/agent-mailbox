@@ -897,11 +897,15 @@ func (s *Service) processActiveReminderSubscription(ctx context.Context, subscri
 		Kind:  notificationStaleUnread,
 		Route: route,
 	})
-	runtime.PendingSince = ""
-	if outcome.Status != "" {
+	if notificationOutcomeDelivered(outcome) {
+		runtime.PendingSince = ""
 		runtime.LastNotifiedAt = now.Format(time.RFC3339)
 	}
 	return runtime
+}
+
+func notificationOutcomeDelivered(outcome notificationOutcome) bool {
+	return strings.TrimSpace(outcome.Status) == "sent"
 }
 
 func inReminderCooldown(lastNotifiedAt string, now time.Time, cooldown time.Duration) bool {
