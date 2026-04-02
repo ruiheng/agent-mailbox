@@ -77,6 +77,10 @@ type ReceiveBatchParams struct {
 	Max       int
 }
 
+type receiveLeasePolicy struct {
+	LeaseTTL time.Duration
+}
+
 type ReceivedMessage struct {
 	DeliveryID          string  `json:"delivery_id"`
 	MessageID           string  `json:"message_id"`
@@ -130,6 +134,12 @@ type DeliveryTransitionResult struct {
 	AttemptCount int    `json:"attempt_count"`
 }
 
+type LeaseRenewResult struct {
+	DeliveryID     string `json:"delivery_id"`
+	LeaseToken     string `json:"lease_token"`
+	LeaseExpiresAt string `json:"lease_expires_at"`
+}
+
 type claimCandidate struct {
 	DeliveryID          string
 	MessageID           string
@@ -175,13 +185,15 @@ type resolvedRecipient struct {
 	EndpointID string
 }
 
+var legacyReceiveLeasePolicy = receiveLeasePolicy{LeaseTTL: defaultLeaseTimeout}
+
 func (s *Store) Receive(ctx context.Context, params ReceiveParams) (ReceivedMessage, error) {
 	addresses, err := normalizeAddresses(params.Address, params.Addresses, "--for")
 	if err != nil {
 		return ReceivedMessage{}, err
 	}
 
-	return s.receiveOnce(ctx, addresses)
+	return s.receiveOnceWithLeasePolicy(ctx, addresses, legacyReceiveLeasePolicy)
 }
 
 func (s *Store) ReceiveBatch(ctx context.Context, params ReceiveBatchParams) (ReceiveResult, error) {
@@ -195,9 +207,13 @@ func (s *Store) ReceiveBatch(ctx context.Context, params ReceiveBatchParams) (Re
 		return ReceiveResult{}, fmt.Errorf("--max must be between 1 and %d", maxReceiveBatchSize)
 	}
 
+	return s.receiveBatchWithLeasePolicy(ctx, addresses, maxMessages, legacyReceiveLeasePolicy)
+}
+
+func (s *Store) receiveBatchWithLeasePolicy(ctx context.Context, addresses []string, maxMessages int, policy receiveLeasePolicy) (ReceiveResult, error) {
 	messages := make([]ReceivedMessage, 0, maxMessages)
 	for len(messages) < maxMessages {
-		message, err := s.receiveOnce(ctx, addresses)
+		message, err := s.receiveOnceWithLeasePolicy(ctx, addresses, policy)
 		if err == nil {
 			messages = append(messages, message)
 			continue
@@ -223,6 +239,7 @@ func (s *Store) ReceiveBatch(ctx context.Context, params ReceiveBatchParams) (Re
 
 	hasMore := false
 	if len(messages) == maxMessages {
+		var err error
 		hasMore, err = s.hasClaimableDelivery(ctx, addresses)
 		if err != nil {
 			return ReceiveResult{}, err
@@ -363,7 +380,72 @@ func (s *Store) Fail(ctx context.Context, deliveryID, leaseToken, reason string)
 	})
 }
 
-func (s *Store) receiveOnce(ctx context.Context, addresses []string) (ReceivedMessage, error) {
+func (s *Store) Renew(ctx context.Context, deliveryID, leaseToken string, extendBy time.Duration) (LeaseRenewResult, error) {
+	deliveryID, leaseToken, err := validateLeaseMutationInput(deliveryID, leaseToken)
+	if err != nil {
+		return LeaseRenewResult{}, err
+	}
+	if extendBy <= 0 {
+		return LeaseRenewResult{}, errors.New("renew duration must be greater than 0")
+	}
+
+	now := s.now()
+	tx, err := s.writeDB.BeginTx(ctx, nil)
+	if err != nil {
+		return LeaseRenewResult{}, fmt.Errorf("begin renew transaction: %w", err)
+	}
+	defer tx.Rollback()
+
+	delivery, err := loadActiveLease(ctx, tx, deliveryID, leaseToken, now)
+	if err != nil {
+		return LeaseRenewResult{}, err
+	}
+
+	newLeaseExpiresAt := formatTimestamp(now.Add(extendBy))
+	result, err := tx.ExecContext(ctx, `
+UPDATE deliveries
+SET lease_expires_at = ?
+WHERE delivery_id = ?
+  AND state = 'leased'
+  AND lease_token = ?
+  AND lease_expires_at = ?
+`, newLeaseExpiresAt, delivery.DeliveryID, leaseToken, delivery.LeaseExpiresAt.String)
+	if err != nil {
+		return LeaseRenewResult{}, fmt.Errorf("update delivery %q: %w", deliveryID, err)
+	}
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return LeaseRenewResult{}, fmt.Errorf("read renew rows affected for %q: %w", deliveryID, err)
+	}
+	if rowsAffected == 0 {
+		return LeaseRenewResult{}, fmt.Errorf("delivery %q changed while renewing", deliveryID)
+	}
+
+	eventTimestamp := formatTimestamp(now)
+	if err := insertDeliveryEvent(ctx, tx, "delivery_lease_renewed", delivery.RecipientEndpointID, delivery.MessageID, delivery.DeliveryID, map[string]any{
+		"previous_lease_expires_at": delivery.LeaseExpiresAt.String,
+		"lease_expires_at":          newLeaseExpiresAt,
+	}, eventTimestamp); err != nil {
+		return LeaseRenewResult{}, err
+	}
+
+	if err := tx.Commit(); err != nil {
+		return LeaseRenewResult{}, fmt.Errorf("commit renew for %q: %w", deliveryID, err)
+	}
+
+	return LeaseRenewResult{
+		DeliveryID:     delivery.DeliveryID,
+		LeaseToken:     leaseToken,
+		LeaseExpiresAt: newLeaseExpiresAt,
+	}, nil
+}
+
+func (s *Store) receiveOnceWithLeasePolicy(ctx context.Context, addresses []string, policy receiveLeasePolicy) (ReceivedMessage, error) {
+	policy, err := normalizeReceiveLeasePolicy(policy)
+	if err != nil {
+		return ReceivedMessage{}, err
+	}
+
 	recipients, err := s.resolveRecipients(ctx, addresses)
 	if err != nil {
 		return ReceivedMessage{}, err
@@ -379,10 +461,17 @@ func (s *Store) receiveOnce(ctx context.Context, addresses []string) (ReceivedMe
 		recipientEndpointIDs = append(recipientEndpointIDs, recipient.EndpointID)
 	}
 
-	return s.claimNextDelivery(ctx, addressByEndpointID, recipientEndpointIDs)
+	return s.claimNextDelivery(ctx, addressByEndpointID, recipientEndpointIDs, policy)
 }
 
-func (s *Store) claimNextDelivery(ctx context.Context, addressByEndpointID map[string]string, recipientEndpointIDs []string) (ReceivedMessage, error) {
+func normalizeReceiveLeasePolicy(policy receiveLeasePolicy) (receiveLeasePolicy, error) {
+	if policy.LeaseTTL <= 0 {
+		return receiveLeasePolicy{}, errors.New("receive lease ttl must be greater than 0")
+	}
+	return policy, nil
+}
+
+func (s *Store) claimNextDelivery(ctx context.Context, addressByEndpointID map[string]string, recipientEndpointIDs []string, policy receiveLeasePolicy) (ReceivedMessage, error) {
 	for attempt := 1; ; attempt++ {
 		nowText := formatTimestamp(s.now())
 		if _, err := loadClaimCandidate(ctx, s.readDB, recipientEndpointIDs, nowText); errors.Is(err, sql.ErrNoRows) {
@@ -391,7 +480,7 @@ func (s *Store) claimNextDelivery(ctx context.Context, addressByEndpointID map[s
 			return ReceivedMessage{}, fmt.Errorf("query claimable delivery: %w", err)
 		}
 
-		message, err := s.claimNextDeliveryOnce(ctx, addressByEndpointID, recipientEndpointIDs, nowText)
+		message, err := s.claimNextDeliveryOnce(ctx, addressByEndpointID, recipientEndpointIDs, nowText, policy)
 		if err == nil {
 			return message, nil
 		}
@@ -410,7 +499,7 @@ func (s *Store) claimNextDelivery(ctx context.Context, addressByEndpointID map[s
 	}
 }
 
-func (s *Store) claimNextDeliveryOnce(ctx context.Context, addressByEndpointID map[string]string, recipientEndpointIDs []string, nowText string) (ReceivedMessage, error) {
+func (s *Store) claimNextDeliveryOnce(ctx context.Context, addressByEndpointID map[string]string, recipientEndpointIDs []string, nowText string, policy receiveLeasePolicy) (ReceivedMessage, error) {
 	for {
 		tx, err := s.claimDB.BeginTx(ctx, nil)
 		if err != nil {
@@ -432,7 +521,7 @@ func (s *Store) claimNextDeliveryOnce(ctx context.Context, addressByEndpointID m
 			_ = tx.Rollback()
 			return ReceivedMessage{}, err
 		}
-		leaseExpiresAt := formatTimestamp(s.now().Add(defaultLeaseTimeout))
+		leaseExpiresAt := formatTimestamp(s.now().Add(policy.LeaseTTL))
 
 		result, err := tx.ExecContext(ctx, `
 UPDATE deliveries
@@ -586,13 +675,9 @@ func (s *Store) hasClaimableDelivery(ctx context.Context, addresses []string) (b
 }
 
 func (s *Store) transitionLeasedDelivery(ctx context.Context, deliveryID, leaseToken string, build func(time.Time, leasedDeliveryRecord) (deliveryTransitionSpec, error)) (DeliveryTransitionResult, error) {
-	deliveryID = strings.TrimSpace(deliveryID)
-	leaseToken = strings.TrimSpace(leaseToken)
-	if deliveryID == "" {
-		return DeliveryTransitionResult{}, errors.New("delivery id is required")
-	}
-	if leaseToken == "" {
-		return DeliveryTransitionResult{}, errors.New("lease token is required")
+	deliveryID, leaseToken, err := validateLeaseMutationInput(deliveryID, leaseToken)
+	if err != nil {
+		return DeliveryTransitionResult{}, err
 	}
 
 	now := s.now()
@@ -602,29 +687,9 @@ func (s *Store) transitionLeasedDelivery(ctx context.Context, deliveryID, leaseT
 	}
 	defer tx.Rollback()
 
-	delivery, err := loadLeasedDeliveryRecord(ctx, tx, deliveryID)
+	delivery, err := loadActiveLease(ctx, tx, deliveryID, leaseToken, now)
 	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return DeliveryTransitionResult{}, fmt.Errorf("delivery %q not found", deliveryID)
-		}
-		return DeliveryTransitionResult{}, fmt.Errorf("load delivery %q: %w", deliveryID, err)
-	}
-	if delivery.State != "leased" {
-		return DeliveryTransitionResult{}, fmt.Errorf("delivery %q is in state %q, want leased", deliveryID, delivery.State)
-	}
-	if !delivery.LeaseToken.Valid || delivery.LeaseToken.String != leaseToken {
-		return DeliveryTransitionResult{}, fmt.Errorf("validate lease token for %q: %w", deliveryID, ErrLeaseTokenMismatch)
-	}
-	if !delivery.LeaseExpiresAt.Valid {
-		return DeliveryTransitionResult{}, fmt.Errorf("delivery %q is missing lease expiry", deliveryID)
-	}
-
-	expiresAt, err := time.Parse(time.RFC3339Nano, delivery.LeaseExpiresAt.String)
-	if err != nil {
-		return DeliveryTransitionResult{}, fmt.Errorf("parse lease expiry for %q: %w", deliveryID, err)
-	}
-	if !expiresAt.After(now) {
-		return DeliveryTransitionResult{}, fmt.Errorf("validate lease expiry for %q: %w", deliveryID, ErrLeaseExpired)
+		return DeliveryTransitionResult{}, err
 	}
 
 	spec, err := build(now, delivery)
@@ -682,6 +747,47 @@ WHERE delivery_id = ?
 		resultSummary.AckedAt = ackedAt
 	}
 	return resultSummary, nil
+}
+
+func validateLeaseMutationInput(deliveryID, leaseToken string) (string, string, error) {
+	deliveryID = strings.TrimSpace(deliveryID)
+	leaseToken = strings.TrimSpace(leaseToken)
+	if deliveryID == "" {
+		return "", "", errors.New("delivery id is required")
+	}
+	if leaseToken == "" {
+		return "", "", errors.New("lease token is required")
+	}
+	return deliveryID, leaseToken, nil
+}
+
+func loadActiveLease(ctx context.Context, tx *sql.Tx, deliveryID, leaseToken string, now time.Time) (leasedDeliveryRecord, error) {
+	delivery, err := loadLeasedDeliveryRecord(ctx, tx, deliveryID)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return leasedDeliveryRecord{}, fmt.Errorf("delivery %q not found", deliveryID)
+		}
+		return leasedDeliveryRecord{}, fmt.Errorf("load delivery %q: %w", deliveryID, err)
+	}
+	if delivery.State != "leased" {
+		return leasedDeliveryRecord{}, fmt.Errorf("delivery %q is in state %q, want leased", deliveryID, delivery.State)
+	}
+	if !delivery.LeaseToken.Valid || delivery.LeaseToken.String != leaseToken {
+		return leasedDeliveryRecord{}, fmt.Errorf("validate lease token for %q: %w", deliveryID, ErrLeaseTokenMismatch)
+	}
+	if !delivery.LeaseExpiresAt.Valid {
+		return leasedDeliveryRecord{}, fmt.Errorf("delivery %q is missing lease expiry", deliveryID)
+	}
+
+	expiresAt, err := time.Parse(time.RFC3339Nano, delivery.LeaseExpiresAt.String)
+	if err != nil {
+		return leasedDeliveryRecord{}, fmt.Errorf("parse lease expiry for %q: %w", deliveryID, err)
+	}
+	if !expiresAt.After(now) {
+		return leasedDeliveryRecord{}, fmt.Errorf("validate lease expiry for %q: %w", deliveryID, ErrLeaseExpired)
+	}
+
+	return delivery, nil
 }
 
 func loadClaimCandidate(ctx context.Context, querier interface {

@@ -50,7 +50,7 @@ func (a *App) Run(ctx context.Context, args []string) error {
 		return ErrHelpRequested
 	}
 	if len(rest) == 0 {
-		return errors.New("expected a command: send, recv, wait, watch, read, ack, release, defer, fail, list, stale, group, or address")
+		return errors.New("expected a command: send, recv, wait, watch, read, ack, renew, release, defer, fail, list, stale, group, or address")
 	}
 
 	command, err := a.prepareCommand(rest)
@@ -69,7 +69,7 @@ func (a *App) Run(ctx context.Context, args []string) error {
 
 func (a *App) prepareCommand(args []string) (preparedCommand, error) {
 	if len(args) == 0 {
-		return nil, errors.New("expected a command: send, recv, wait, watch, read, ack, release, defer, fail, list, stale, group, or address")
+		return nil, errors.New("expected a command: send, recv, wait, watch, read, ack, renew, release, defer, fail, list, stale, group, or address")
 	}
 
 	switch args[0] {
@@ -85,6 +85,8 @@ func (a *App) prepareCommand(args []string) (preparedCommand, error) {
 		return a.prepareReadCommand(args[1:])
 	case "ack":
 		return a.prepareAckCommand(args[1:])
+	case "renew":
+		return a.prepareRenewCommand(args[1:])
 	case "release":
 		return a.prepareReleaseCommand(args[1:])
 	case "defer":
@@ -686,8 +688,40 @@ func (a *App) prepareAckCommand(args []string) (preparedCommand, error) {
 		if err != nil {
 			return err
 		}
-		fmt.Fprintf(a.stdout, "delivery_id=%s state=%s acked_at=%s attempt_count=%d\n", result.DeliveryID, result.State, result.AckedAt, result.AttemptCount)
-		return nil
+		return a.writeDeliveryTransitionResultText(result)
+	}, nil
+}
+
+func (a *App) prepareRenewCommand(args []string) (preparedCommand, error) {
+	fs := flag.NewFlagSet("agent-mailbox renew", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+
+	var deliveryID string
+	var leaseToken string
+	var extendBy time.Duration
+	fs.StringVar(&deliveryID, "delivery", "", "delivery id")
+	fs.StringVar(&leaseToken, "lease-token", "", "lease token")
+	fs.DurationVar(&extendBy, "for", 0, "lease extension duration")
+
+	if err := a.parseCommandFlags(fs, args, a.writeRenewHelp); err != nil {
+		return nil, err
+	}
+	if err := requireFlag(deliveryID, "--delivery"); err != nil {
+		return nil, err
+	}
+	if err := requireFlag(leaseToken, "--lease-token"); err != nil {
+		return nil, err
+	}
+	if extendBy <= 0 {
+		return nil, errors.New("--for must be greater than 0")
+	}
+
+	return func(ctx context.Context, store *Store) error {
+		result, err := store.Renew(ctx, deliveryID, leaseToken, extendBy)
+		if err != nil {
+			return err
+		}
+		return a.writeLeaseRenewResultText(result)
 	}, nil
 }
 
@@ -715,8 +749,7 @@ func (a *App) prepareReleaseCommand(args []string) (preparedCommand, error) {
 		if err != nil {
 			return err
 		}
-		fmt.Fprintf(a.stdout, "delivery_id=%s state=%s visible_at=%s attempt_count=%d\n", result.DeliveryID, result.State, result.VisibleAt, result.AttemptCount)
-		return nil
+		return a.writeDeliveryTransitionResultText(result)
 	}, nil
 }
 
@@ -754,8 +787,7 @@ func (a *App) prepareDeferCommand(args []string) (preparedCommand, error) {
 		if err != nil {
 			return err
 		}
-		fmt.Fprintf(a.stdout, "delivery_id=%s state=%s visible_at=%s attempt_count=%d\n", result.DeliveryID, result.State, result.VisibleAt, result.AttemptCount)
-		return nil
+		return a.writeDeliveryTransitionResultText(result)
 	}, nil
 }
 
@@ -788,8 +820,7 @@ func (a *App) prepareFailCommand(args []string) (preparedCommand, error) {
 		if err != nil {
 			return err
 		}
-		fmt.Fprintf(a.stdout, "delivery_id=%s state=%s visible_at=%s attempt_count=%d\n", result.DeliveryID, result.State, result.VisibleAt, result.AttemptCount)
-		return nil
+		return a.writeDeliveryTransitionResultText(result)
 	}, nil
 }
 
@@ -872,6 +903,7 @@ func (a *App) writeRootHelp() {
 		"  group               Manage group mailboxes",
 		"  address             Inspect address bindings",
 		"  ack                 Acknowledge a leased delivery",
+		"  renew               Extend a leased delivery",
 		"  release             Return a leased delivery to the queue",
 		"  defer               Hide a leased delivery until a future time",
 		"  fail                Record a failed delivery attempt",
@@ -1063,6 +1095,13 @@ func (a *App) writeAckHelp() {
 	writeHelp(a.stdout, []string{
 		"Usage:",
 		"  agent-mailbox ack --delivery ID --lease-token TOKEN",
+	})
+}
+
+func (a *App) writeRenewHelp() {
+	writeHelp(a.stdout, []string{
+		"Usage:",
+		"  agent-mailbox renew --delivery ID --lease-token TOKEN --for DURATION",
 	})
 }
 

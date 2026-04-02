@@ -2,6 +2,7 @@ package mailbox
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -82,6 +83,147 @@ func TestReceiveReclaimsExpiredLeaseAndRejectsStaleToken(t *testing.T) {
 	eventTypes := readDeliveryEventTypes(t, runtime, sent.DeliveryID)
 	want := []string{"delivery_queued", "delivery_leased", "delivery_leased", "delivery_acked"}
 	assertStringSlicesEqual(t, eventTypes, want)
+}
+
+func TestRenewExtendsActiveLeaseAndLogsEvent(t *testing.T) {
+	t.Parallel()
+
+	runtime, store := newLeaseTestStore(t)
+	defer runtime.Close()
+
+	current := time.Date(2026, 4, 2, 12, 0, 0, 0, time.UTC)
+	store.now = func() time.Time {
+		return current
+	}
+
+	sent := mustSendMessage(t, store, "workflow/reviewer/task-123", "agent/sender", "review request", "hello reviewer")
+
+	received, err := store.Receive(context.Background(), ReceiveParams{Address: "workflow/reviewer/task-123"})
+	if err != nil {
+		t.Fatalf("Receive() error = %v", err)
+	}
+
+	current = current.Add(time.Minute)
+	renewed, err := store.Renew(context.Background(), received.DeliveryID, received.LeaseToken, 10*time.Minute)
+	if err != nil {
+		t.Fatalf("Renew() error = %v", err)
+	}
+	if renewed.DeliveryID != received.DeliveryID {
+		t.Fatalf("Renew() delivery id = %q, want %q", renewed.DeliveryID, received.DeliveryID)
+	}
+	if renewed.LeaseToken != received.LeaseToken {
+		t.Fatalf("Renew() lease token = %q, want %q", renewed.LeaseToken, received.LeaseToken)
+	}
+	wantExpiry := formatTimestamp(current.Add(10 * time.Minute))
+	if renewed.LeaseExpiresAt != wantExpiry {
+		t.Fatalf("Renew() lease expiry = %q, want %q", renewed.LeaseExpiresAt, wantExpiry)
+	}
+
+	if _, err := store.Ack(context.Background(), renewed.DeliveryID, renewed.LeaseToken); err != nil {
+		t.Fatalf("Ack(renewed lease) error = %v", err)
+	}
+
+	assertStringSlicesEqual(t, readDeliveryEventTypes(t, runtime, sent.DeliveryID), []string{
+		"delivery_queued",
+		"delivery_leased",
+		"delivery_lease_renewed",
+		"delivery_acked",
+	})
+
+	eventDetail := readDeliveryEventDetail(t, runtime, sent.DeliveryID, "delivery_lease_renewed")
+	if eventDetail["previous_lease_expires_at"] != received.LeaseExpiresAt {
+		t.Fatalf("delivery_lease_renewed previous_lease_expires_at = %v, want %q", eventDetail["previous_lease_expires_at"], received.LeaseExpiresAt)
+	}
+	if eventDetail["lease_expires_at"] != renewed.LeaseExpiresAt {
+		t.Fatalf("delivery_lease_renewed lease_expires_at = %v, want %q", eventDetail["lease_expires_at"], renewed.LeaseExpiresAt)
+	}
+}
+
+func TestRenewRejectsExpiredLease(t *testing.T) {
+	t.Parallel()
+
+	_, store := newLeaseTestStore(t)
+
+	current := time.Date(2026, 4, 2, 12, 0, 0, 0, time.UTC)
+	store.now = func() time.Time {
+		return current
+	}
+
+	mustSendMessage(t, store, "workflow/reviewer/task-123", "agent/sender", "review request", "hello reviewer")
+
+	received, err := store.Receive(context.Background(), ReceiveParams{Address: "workflow/reviewer/task-123"})
+	if err != nil {
+		t.Fatalf("Receive() error = %v", err)
+	}
+
+	current = current.Add(defaultLeaseTimeout + time.Second)
+	if _, err := store.Renew(context.Background(), received.DeliveryID, received.LeaseToken, time.Minute); !errors.Is(err, ErrLeaseExpired) {
+		t.Fatalf("Renew(expired lease) error = %v, want ErrLeaseExpired", err)
+	}
+}
+
+func TestRenewRejectsStaleLeaseToken(t *testing.T) {
+	t.Parallel()
+
+	_, store := newLeaseTestStore(t)
+
+	mustSendMessage(t, store, "workflow/reviewer/task-123", "agent/sender", "review request", "hello reviewer")
+
+	received, err := store.Receive(context.Background(), ReceiveParams{Address: "workflow/reviewer/task-123"})
+	if err != nil {
+		t.Fatalf("Receive() error = %v", err)
+	}
+
+	if _, err := store.Renew(context.Background(), received.DeliveryID, received.LeaseToken+"-stale", time.Minute); !errors.Is(err, ErrLeaseTokenMismatch) {
+		t.Fatalf("Renew(stale token) error = %v, want ErrLeaseTokenMismatch", err)
+	}
+}
+
+func TestReceiveLeasePolicyKeepsLegacyPublicTTLAndAllowsShortInternalTTL(t *testing.T) {
+	t.Parallel()
+
+	_, store := newLeaseTestStore(t)
+
+	current := time.Date(2026, 4, 2, 13, 0, 0, 0, time.UTC)
+	store.now = func() time.Time {
+		return current
+	}
+
+	mustSendMessage(t, store, "workflow/legacy-single", "agent/sender", "legacy single", "legacy single body")
+	legacySingle, err := store.Receive(context.Background(), ReceiveParams{Address: "workflow/legacy-single"})
+	if err != nil {
+		t.Fatalf("Receive(legacy public) error = %v", err)
+	}
+	if legacySingle.LeaseExpiresAt != formatTimestamp(current.Add(defaultLeaseTimeout)) {
+		t.Fatalf("Receive(legacy public) lease expiry = %q, want %q", legacySingle.LeaseExpiresAt, formatTimestamp(current.Add(defaultLeaseTimeout)))
+	}
+	if _, err := store.Ack(context.Background(), legacySingle.DeliveryID, legacySingle.LeaseToken); err != nil {
+		t.Fatalf("Ack(legacy public) error = %v", err)
+	}
+
+	mustSendMessage(t, store, "workflow/legacy-batch", "agent/sender", "legacy batch", "legacy batch body")
+	legacyBatch, err := store.ReceiveBatch(context.Background(), ReceiveBatchParams{Address: "workflow/legacy-batch", Max: 1})
+	if err != nil {
+		t.Fatalf("ReceiveBatch(legacy public) error = %v", err)
+	}
+	if len(legacyBatch.Messages) != 1 {
+		t.Fatalf("len(ReceiveBatch(legacy public).Messages) = %d, want 1", len(legacyBatch.Messages))
+	}
+	if legacyBatch.Messages[0].LeaseExpiresAt != formatTimestamp(current.Add(defaultLeaseTimeout)) {
+		t.Fatalf("ReceiveBatch(legacy public) lease expiry = %q, want %q", legacyBatch.Messages[0].LeaseExpiresAt, formatTimestamp(current.Add(defaultLeaseTimeout)))
+	}
+	if _, err := store.Ack(context.Background(), legacyBatch.Messages[0].DeliveryID, legacyBatch.Messages[0].LeaseToken); err != nil {
+		t.Fatalf("Ack(legacy batch) error = %v", err)
+	}
+
+	mustSendMessage(t, store, "workflow/internal-short", "agent/sender", "internal short", "internal short body")
+	internalShort, err := store.receiveOnceWithLeasePolicy(context.Background(), []string{"workflow/internal-short"}, receiveLeasePolicy{LeaseTTL: 30 * time.Second})
+	if err != nil {
+		t.Fatalf("receiveOnceWithLeasePolicy(short ttl) error = %v", err)
+	}
+	if internalShort.LeaseExpiresAt != formatTimestamp(current.Add(30*time.Second)) {
+		t.Fatalf("receiveOnceWithLeasePolicy(short ttl) lease expiry = %q, want %q", internalShort.LeaseExpiresAt, formatTimestamp(current.Add(30*time.Second)))
+	}
 }
 
 func TestReadDeliveryReturnsBodyForAckedDelivery(t *testing.T) {
@@ -1054,6 +1196,27 @@ ORDER BY rowid
 		t.Fatalf("rows.Err() = %v", err)
 	}
 	return eventTypes
+}
+
+func readDeliveryEventDetail(t *testing.T, runtime *Runtime, deliveryID, eventType string) map[string]any {
+	t.Helper()
+
+	var raw string
+	if err := runtime.DB().QueryRow(`
+SELECT detail_json
+FROM events
+WHERE delivery_id = ? AND event_type = ?
+ORDER BY rowid DESC
+LIMIT 1
+`, deliveryID, eventType).Scan(&raw); err != nil {
+		t.Fatalf("QueryRow(event detail) error = %v", err)
+	}
+
+	var detail map[string]any
+	if err := json.Unmarshal([]byte(raw), &detail); err != nil {
+		t.Fatalf("json.Unmarshal(event detail) error = %v; raw = %q", err, raw)
+	}
+	return detail
 }
 
 func readDeliveryStateAndAttemptCount(t *testing.T, runtime *Runtime, deliveryID string) (string, int) {

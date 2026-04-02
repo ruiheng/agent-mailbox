@@ -127,6 +127,15 @@ agent-mailbox ack \
   --lease-token <lease_token>
 ```
 
+Renew an active lease when processing needs more time:
+
+```bash
+agent-mailbox renew \
+  --delivery <delivery_id> \
+  --lease-token <lease_token> \
+  --for 10m
+```
+
 List already-acked deliveries later:
 
 ```bash
@@ -173,7 +182,7 @@ Rules:
 - add or remove members with `group add-member` and `group remove-member`
 - use `send --to <group-address> --group` for group messages
 - use `list|wait|recv --for <group-address> --as <person>` for group reads
-- `watch`, `ack`, `release`, `defer`, and `fail` stay personal-mailbox-only
+- `watch`, `ack`, `renew`, `release`, `defer`, and `fail` stay personal-mailbox-only
 - `--as` is caller-asserted identity in the trusted local workflow environment;
   it is not an authentication boundary
 
@@ -418,6 +427,20 @@ Mark a leased delivery as complete.
 ```bash
 agent-mailbox ack --delivery <delivery_id> --lease-token <lease_token>
 ```
+
+### `renew`
+
+Extend a current lease without changing the lease token.
+
+```bash
+agent-mailbox renew --delivery <delivery_id> --lease-token <lease_token> --for 10m
+```
+
+Notes:
+
+- `--for` uses Go duration syntax such as `30s`, `5m`, `10m`, or `1h`
+- renewal requires the current unexpired lease token
+- renewal keeps the same `lease_token` and only updates `lease_expires_at`
 
 ### `release`
 

@@ -245,6 +245,25 @@ func (a *App) writeReceiveResultFullText(result ReceiveResult) error {
 	return nil
 }
 
+func (a *App) writeDeliveryTransitionResultText(result DeliveryTransitionResult) error {
+	switch {
+	case result.AckedAt != "":
+		_, err := fmt.Fprintf(a.stdout, "delivery_id=%s state=%s acked_at=%s attempt_count=%d\n", result.DeliveryID, result.State, result.AckedAt, result.AttemptCount)
+		return err
+	case result.VisibleAt != "":
+		_, err := fmt.Fprintf(a.stdout, "delivery_id=%s state=%s visible_at=%s attempt_count=%d\n", result.DeliveryID, result.State, result.VisibleAt, result.AttemptCount)
+		return err
+	default:
+		_, err := fmt.Fprintf(a.stdout, "delivery_id=%s state=%s attempt_count=%d\n", result.DeliveryID, result.State, result.AttemptCount)
+		return err
+	}
+}
+
+func (a *App) writeLeaseRenewResultText(result LeaseRenewResult) error {
+	_, err := fmt.Fprintf(a.stdout, "delivery_id=%s lease_token=%s lease_expires_at=%s\n", result.DeliveryID, result.LeaseToken, result.LeaseExpiresAt)
+	return err
+}
+
 func (a *App) writeReadDeliveryText(delivery ReadDelivery) error {
 	if delivery.AckedAt != nil {
 		if _, err := fmt.Fprintf(

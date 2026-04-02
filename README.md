@@ -9,7 +9,7 @@ The current MVP is intentionally narrow:
 - one local Unix user on one machine
 - direct mailbox delivery by endpoint address
 - SQLite metadata plus blob-backed message bodies
-- explicit `send`, `recv`, `wait`, `watch`, `list`, `stale`, `ack`, `release`, `defer`, and `fail`
+- explicit `send`, `recv`, `wait`, `watch`, `list`, `stale`, `ack`, `renew`, `release`, `defer`, and `fail`
 - no daemon, no network transport, no adapter-specific correctness dependency
 
 ## Status
@@ -193,6 +193,13 @@ Ack the leased delivery using the returned `delivery_id` and `lease_token`:
 ```bash
 agent-mailbox --state-dir /tmp/mailbox-demo \
   ack --delivery <delivery_id> --lease-token <lease_token>
+```
+
+Renew an active lease when a worker needs more time before acking:
+
+```bash
+agent-mailbox --state-dir /tmp/mailbox-demo \
+  renew --delivery <delivery_id> --lease-token <lease_token> --for 10m
 ```
 
 List previously acked deliveries for one inbox:

@@ -168,6 +168,60 @@ func TestCLISendRecvAckFlow(t *testing.T) {
 	}
 }
 
+func TestCLIRenewExtendsLeaseAndPreservesToken(t *testing.T) {
+	stateDir := filepath.Join(t.TempDir(), "mailbox-state")
+
+	send := runCLI(t, "hello reviewer\n", "--state-dir", stateDir,
+		"send",
+		"--to", "workflow/reviewer/task-123",
+		"--from", "agent/sender",
+		"--subject", "review request",
+		"--body-file", "-",
+	)
+	if send.exitCode != 0 {
+		t.Fatalf("send exit code = %d, stderr = %q", send.exitCode, send.stderr)
+	}
+
+	recv := runCLI(t, "", "--state-dir", stateDir,
+		"recv",
+		"--for", "workflow/reviewer/task-123",
+		"--json",
+	)
+	if recv.exitCode != 0 {
+		t.Fatalf("recv exit code = %d, stderr = %q", recv.exitCode, recv.stderr)
+	}
+	message := decodeReceivedMessage(t, recv.stdout)
+
+	renew := runCLI(t, "", "--state-dir", stateDir,
+		"renew",
+		"--delivery", message.DeliveryID,
+		"--lease-token", message.LeaseToken,
+		"--for", "10m",
+	)
+	if renew.exitCode != 0 {
+		t.Fatalf("renew exit code = %d, stderr = %q", renew.exitCode, renew.stderr)
+	}
+	fields := parseCLIFields(t, renew.stdout)
+	if fields["delivery_id"] != message.DeliveryID {
+		t.Fatalf("renew delivery_id = %q, want %q", fields["delivery_id"], message.DeliveryID)
+	}
+	if fields["lease_token"] != message.LeaseToken {
+		t.Fatalf("renew lease_token = %q, want %q", fields["lease_token"], message.LeaseToken)
+	}
+	if fields["lease_expires_at"] == "" {
+		t.Fatalf("renew lease_expires_at = %q, want non-empty", fields["lease_expires_at"])
+	}
+
+	ack := runCLI(t, "", "--state-dir", stateDir,
+		"ack",
+		"--delivery", message.DeliveryID,
+		"--lease-token", message.LeaseToken,
+	)
+	if ack.exitCode != 0 {
+		t.Fatalf("ack after renew exit code = %d, stderr = %q", ack.exitCode, ack.stderr)
+	}
+}
+
 func TestCLIReadLatestDefaultsToAnyState(t *testing.T) {
 	stateDir := filepath.Join(t.TempDir(), "mailbox-state")
 
@@ -1184,6 +1238,11 @@ func TestCLIHelpExitsZeroAndPrintsUsage(t *testing.T) {
 			wantContains: "Usage:\n  agent-mailbox send --to ADDRESS --body-file PATH [options] [--json | --yaml] [--full]",
 		},
 		{
+			name:         "renew help",
+			args:         []string{"renew", "--help"},
+			wantContains: "Usage:\n  agent-mailbox renew --delivery ID --lease-token TOKEN --for DURATION",
+		},
+		{
 			name:         "stale help",
 			args:         []string{"stale", "--help"},
 			wantContains: "Usage:\n  agent-mailbox stale --for ADDRESS [--for ADDRESS ...] --older-than DURATION [--json | --yaml]",
@@ -1393,4 +1452,18 @@ func decodeFullReceivedMessage(t *testing.T, raw string) mailbox.ReceivedMessage
 		t.Fatalf("json.Unmarshal(recv stdout) error = %v; stdout = %q", err, raw)
 	}
 	return message
+}
+
+func parseCLIFields(t *testing.T, raw string) map[string]string {
+	t.Helper()
+
+	fields := make(map[string]string)
+	for _, part := range strings.Fields(strings.TrimSpace(raw)) {
+		key, value, found := strings.Cut(part, "=")
+		if !found {
+			t.Fatalf("parseCLIFields(%q) encountered token without '=': %q", raw, part)
+		}
+		fields[key] = value
+	}
+	return fields
 }
