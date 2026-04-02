@@ -8,8 +8,6 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
-	"regexp"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -32,17 +30,6 @@ const (
 	mailboxRecoveryHint         = "If you forget the mailbox details or next action after ack, use `mailbox_read` on the latest `acked` delivery for this session. For older mail, use `mailbox_list` with `state: acked` and then `mailbox_read` by delivery id."
 	serverInstructions          = "Bootstrap this MCP process once per agent-managed session. If it is not bound yet, run `agent-deck session current --json`, take the current session id, and call `mailbox_bind`. Use `agent-deck/<id>` as the default sender. Pass `default_workdir` when you want later `agent_deck_ensure_session` calls to create sessions in the current project. `mailbox_wait` is not recommended for normal workflow; prefer `mailbox_recv`. Later reuse the bound addresses until MCP state is lost."
 	unsetValue                  = "<unset>"
-)
-
-var (
-	activeSessionStatuses = map[string]bool{
-		"running": true,
-		"waiting": true,
-		"idle":    true,
-	}
-	codexResumePattern      = regexp.MustCompile(`\bresume\s+([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\b`)
-	codexSessionFilePattern = regexp.MustCompile(`/\.codex/sessions/.*-([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.jsonl$`)
-	codexCommandPattern     = regexp.MustCompile(`(^|/)codex(\s|$)`)
 )
 
 type Runner interface {
@@ -101,7 +88,8 @@ type Options struct {
 type Service struct {
 	mailboxServices           mailboxServiceFactory
 	commandRunner             Runner
-	notifiers                 map[string]managerNotifier
+	sessions                  *sessionManager
+	notifications             *notificationManager
 	reminders                 *reminderManager
 	state                     *serverState
 	now                       func() time.Time
@@ -109,34 +97,6 @@ type Service struct {
 	reminderConfirmDelay      time.Duration
 	disableActiveReminderLoop bool
 	activeReminderLoopOnce    sync.Once
-}
-
-type serverState struct {
-	mu                       sync.Mutex
-	boundAddresses           []string
-	defaultSender            string
-	defaultWorkdir           string
-	autoBindAttempted        bool
-	detectedAgentDeckSession string
-	detectedAgentSession     string
-}
-
-type stateSnapshot struct {
-	BoundAddresses           []string
-	DefaultSender            string
-	DefaultWorkdir           string
-	AutoBindAttempted        bool
-	DetectedAgentDeckSession string
-	DetectedAgentSession     string
-}
-
-type boundState struct {
-	BoundAddresses           []string `json:"bound_addresses"`
-	DefaultSender            string   `json:"default_sender"`
-	DefaultWorkdir           string   `json:"default_workdir"`
-	DetectedAgentDeckSession string   `json:"detected_agent_deck_session_id"`
-	DetectedAgentSession     string   `json:"detected_agent_session_id"`
-	Warnings                 []string `json:"warnings"`
 }
 
 type runOptions struct {
@@ -234,14 +194,6 @@ type agentDeckEnsureSessionInput struct {
 	ListenerMessage string `json:"listener_message,omitempty"`
 }
 
-type sessionData struct {
-	ID      string `json:"id"`
-	Title   string `json:"title"`
-	Status  string `json:"status"`
-	Path    string `json:"path"`
-	Success *bool  `json:"success,omitempty"`
-}
-
 type parsedAddress struct {
 	Scheme string
 	ID     string
@@ -282,50 +234,8 @@ type groupListedMessageSummary struct {
 	EligibleCount    int     `json:"eligible_count"`
 }
 
-type notificationRoute struct {
-	Manager string
-	Target  string
-}
-
-type notificationEvent struct {
-	Kind            string
-	Route           notificationRoute
-	Subject         string
-	Body            string
-	MessageOverride *string
-}
-
-type notificationOutcome struct {
-	Status string
-	Scheme string
-	Err    error
-}
-
-type notificationProbe struct {
-	Status   string
-	Scheme   string
-	Wakeable bool
-}
-
-type managerNotifier interface {
-	Name() string
-	Probe(ctx context.Context, route notificationRoute) notificationProbe
-	Notify(ctx context.Context, event notificationEvent) notificationOutcome
-}
-
-type psRow struct {
-	PID  int
-	PPID int
-	Comm string
-	Args string
-}
-
 type osCommandRunner struct {
 	cwd string
-}
-
-type agentDeckNotifier struct {
-	service *Service
 }
 
 func New(opts Options) *mcp.Server {
@@ -342,10 +252,13 @@ func newService(opts Options) *Service {
 	if opts.CommandRunner == nil {
 		opts.CommandRunner = osCommandRunner{cwd: currentWorkingDir()}
 	}
+	state := &serverState{}
+	sessions := newSessionManager(opts.CommandRunner, state)
 	service := &Service{
 		mailboxServices:           opts.MailboxServiceFactory,
 		commandRunner:             opts.CommandRunner,
-		state:                     &serverState{},
+		sessions:                  sessions,
+		state:                     state,
 		now:                       opts.Now,
 		reminderPollInterval:      opts.ReminderPollInterval,
 		reminderConfirmDelay:      opts.ReminderConfirmDelay,
@@ -362,17 +275,15 @@ func newService(opts Options) *Service {
 	if service.reminderConfirmDelay <= 0 {
 		service.reminderConfirmDelay = defaultReminderConfirmDelay
 	}
-	service.notifiers = map[string]managerNotifier{
-		"agent-deck": agentDeckNotifier{service: service},
-	}
+	service.notifications = newNotificationManager(service.commandRunner, service.sessions)
 	service.reminders = newReminderManager(reminderManagerDeps{
 		now:          service.now,
 		confirmDelay: service.reminderConfirmDelay,
 		listStaleAddresses: func(ctx context.Context, addresses []string, person string, policy reminderPolicy) ([]staleAddress, error) {
 			return service.listReminderStaleAddresses(ctx, addresses, person, policy)
 		},
-		probeRoute:  service.probeRoute,
-		notifyRoute: service.notifyRoute,
+		probeRoute:  service.notifications.probeRoute,
+		notifyRoute: service.notifications.notifyRoute,
 	})
 	return service
 }
@@ -504,20 +415,7 @@ func withMailboxService[T any](ctx context.Context, factory mailboxServiceFactor
 }
 
 func (s *Service) mailboxBind(ctx context.Context, _ *mcp.CallToolRequest, input mailboxBindInput) (*mcp.CallToolResult, map[string]any, error) {
-	boundAddresses := dedupe(input.Addresses)
-	defaultSender := strings.TrimSpace(input.DefaultSender)
-	if defaultSender == "" && len(boundAddresses) > 0 {
-		defaultSender = boundAddresses[0]
-	}
-
-	s.state.mu.Lock()
-	s.state.boundAddresses = boundAddresses
-	s.state.defaultSender = defaultSender
-	s.state.defaultWorkdir = strings.TrimSpace(input.DefaultWorkdir)
-	s.state.autoBindAttempted = true
-	s.state.mu.Unlock()
-
-	bound, err := s.getBoundState(ctx)
+	bound, err := s.sessions.bind(ctx, input)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -527,7 +425,7 @@ func (s *Service) mailboxBind(ctx context.Context, _ *mcp.CallToolRequest, input
 }
 
 func (s *Service) mailboxStatus(ctx context.Context, _ *mcp.CallToolRequest, _ mailboxStatusInput) (*mcp.CallToolResult, map[string]any, error) {
-	bound, err := s.getBoundState(ctx)
+	bound, err := s.sessions.boundState(ctx)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -579,7 +477,7 @@ func (s *Service) mailboxReminderStatus(ctx context.Context, _ *mcp.CallToolRequ
 }
 
 func (s *Service) mailboxSend(ctx context.Context, _ *mcp.CallToolRequest, input mailboxSendInput) (*mcp.CallToolResult, map[string]any, error) {
-	fromAddress, err := s.senderAddress(ctx, input.FromAddress)
+	fromAddress, err := s.sessions.senderAddress(ctx, input.FromAddress)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -598,7 +496,7 @@ func (s *Service) mailboxSend(ctx context.Context, _ *mcp.CallToolRequest, input
 		return nil, nil, err
 	}
 
-	notify := s.notifyMailboxSend(ctx, input)
+	notify := s.notifications.notifyMailboxSend(ctx, input)
 	var notifyScheme any
 	if notify.Scheme != "" {
 		notifyScheme = notify.Scheme
@@ -618,139 +516,6 @@ func (s *Service) mailboxSend(ctx context.Context, _ *mcp.CallToolRequest, input
 		"notify_scheme": notifyScheme,
 		"notify_error":  notifyError,
 	})
-}
-
-func (s *Service) notifyMailboxSend(ctx context.Context, input mailboxSendInput) notificationOutcome {
-	if s.isLocalAddress(ctx, input.ToAddress) {
-		return notificationOutcome{Status: "skipped_local"}
-	}
-
-	route, err := notificationRouteForAddress(input.ToAddress)
-	if err != nil {
-		return notificationOutcome{Status: "failed", Err: err}
-	}
-
-	return s.notifyRoute(ctx, notificationEvent{
-		Kind:            notificationDelivery,
-		Route:           route,
-		Subject:         input.Subject,
-		Body:            input.Body,
-		MessageOverride: input.NotifyMessage,
-	})
-}
-
-func (s *Service) notifyRoute(ctx context.Context, event notificationEvent) notificationOutcome {
-	notifier, ok := s.notifiers[event.Route.Manager]
-	if !ok {
-		return notificationOutcome{
-			Status: "unsupported",
-			Scheme: event.Route.Manager,
-		}
-	}
-	outcome := notifier.Notify(ctx, event)
-	if outcome.Scheme == "" {
-		outcome.Scheme = notifier.Name()
-	}
-	return outcome
-}
-
-func (s *Service) probeRoute(ctx context.Context, route notificationRoute) notificationProbe {
-	notifier, ok := s.notifiers[route.Manager]
-	if !ok {
-		return notificationProbe{
-			Status: "unsupported",
-			Scheme: route.Manager,
-		}
-	}
-	probe := notifier.Probe(ctx, route)
-	if probe.Scheme == "" {
-		probe.Scheme = notifier.Name()
-	}
-	return probe
-}
-
-func (n agentDeckNotifier) Name() string {
-	return "agent-deck"
-}
-
-func (n agentDeckNotifier) Probe(ctx context.Context, route notificationRoute) notificationProbe {
-	targetSession, err := n.service.resolveSessionShowBestEffort(ctx, route.Target)
-	if err != nil {
-		return notificationProbe{
-			Status: "failed",
-			Scheme: n.Name(),
-		}
-	}
-	if targetSession == nil {
-		return notificationProbe{
-			Status: "not_found",
-			Scheme: n.Name(),
-		}
-	}
-
-	status := strings.TrimSpace(targetSession.Status)
-	switch status {
-	case "waiting", "idle":
-		return notificationProbe{
-			Status:   "wakeable",
-			Scheme:   n.Name(),
-			Wakeable: true,
-		}
-	default:
-		return notificationProbe{
-			Status: "suppressed_local_activity",
-			Scheme: n.Name(),
-		}
-	}
-}
-
-func (n agentDeckNotifier) Notify(ctx context.Context, event notificationEvent) notificationOutcome {
-	if event.Kind != notificationDelivery && event.Kind != notificationStaleUnread {
-		return notificationOutcome{
-			Status: "unsupported",
-			Scheme: n.Name(),
-		}
-	}
-	if event.MessageOverride != nil && strings.TrimSpace(*event.MessageOverride) == "" {
-		return notificationOutcome{
-			Status: "skipped_disabled",
-			Scheme: n.Name(),
-		}
-	}
-
-	targetLabel := event.Route.Target
-	targetSession, err := n.service.resolveSessionShowBestEffort(ctx, event.Route.Target)
-	if err != nil {
-		return notificationOutcome{
-			Status: "failed",
-			Scheme: n.Name(),
-			Err:    err,
-		}
-	}
-	if targetSession != nil && strings.TrimSpace(targetSession.Title) != "" {
-		targetLabel = strings.TrimSpace(targetSession.Title)
-	}
-
-	notifyMessage := defaultNotifyMessage
-	if event.MessageOverride != nil && strings.TrimSpace(*event.MessageOverride) != "" {
-		notifyMessage = *event.MessageOverride
-	}
-	notifyMessage = ensureReceiverWorkflowHint(notifyMessage, defaultNotifyMessage, targetLabel)
-	_, err = runCommand(ctx, n.service.commandRunner, []string{
-		"agent-deck", "session", "send", "--no-wait", event.Route.Target, notifyMessage,
-	}, runOptions{timeout: syncCmdTimeout})
-	if err != nil {
-		return notificationOutcome{
-			Status: "failed",
-			Scheme: n.Name(),
-			Err:    err,
-		}
-	}
-
-	return notificationOutcome{
-		Status: "sent",
-		Scheme: n.Name(),
-	}
 }
 
 func (s *Service) startActiveReminderLoop() {
@@ -837,7 +602,7 @@ func inReminderCooldown(lastNotifiedAt string, now time.Time, cooldown time.Dura
 }
 
 func (s *Service) mailboxWait(ctx context.Context, _ *mcp.CallToolRequest, input mailboxWaitInput) (*mcp.CallToolResult, map[string]any, error) {
-	addresses, err := s.mailboxAddresses(ctx, input.Addresses)
+	addresses, err := s.sessions.mailboxAddresses(ctx, input.Addresses)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -874,7 +639,7 @@ func (s *Service) mailboxWait(ctx context.Context, _ *mcp.CallToolRequest, input
 }
 
 func (s *Service) mailboxRecv(ctx context.Context, _ *mcp.CallToolRequest, input mailboxRecvInput) (*mcp.CallToolResult, map[string]any, error) {
-	addresses, err := s.mailboxAddresses(ctx, input.Addresses)
+	addresses, err := s.sessions.mailboxAddresses(ctx, input.Addresses)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -906,7 +671,7 @@ func (s *Service) mailboxList(ctx context.Context, _ *mcp.CallToolRequest, input
 	if strings.TrimSpace(input.Address) != "" {
 		address = strings.TrimSpace(input.Address)
 	} else {
-		boundAddresses, err := s.mailboxAddresses(ctx, nil)
+		boundAddresses, err := s.sessions.mailboxAddresses(ctx, nil)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -976,7 +741,7 @@ func (s *Service) mailboxRead(ctx context.Context, _ *mcp.CallToolRequest, input
 
 	switch {
 	case wantsLatest:
-		addresses, err := s.mailboxAddresses(ctx, input.Addresses)
+		addresses, err := s.sessions.mailboxAddresses(ctx, input.Addresses)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -1140,7 +905,7 @@ func (s *Service) listReminderStaleAddresses(ctx context.Context, addresses []st
 }
 
 func (s *Service) agentDeckResolveSession(ctx context.Context, _ *mcp.CallToolRequest, input agentDeckResolveSessionInput) (*mcp.CallToolResult, map[string]any, error) {
-	data, err := s.resolveSessionShow(ctx, input.Session, syncCmdTimeout)
+	data, err := s.sessions.resolveSessionShow(ctx, input.Session, syncCmdTimeout)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -1156,368 +921,11 @@ func (s *Service) agentDeckResolveSession(ctx context.Context, _ *mcp.CallToolRe
 }
 
 func (s *Service) agentDeckEnsureSession(ctx context.Context, _ *mcp.CallToolRequest, input agentDeckEnsureSessionInput) (*mcp.CallToolResult, map[string]any, error) {
-	bound, err := s.getBoundState(ctx)
+	out, err := s.sessions.ensureSession(ctx, input)
 	if err != nil {
 		return nil, nil, err
 	}
-
-	identifier := firstNonEmpty(input.SessionID, input.SessionRef)
-	workdir := firstNonEmpty(input.Workdir, bound.DefaultWorkdir)
-	var data *sessionData
-	if identifier != "" {
-		data, err = s.resolveSessionShow(ctx, identifier, ensureSessionShowTimeout)
-		if err != nil {
-			return nil, nil, err
-		}
-	}
-
-	createdTarget := false
-	startedSession := false
-	notifyNeeded := false
-	listenerStatus := "not_needed"
-
-	if data == nil {
-		if input.EnsureTitle == "" {
-			return nil, nil, errors.New("target session missing: provide session_id, session_ref, or ensure_title")
-		}
-		if input.EnsureCmd == "" {
-			return nil, nil, errors.New("ensure_cmd is required when creating a target session")
-		}
-		if input.ParentSessionID == "" {
-			return nil, nil, errors.New("parent_session_id is required when creating a target session")
-		}
-		if workdir == "" {
-			return nil, nil, errors.New("workdir is required when creating a target session")
-		}
-		info, statErr := os.Stat(workdir)
-		if statErr != nil || !info.IsDir() {
-			return nil, nil, fmt.Errorf("workdir does not exist: %s", workdir)
-		}
-
-		targetLabel := firstNonEmpty(input.EnsureTitle, input.SessionRef, identifier)
-		listenerMessage := ensureReceiverWorkflowHint(firstNonEmpty(input.ListenerMessage, defaultListenerMessage), defaultListenerMessage, targetLabel)
-		launchArgs := []string{
-			"agent-deck", "launch", "--json",
-			"--title", input.EnsureTitle,
-			"--parent", input.ParentSessionID,
-			"--cmd", input.EnsureCmd,
-		}
-		launchArgs = append(launchArgs, "--message", listenerMessage)
-		launchArgs = append(launchArgs, workdir)
-		launchResult, err := runCommand(ctx, s.commandRunner, launchArgs, runOptions{})
-		if err != nil {
-			return nil, nil, err
-		}
-		data, err = parseSessionData(launchResult.Stdout, "agent-deck launch")
-		if err != nil {
-			return nil, nil, err
-		}
-		createdTarget = true
-		startedSession = true
-		listenerStatus = "started_waiting"
-	} else {
-		targetLabel := firstNonEmpty(data.Title, input.SessionRef, identifier, data.ID)
-		listenerMessage := ensureReceiverWorkflowHint(firstNonEmpty(input.ListenerMessage, defaultListenerMessage), defaultListenerMessage, targetLabel)
-		if activeSessionStatuses[strings.TrimSpace(data.Status)] {
-			notifyNeeded = true
-			listenerStatus = "not_needed_existing_session"
-		} else {
-			startArgs := []string{"agent-deck", "session", "start", "--json", "-m", listenerMessage, data.ID}
-			if _, err := runCommand(ctx, s.commandRunner, startArgs, runOptions{}); err != nil {
-				return nil, nil, err
-			}
-			refreshed, err := s.resolveSessionShow(ctx, data.ID, ensureSessionShowTimeout)
-			if err != nil {
-				return nil, nil, err
-			}
-			if refreshed != nil {
-				data = refreshed
-			}
-			startedSession = true
-			listenerStatus = "started_waiting"
-		}
-	}
-
-	out := sessionInfoMap(data, firstNonEmpty(input.SessionRef, input.EnsureTitle, identifier))
-	out["status"] = "ready"
-	out["created_target"] = createdTarget
-	out["started_session"] = startedSession
-	out["notify_needed"] = notifyNeeded
-	out["listener_status"] = listenerStatus
 	return nil, out, nil
-}
-
-func (s *Service) getBoundState(ctx context.Context) (boundState, error) {
-	if err := s.tryAutoBindCurrentSession(ctx); err != nil {
-		return boundState{}, err
-	}
-	snapshot := s.snapshotState()
-
-	warnings := make([]string, 0, 3)
-	if snapshot.DetectedAgentDeckSession == "" {
-		warnings = append(warnings, "unable to determine current agent-deck session id")
-	}
-	if snapshot.DetectedAgentSession == "" {
-		warnings = append(warnings, "unable to determine current AI agent session id")
-	}
-	if len(snapshot.BoundAddresses) == 0 {
-		warnings = append(warnings, "no mailbox addresses are currently bound")
-	}
-
-	return boundState{
-		BoundAddresses:           snapshot.BoundAddresses,
-		DefaultSender:            snapshot.DefaultSender,
-		DefaultWorkdir:           snapshot.DefaultWorkdir,
-		DetectedAgentDeckSession: snapshot.DetectedAgentDeckSession,
-		DetectedAgentSession:     snapshot.DetectedAgentSession,
-		Warnings:                 warnings,
-	}, nil
-}
-
-func (s *Service) snapshotState() stateSnapshot {
-	s.state.mu.Lock()
-	defer s.state.mu.Unlock()
-	return stateSnapshot{
-		BoundAddresses:           append([]string(nil), s.state.boundAddresses...),
-		DefaultSender:            s.state.defaultSender,
-		DefaultWorkdir:           s.state.defaultWorkdir,
-		AutoBindAttempted:        s.state.autoBindAttempted,
-		DetectedAgentDeckSession: s.state.detectedAgentDeckSession,
-		DetectedAgentSession:     s.state.detectedAgentSession,
-	}
-}
-
-func (s *Service) tryAutoBindCurrentSession(ctx context.Context) error {
-	snapshot := s.snapshotState()
-	if len(snapshot.BoundAddresses) > 0 || snapshot.AutoBindAttempted {
-		return nil
-	}
-
-	envAgentDeckID := strings.TrimSpace(os.Getenv("AGENTDECK_INSTANCE_ID"))
-	agentDeckSessionID := envAgentDeckID
-	probeCompleted := envAgentDeckID != ""
-
-	if agentDeckSessionID == "" {
-		result, err := runProbe(ctx, s.commandRunner, []string{"agent-deck", "session", "current", "--json"}, runOptions{timeout: syncCmdTimeout}, false)
-		if err != nil {
-			return err
-		}
-		if result != nil {
-			probeCompleted = true
-			if result.ExitCode == 0 {
-				var current struct {
-					ID string `json:"id"`
-				}
-				if err := json.Unmarshal([]byte(result.Stdout), &current); err != nil {
-					return fmt.Errorf("agent-deck session current returned invalid JSON: %w", err)
-				}
-				agentDeckSessionID = strings.TrimSpace(current.ID)
-			}
-		}
-	}
-
-	addresses := make([]string, 0, 2)
-	detectedAgentDeckSession := ""
-	defaultWorkdir := snapshot.DefaultWorkdir
-	if agentDeckSessionID != "" {
-		detectedAgentDeckSession = agentDeckSessionID
-		addresses = append(addresses, agentDeckAddress(agentDeckSessionID))
-		data, err := s.resolveSessionShowBestEffort(ctx, agentDeckSessionID)
-		if err != nil {
-			return err
-		}
-		if data != nil && strings.TrimSpace(data.Path) != "" {
-			defaultWorkdir = strings.TrimSpace(data.Path)
-		}
-	}
-
-	codexSessionID, err := s.detectCurrentCodexSessionID(ctx)
-	if err != nil {
-		return err
-	}
-	detectedAgentSession := ""
-	if codexSessionID != "" {
-		detectedAgentSession = codexSessionID
-		addresses = append(addresses, codexAddress(codexSessionID))
-	}
-
-	if !probeCompleted && codexSessionID == "" && len(addresses) == 0 {
-		return nil
-	}
-
-	s.state.mu.Lock()
-	defer s.state.mu.Unlock()
-	if len(s.state.boundAddresses) > 0 {
-		return nil
-	}
-	s.state.boundAddresses = dedupe(addresses)
-	s.state.detectedAgentDeckSession = detectedAgentDeckSession
-	s.state.detectedAgentSession = detectedAgentSession
-	s.state.defaultWorkdir = defaultWorkdir
-	switch {
-	case detectedAgentDeckSession != "":
-		s.state.defaultSender = agentDeckAddress(detectedAgentDeckSession)
-	case detectedAgentSession != "":
-		s.state.defaultSender = codexAddress(detectedAgentSession)
-	}
-	s.state.autoBindAttempted = true
-	return nil
-}
-
-func (s *Service) detectCurrentCodexSessionID(ctx context.Context) (string, error) {
-	if sessionID := strings.TrimSpace(os.Getenv("CODEX_SESSION_ID")); sessionID != "" {
-		return sessionID, nil
-	}
-
-	seen := map[int]bool{}
-	pid := os.Getppid()
-	for pid > 1 && !seen[pid] {
-		seen[pid] = true
-		row, err := s.getProcessRow(ctx, pid)
-		if err != nil {
-			return "", err
-		}
-		if row == nil {
-			break
-		}
-		looksLikeCodex := row.Comm == "codex" || codexCommandPattern.MatchString(row.Args) || strings.Contains(row.Args, "@openai/codex")
-		if looksLikeCodex {
-			if fromArgs := extractCodexSessionIDFromArgs(row.Args); fromArgs != "" {
-				return fromArgs, nil
-			}
-			if fromLsof, err := s.extractCodexSessionIDFromLsof(ctx, row.PID); err != nil {
-				return "", err
-			} else if fromLsof != "" {
-				return fromLsof, nil
-			}
-			return "", nil
-		}
-		pid = row.PPID
-	}
-	return "", nil
-}
-
-func (s *Service) getProcessRow(ctx context.Context, pid int) (*psRow, error) {
-	if pid <= 1 {
-		return nil, nil
-	}
-	result, err := runProbe(ctx, s.commandRunner, []string{"ps", "-p", strconv.Itoa(pid), "-o", "pid=,ppid=,comm=,args="}, runOptions{timeout: syncCmdTimeout}, false)
-	if err != nil {
-		return nil, err
-	}
-	if result == nil || result.ExitCode != 0 {
-		return nil, nil
-	}
-	return parsePSRow(result.Stdout), nil
-}
-
-func (s *Service) extractCodexSessionIDFromLsof(ctx context.Context, pid int) (string, error) {
-	if pid <= 1 {
-		return "", nil
-	}
-	result, err := runProbe(ctx, s.commandRunner, []string{"lsof", "-p", strconv.Itoa(pid)}, runOptions{timeout: syncCmdTimeout}, false)
-	if err != nil {
-		return "", err
-	}
-	if result == nil || result.ExitCode != 0 {
-		return "", nil
-	}
-	for _, line := range strings.Split(result.Stdout, "\n") {
-		match := codexSessionFilePattern.FindStringSubmatch(line)
-		if len(match) == 2 {
-			return match[1], nil
-		}
-	}
-	return "", nil
-}
-
-func (s *Service) mailboxAddresses(ctx context.Context, addresses []string) ([]string, error) {
-	if len(addresses) > 0 {
-		return dedupe(addresses), nil
-	}
-	bound, err := s.getBoundState(ctx)
-	if err != nil {
-		return nil, err
-	}
-	if len(bound.BoundAddresses) == 0 {
-		return nil, errors.New("no mailbox addresses provided and no mailbox addresses are bound")
-	}
-	return append([]string(nil), bound.BoundAddresses...), nil
-}
-
-func (s *Service) senderAddress(ctx context.Context, override string) (string, error) {
-	if strings.TrimSpace(override) != "" {
-		return strings.TrimSpace(override), nil
-	}
-	bound, err := s.getBoundState(ctx)
-	if err != nil {
-		return "", err
-	}
-	switch {
-	case bound.DefaultSender != "":
-		return bound.DefaultSender, nil
-	case len(bound.BoundAddresses) > 0:
-		return bound.BoundAddresses[0], nil
-	default:
-		return "", errors.New("mailbox_send requires from_address or a bound default_sender")
-	}
-}
-
-func (s *Service) isLocalAddress(ctx context.Context, address string) bool {
-	bound, err := s.getBoundState(ctx)
-	if err != nil {
-		return false
-	}
-	for _, candidate := range bound.BoundAddresses {
-		if candidate == address {
-			return true
-		}
-	}
-	return false
-}
-
-func (s *Service) resolveSessionShow(ctx context.Context, identifier string, timeout time.Duration) (*sessionData, error) {
-	result, err := runProbe(ctx, s.commandRunner, []string{"agent-deck", "session", "show", identifier, "--json"}, runOptions{timeout: timeout}, true)
-	if err != nil {
-		return nil, err
-	}
-	if result == nil || result.ExitCode != 0 {
-		return nil, nil
-	}
-	data, err := parseSessionData(result.Stdout, "agent-deck session show")
-	if err != nil {
-		return nil, err
-	}
-	if data.Success != nil && !*data.Success {
-		return nil, nil
-	}
-	return data, nil
-}
-
-func (s *Service) resolveSessionShowBestEffort(ctx context.Context, identifier string) (*sessionData, error) {
-	result, err := runProbe(ctx, s.commandRunner, []string{"agent-deck", "session", "show", identifier, "--json"}, runOptions{}, false)
-	if err != nil {
-		return nil, err
-	}
-	if result == nil || result.ExitCode != 0 {
-		return nil, nil
-	}
-	data, err := parseSessionData(result.Stdout, "agent-deck session show")
-	if err != nil {
-		return nil, err
-	}
-	if data.Success != nil && !*data.Success {
-		return nil, nil
-	}
-	return data, nil
-}
-
-func parseSessionData(text, context string) (*sessionData, error) {
-	var data sessionData
-	if err := json.Unmarshal([]byte(text), &data); err != nil {
-		return nil, fmt.Errorf("%s returned invalid JSON: %w", context, err)
-	}
-	return &data, nil
 }
 
 func runCommand(ctx context.Context, runner Runner, args []string, opts runOptions) (RunResult, error) {
@@ -1618,39 +1026,6 @@ func codexAddress(sessionID string) string {
 	return "codex/" + sessionID
 }
 
-func parsePSRow(text string) *psRow {
-	fields := strings.Fields(strings.TrimSpace(text))
-	if len(fields) < 3 {
-		return nil
-	}
-	pid, err := strconv.Atoi(fields[0])
-	if err != nil {
-		return nil
-	}
-	ppid, err := strconv.Atoi(fields[1])
-	if err != nil {
-		return nil
-	}
-	args := ""
-	if len(fields) > 3 {
-		args = strings.Join(fields[3:], " ")
-	}
-	return &psRow{
-		PID:  pid,
-		PPID: ppid,
-		Comm: fields[2],
-		Args: args,
-	}
-}
-
-func extractCodexSessionIDFromArgs(args string) string {
-	match := codexResumePattern.FindStringSubmatch(args)
-	if len(match) != 2 {
-		return ""
-	}
-	return match[1]
-}
-
 func structToMap(value any) (map[string]any, error) {
 	encoded, err := json.Marshal(value)
 	if err != nil {
@@ -1663,43 +1038,6 @@ func structToMap(value any) (map[string]any, error) {
 	return out, nil
 }
 
-func ensureCheckAgentMailHint(message, defaultMessage string) string {
-	trimmed := strings.TrimSpace(message)
-	if trimmed == "" {
-		return defaultMessage
-	}
-	if strings.Contains(trimmed, "check-agent-mail") {
-		return trimmed
-	}
-	return trimmed + "\nWhen a wakeup message arrives, use the 'check-agent-mail' skill and execute its requested action."
-}
-
-func ensureMailboxRecoveryHint(message string) string {
-	trimmed := strings.TrimSpace(message)
-	if trimmed == "" {
-		return mailboxRecoveryHint
-	}
-	if strings.Contains(trimmed, "mailbox_read") && strings.Contains(trimmed, "acked") {
-		return trimmed
-	}
-	return trimmed + "\n" + mailboxRecoveryHint
-}
-
-func ensureReceiverWorkflowHint(message, defaultMessage, targetLabel string) string {
-	withWakeHint := ensureCheckAgentMailHint(message, defaultMessage)
-	if !isWorkerSessionLabel(targetLabel) {
-		return withWakeHint
-	}
-	return ensureMailboxRecoveryHint(withWakeHint)
-}
-
-func isWorkerSessionLabel(label string) bool {
-	trimmed := strings.ToLower(strings.TrimSpace(label))
-	return trimmed == "coder" || strings.HasPrefix(trimmed, "coder-") ||
-		trimmed == "reviewer" || strings.HasPrefix(trimmed, "reviewer-") ||
-		trimmed == "architect" || strings.HasPrefix(trimmed, "architect-")
-}
-
 func boundStateMap(bound boundState) map[string]any {
 	return map[string]any{
 		"bound_addresses":                bound.BoundAddresses,
@@ -1708,16 +1046,6 @@ func boundStateMap(bound boundState) map[string]any {
 		"detected_agent_deck_session_id": nilIfEmpty(bound.DetectedAgentDeckSession),
 		"detected_agent_session_id":      nilIfEmpty(bound.DetectedAgentSession),
 		"warnings":                       bound.Warnings,
-	}
-}
-
-func sessionInfoMap(data *sessionData, sessionRef string) map[string]any {
-	return map[string]any{
-		"session_id":     data.ID,
-		"session_ref":    firstNonEmpty(sessionRef, data.Title, data.ID),
-		"title":          nilIfEmpty(data.Title),
-		"session_status": nilIfEmpty(data.Status),
-		"addresses":      []string{agentDeckAddress(data.ID)},
 	}
 }
 
