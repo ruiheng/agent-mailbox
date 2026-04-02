@@ -63,9 +63,10 @@ claim.
 So the correct change is:
 
 1. add explicit lease renewal to mailbox core
-2. keep default lease TTL short
-3. let the local mailbox MCP renew active leases automatically
-4. stop expecting agent callers to predict total work duration
+2. keep the legacy default receive TTL unchanged for compatibility
+3. add an MCP-only short-TTL receive policy path
+4. let the local mailbox MCP renew active leases automatically
+5. stop expecting agent callers to predict total work duration
 
 ## Design Overview
 
@@ -137,6 +138,31 @@ Rules:
 Keeping the same token is the simplest correct design here. Renewal is not a
 re-claim. It is proof that the current owner is still alive.
 
+Renew must use the same compare-and-swap discipline as terminal lease
+transitions. The exact store rule should be:
+
+1. load the currently leased row inside one write transaction
+2. validate `state = leased`
+3. validate `lease_token` matches
+4. validate current `lease_expires_at > now`
+5. compute `new_lease_expires_at = now + extendBy`
+6. update with a CAS predicate on the same row:
+
+```sql
+UPDATE deliveries
+SET lease_expires_at = :new_lease_expires_at
+WHERE delivery_id = :delivery_id
+  AND state = 'leased'
+  AND lease_token = :lease_token
+  AND lease_expires_at = :previous_lease_expires_at
+```
+
+If the update affects zero rows, renewal must fail as a stale lease update, not
+silently succeed.
+
+This keeps renew, reclaim, ack, release, defer, and fail deterministic under
+races. `lease_expires_at` acts as the row-version field for the current lease.
+
 ## Why Keep The Same Lease Token
 
 Rotating the token on every renewal sounds stricter, but it is a mess for the
@@ -156,12 +182,14 @@ That is enough.
 
 ## Lease TTL Policy
 
-Shorten the default lease TTL for MCP-driven receive paths.
+Shorten the lease TTL only for MCP-driven receive paths.
 
 Recommended starting values:
 
-- lease TTL: `15s`
-- renewal cadence: every `5s`
+- legacy default receive TTL: keep `5m`
+- initial MCP-path lease TTL: `30s`
+- initial renewal cadence: every `10s`
+- initial renewal jitter: up to `2s`
 
 These numbers are not sacred. The invariant is what matters:
 
@@ -169,7 +197,45 @@ These numbers are not sacred. The invariant is what matters:
 - TTL should be short enough that dead sessions release work quickly
 - TTL should be long enough to tolerate brief scheduler pauses and local load
 
+For the first rollout, the design should be conservative. A `30s` TTL with
+`10s` cadence gives a healthier pause budget than jumping directly to `15s`
+without evidence. Tightening to `15s` can be a later operational tuning
+decision after failure testing.
+
 This is a liveness window, not a task-duration estimate.
+
+## Compatibility Boundary For Short TTL
+
+Preserving current non-MCP personal-mailbox behavior is a hard requirement in
+this design.
+
+That means the short TTL must not arrive by silently changing the global
+default.
+
+The boundary should be:
+
+- existing CLI `recv` keeps the current `5m` lease default
+- existing public `Store.Receive` and `Store.ReceiveBatch` semantics stay on the
+  legacy default path
+- mailbox core factors claim logic so a narrow internal policy input can supply
+  a shorter TTL
+- mailbox MCP uses that internal short-TTL policy path
+
+One acceptable implementation shape is:
+
+```go
+type ReceiveLeasePolicy struct {
+    LeaseTTL time.Duration
+}
+```
+
+Then:
+
+- `Receive` / `ReceiveBatch` call the claim path with the legacy default policy
+- MCP-only code calls the same claim path with a short-TTL policy
+
+This keeps compatibility honest. The design is no longer hand-waving about a
+future global default change while claiming non-MCP callers are unaffected.
 
 ## MCP Renewal Ownership
 
@@ -191,6 +257,29 @@ This gives the desired property:
 - if the MCP dies, renewal stops
 - if renewal stops, the short lease expires quickly
 - if the lease expires, work returns automatically
+
+Recommended operating limits:
+
+- renewal attempts should start when roughly one third of the TTL has elapsed
+- renewal scheduling should include small jitter to avoid bursty writes when one
+  MCP holds many leases
+- transient SQLite busy/locked renew failures may retry quickly, but only within
+  the remaining local deadline budget
+- once the remaining time budget drops below `10s` in the initial `30s`-TTL
+  rollout, the MCP should stop retrying indefinitely and treat the lease as at
+  risk
+
+Required MCP observability:
+
+- active lease count
+- renew success count
+- renew failure count by cause
+- renewal latency
+- time remaining before expiry at successful renewal
+- stale-claim completion attempts
+- consecutive renew failures per lease
+
+These can start as structured logs if the MCP does not yet expose metrics.
 
 ## MCP-Facing Interface Direction
 
@@ -239,6 +328,10 @@ Reason:
 If a later non-MCP caller needs explicit custom claim TTL, that can be designed
 separately with a clear justification.
 
+Also do not change the CLI default receive TTL in this round. The compatibility
+boundary is explicit: short TTL is introduced only through the MCP-owned
+internal receive policy path.
+
 ## Event Log
 
 Add a new audit event:
@@ -276,6 +369,24 @@ MCP handling rules:
 
 Do not silently continue processing forever after renewal failure.
 
+Stale-claim completion semantics must also be explicit.
+
+If local work finishes after the MCP has already lost lease ownership, mailbox
+completion must fail with a dedicated stale-claim error. The mailbox must not
+silently convert that into success.
+
+Expected caller and operator model:
+
+- completion result is ambiguous with respect to externally visible side effects
+- the caller should treat the work result as potentially duplicated
+- handlers that can cause side effects should prefer idempotency keyed by
+  message identity or a workload-specific idempotency key
+- operator recovery should inspect downstream side effects before manually
+  replaying or discarding the re-queued message
+
+This is not pretty, but it is honest. Once ownership is lost, the mailbox can
+no longer promise that the local finisher is still the sole owner.
+
 ## Compatibility
 
 This design is additive at the core API level.
@@ -286,7 +397,8 @@ Compatibility rules:
   behavior remains valid
 - persisted schema stays unchanged
 - old clients that do not call `renew` still work under current TTL rules
-- MCP-driven clients can opt into short TTL plus auto-renew
+- MCP-driven clients can opt into short TTL plus auto-renew through the new
+  MCP-only receive policy path
 
 This avoids breaking existing personal-mailbox callers while improving the
 primary agent path.
@@ -305,6 +417,13 @@ accept an arbitrary compromise.
 Rejected for this round.
 
 That only moves the guessing problem around.
+
+### Change the global default receive TTL to a short value
+
+Rejected for the first rollout.
+
+That would break the compatibility promise for existing non-MCP callers before
+the new MCP-only short-TTL path proves stable.
 
 ### Use a very long lease and no renewal
 
@@ -338,14 +457,21 @@ operation updates the one field that matters.
 These are manageable. They are better tradeoffs than forcing every caller to
 guess a total runtime.
 
+The first rollout therefore should explicitly test:
+
+- scheduler pauses longer than one renewal cadence
+- SQLite contention during renew and terminal transitions
+- MCP shutdown during in-flight renewal
+- local completion after lease loss
+
 ## Open Questions
 
-- Should the mailbox core default TTL be reduced globally, or should the MCP
-  receive path later gain an explicit internal short-TTL receive variant?
 - Should `renew` accept an absolute `--until` in addition to relative `--for`,
   or is relative-only simpler and good enough?
 - Should later MCP cleanup work collapse raw `{delivery_id, lease_token}` into
   a single session-scoped claim handle?
+- After the MCP-only path is proven under failure testing, is there any reason
+  left to keep the legacy `5m` default for non-MCP callers?
 
 ## Suggested Rollout
 
@@ -353,7 +479,11 @@ guess a total runtime.
 2. add tests for successful renewal, expired-lease rejection, and stale-token
    rejection
 3. add `delivery_lease_renewed` event coverage
-4. update mailbox MCP to track active leases and renew them automatically
-5. shorten MCP-path lease TTL after renewal proves stable
+4. factor claim logic so MCP can use a short-TTL receive policy without
+   changing legacy `recv` semantics
+5. update mailbox MCP to track active leases and renew them automatically
+6. run failure testing under scheduler pause, SQLite contention, and MCP
+   shutdown races
+7. only after evidence, consider tightening MCP TTL below the initial `30s`
 
 This sequencing keeps the root fix small and testable.
