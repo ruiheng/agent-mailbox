@@ -314,6 +314,188 @@ func TestMailboxSendReturnsReceiptWhenNotifyFails(t *testing.T) {
 	}
 }
 
+func TestMailboxReminderSubscribeUpsertsBySelectorAndRoute(t *testing.T) {
+	var staleCalls [][]string
+	mailboxRunner := &fakeRunner{t: t, handler: func(args []string, input string) (RunResult, error) {
+		if len(args) == 0 || args[0] != "stale" {
+			t.Fatalf("unexpected mailbox args: %v", args)
+		}
+		staleCalls = append(staleCalls, append([]string(nil), args...))
+		return RunResult{ExitCode: 0, Stdout: "[]"}, nil
+	}}
+
+	service := newService(Options{
+		MailboxRunner: mailboxRunner,
+		CommandRunner: &fakeRunner{t: t, handler: func(args []string, input string) (RunResult, error) {
+			t.Fatalf("unexpected command call: %v", args)
+			return RunResult{}, nil
+		}},
+	})
+	service.state.autoBindAttempted = true
+
+	first := callTool(t, service.Server(), "mailbox_reminder_subscribe", map[string]any{
+		"addresses":  []string{"agent-deck/b", "agent-deck/a", "agent-deck/a"},
+		"route":      "agent-deck/worker",
+		"older_than": "10m",
+	})
+	if got := first["updated"]; got != false {
+		t.Fatalf("updated = %v, want false", got)
+	}
+	firstSub := first["subscription"].(map[string]any)
+	firstSelector := firstSub["selector"].(map[string]any)
+	if got := firstSelector["addresses"].([]any); len(got) != 2 || got[0] != "agent-deck/a" || got[1] != "agent-deck/b" {
+		t.Fatalf("selector addresses = %v, want sorted deduped values", got)
+	}
+
+	second := callTool(t, service.Server(), "mailbox_reminder_subscribe", map[string]any{
+		"addresses":  []string{"agent-deck/a", "agent-deck/b"},
+		"route":      "agent-deck/worker",
+		"older_than": "15m",
+	})
+	if got := second["updated"]; got != true {
+		t.Fatalf("updated = %v, want true", got)
+	}
+
+	status := callTool(t, service.Server(), "mailbox_reminder_status", nil)
+	subs := status["subscriptions"].([]any)
+	if len(subs) != 1 {
+		t.Fatalf("subscriptions = %d, want 1", len(subs))
+	}
+	entry := subs[0].(map[string]any)
+	subscription := entry["subscription"].(map[string]any)
+	policy := subscription["policy"].(map[string]any)
+	if got := policy["older_than"]; got != "15m" {
+		t.Fatalf("older_than = %v, want 15m", got)
+	}
+
+	if len(staleCalls) != 3 {
+		t.Fatalf("stale call count = %d, want 3", len(staleCalls))
+	}
+	for _, args := range staleCalls {
+		if strings.Join(args, "\x00") != strings.Join([]string{
+			"stale",
+			"--older-than", args[2],
+			"--for", "agent-deck/a",
+			"--for", "agent-deck/b",
+			"--json",
+		}, "\x00") {
+			t.Fatalf("stale args = %v, want canonical sorted addresses", args)
+		}
+	}
+}
+
+func TestMailboxReminderUnsubscribeIsIdempotent(t *testing.T) {
+	mailboxRunner := &fakeRunner{t: t, handler: func(args []string, input string) (RunResult, error) {
+		if len(args) == 0 || args[0] != "stale" {
+			t.Fatalf("unexpected mailbox args: %v", args)
+		}
+		return RunResult{ExitCode: 0, Stdout: "[]"}, nil
+	}}
+
+	service := newService(Options{
+		MailboxRunner: mailboxRunner,
+		CommandRunner: &fakeRunner{t: t, handler: func(args []string, input string) (RunResult, error) {
+			t.Fatalf("unexpected command call: %v", args)
+			return RunResult{}, nil
+		}},
+	})
+	service.state.autoBindAttempted = true
+
+	callTool(t, service.Server(), "mailbox_reminder_subscribe", map[string]any{
+		"addresses":  []string{"agent-deck/a"},
+		"route":      "agent-deck/worker",
+		"older_than": "10m",
+	})
+
+	first := callTool(t, service.Server(), "mailbox_reminder_unsubscribe", map[string]any{
+		"addresses": []string{"agent-deck/a"},
+		"route":     "agent-deck/worker",
+	})
+	if got := first["removed"]; got != true {
+		t.Fatalf("removed = %v, want true", got)
+	}
+
+	second := callTool(t, service.Server(), "mailbox_reminder_unsubscribe", map[string]any{
+		"addresses": []string{"agent-deck/a"},
+		"route":     "agent-deck/worker",
+	})
+	if got := second["removed"]; got != false {
+		t.Fatalf("removed = %v, want false", got)
+	}
+}
+
+func TestMailboxStatusIncludesPassiveReminderHints(t *testing.T) {
+	mailboxRunner := &fakeRunner{t: t, handler: func(args []string, input string) (RunResult, error) {
+		wantArgs := []string{
+			"stale",
+			"--older-than", "10m",
+			"--for", "agent-deck/worker",
+			"--json",
+		}
+		if strings.Join(args, "\x00") != strings.Join(wantArgs, "\x00") {
+			t.Fatalf("mailbox args = %v, want %v", args, wantArgs)
+		}
+		return RunResult{ExitCode: 0, Stdout: `[{"address":"agent-deck/worker","oldest_eligible_at":"2026-04-01T00:00:00Z","claimable_count":2}]`}, nil
+	}}
+
+	service := newService(Options{
+		MailboxRunner: mailboxRunner,
+		CommandRunner: &fakeRunner{t: t, handler: func(args []string, input string) (RunResult, error) {
+			switch {
+			case strings.Join(args, "\x00") == strings.Join([]string{"agent-deck", "session", "show", "planner", "--json"}, "\x00"):
+				return RunResult{ExitCode: 0, Stdout: `{"id":"planner","title":"planner","status":"waiting"}`}, nil
+			default:
+				t.Fatalf("unexpected command call: %v", args)
+				return RunResult{}, nil
+			}
+		}},
+	})
+	service.state.boundAddresses = []string{"agent-deck/self"}
+	service.state.defaultSender = "agent-deck/self"
+	service.state.autoBindAttempted = true
+
+	initial := callTool(t, service.Server(), "mailbox_status", nil)
+	if got := initial["reminders"]; got != nil {
+		t.Fatalf("reminders = %v, want nil before subscription", got)
+	}
+
+	subscription, err := buildReminderSubscription([]string{"agent-deck/worker"}, "agent-deck/self", "10m")
+	if err != nil {
+		t.Fatalf("buildReminderSubscription() error = %v", err)
+	}
+	service.state.reminderSubscriptions[subscription.Key] = subscription
+
+	status := callTool(t, service.Server(), "mailbox_status", nil)
+	reminders := status["reminders"].(map[string]any)
+	if got := reminders["configured_count"]; got != float64(1) {
+		t.Fatalf("configured_count = %v, want 1", got)
+	}
+	if got := reminders["stale_count"]; got != float64(1) {
+		t.Fatalf("stale_count = %v, want 1", got)
+	}
+	staleSubs := reminders["subscriptions"].([]any)
+	if len(staleSubs) != 1 {
+		t.Fatalf("subscriptions = %d, want 1", len(staleSubs))
+	}
+	staleSub := staleSubs[0].(map[string]any)
+	if got := staleSub["route"]; got != "agent-deck/self" {
+		t.Fatalf("route = %v, want agent-deck/self", got)
+	}
+	if got := staleSub["stale_address_count"]; got != float64(1) {
+		t.Fatalf("stale_address_count = %v, want 1", got)
+	}
+	if got := staleSub["claimable_count"]; got != float64(2) {
+		t.Fatalf("claimable_count = %v, want 2", got)
+	}
+
+	resolve := callTool(t, service.Server(), "agent_deck_resolve_session", map[string]any{
+		"session": "planner",
+	})
+	if got := resolve["reminders"]; got != nil {
+		t.Fatalf("agent_deck_resolve_session reminders = %v, want nil", got)
+	}
+}
+
 func TestAgentDeckEnsureSessionStartsInactiveTarget(t *testing.T) {
 	commandRunner := &fakeRunner{t: t, handler: func(args []string, input string) (RunResult, error) {
 		switch {
