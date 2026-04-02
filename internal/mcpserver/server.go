@@ -23,6 +23,8 @@ const (
 	serverVersion            = "0.4.0"
 	syncCmdTimeout           = 30 * time.Second
 	ensureSessionShowTimeout = 30 * time.Second
+	notificationDelivery     = "delivery_available"
+	notificationStaleUnread  = "stale_unread"
 	defaultListenerMessage   = "If agent_mailbox is not bound yet, first run agent-deck session current --json and call mailbox_bind for this session. When a wakeup message arrives, use the 'check-agent-mail' skill and execute its requested action."
 	defaultNotifyMessage     = "Use the 'check-agent-mail' skill now. Receive the pending message and execute its requested action."
 	mailboxRecoveryHint      = "If you forget the mailbox details or next action after ack, use `mailbox_read` on the latest `acked` delivery for this session. For older mail, use `mailbox_list` with `state: acked` and then `mailbox_read` by delivery id."
@@ -60,6 +62,7 @@ type Options struct {
 type Service struct {
 	mailboxRunner Runner
 	commandRunner Runner
+	notifiers     map[string]managerNotifier
 	state         *serverState
 }
 
@@ -183,6 +186,30 @@ type parsedAddress struct {
 	ID     string
 }
 
+type notificationRoute struct {
+	Manager string
+	Target  string
+}
+
+type notificationEvent struct {
+	Kind            string
+	Route           notificationRoute
+	Subject         string
+	Body            string
+	MessageOverride *string
+}
+
+type notificationOutcome struct {
+	Status string
+	Scheme string
+	Err    error
+}
+
+type managerNotifier interface {
+	Name() string
+	Notify(ctx context.Context, event notificationEvent) notificationOutcome
+}
+
 type psRow struct {
 	PID  int
 	PPID int
@@ -198,6 +225,10 @@ type mailboxAppRunner struct {
 	prefixArgs []string
 }
 
+type agentDeckNotifier struct {
+	service *Service
+}
+
 func New(opts Options) *mcp.Server {
 	return newService(opts).Server()
 }
@@ -209,11 +240,15 @@ func newService(opts Options) *Service {
 	if opts.CommandRunner == nil {
 		opts.CommandRunner = osCommandRunner{cwd: currentWorkingDir()}
 	}
-	return &Service{
+	service := &Service{
 		mailboxRunner: opts.MailboxRunner,
 		commandRunner: opts.CommandRunner,
 		state:         &serverState{},
 	}
+	service.notifiers = map[string]managerNotifier{
+		"agent-deck": agentDeckNotifier{service: service},
+	}
+	return service
 }
 
 func (s *Service) Server() *mcp.Server {
@@ -408,57 +443,14 @@ func (s *Service) mailboxSend(ctx context.Context, _ *mcp.CallToolRequest, input
 		return nil, nil, err
 	}
 
-	notifyStatus := "skipped_local"
+	notify := s.notifyMailboxSend(ctx, input)
 	var notifyScheme any
+	if notify.Scheme != "" {
+		notifyScheme = notify.Scheme
+	}
 	var notifyError any
-	if !s.isLocalAddress(ctx, input.ToAddress) {
-		address, parseErr := parseAddress(input.ToAddress)
-		if parseErr != nil {
-			notifyStatus = "failed"
-			notifyError = parseErr.Error()
-		} else {
-			switch address.Scheme {
-			case "agent-deck":
-				if input.NotifyMessage != nil && strings.TrimSpace(*input.NotifyMessage) == "" {
-					notifyStatus = "skipped_disabled"
-					notifyScheme = address.Scheme
-					break
-				}
-				targetLabel := address.ID
-				targetSession, resolveErr := s.resolveSessionShowBestEffort(ctx, address.ID)
-				if resolveErr != nil {
-					notifyStatus = "failed"
-					notifyScheme = address.Scheme
-					notifyError = resolveErr.Error()
-					break
-				}
-				if targetSession != nil && strings.TrimSpace(targetSession.Title) != "" {
-					targetLabel = strings.TrimSpace(targetSession.Title)
-				}
-				notifyMessage := defaultNotifyMessage
-				if input.NotifyMessage != nil && strings.TrimSpace(*input.NotifyMessage) != "" {
-					notifyMessage = *input.NotifyMessage
-				}
-				notifyMessage = ensureReceiverWorkflowHint(notifyMessage, defaultNotifyMessage, targetLabel)
-				_, notifyErr := runCommand(ctx, s.commandRunner, []string{
-					"agent-deck", "session", "send", "--no-wait", address.ID, notifyMessage,
-				}, runOptions{timeout: syncCmdTimeout})
-				if notifyErr != nil {
-					notifyStatus = "failed"
-					notifyScheme = address.Scheme
-					notifyError = notifyErr.Error()
-					break
-				}
-				notifyStatus = "sent"
-				notifyScheme = address.Scheme
-			case "codex":
-				notifyStatus = "unsupported"
-				notifyScheme = address.Scheme
-			default:
-				notifyStatus = "unsupported"
-				notifyScheme = address.Scheme
-			}
-		}
+	if notify.Err != nil {
+		notifyError = notify.Err.Error()
 	}
 
 	return nil, map[string]any{
@@ -467,10 +459,97 @@ func (s *Service) mailboxSend(ctx context.Context, _ *mcp.CallToolRequest, input
 		"to_address":    input.ToAddress,
 		"subject":       input.Subject,
 		"delivery_id":   sendIDs.DeliveryID,
-		"notify_status": notifyStatus,
+		"notify_status": notify.Status,
 		"notify_scheme": notifyScheme,
 		"notify_error":  notifyError,
 	}, nil
+}
+
+func (s *Service) notifyMailboxSend(ctx context.Context, input mailboxSendInput) notificationOutcome {
+	if s.isLocalAddress(ctx, input.ToAddress) {
+		return notificationOutcome{Status: "skipped_local"}
+	}
+
+	route, err := notificationRouteForAddress(input.ToAddress)
+	if err != nil {
+		return notificationOutcome{Status: "failed", Err: err}
+	}
+
+	return s.notifyRoute(ctx, notificationEvent{
+		Kind:            notificationDelivery,
+		Route:           route,
+		Subject:         input.Subject,
+		Body:            input.Body,
+		MessageOverride: input.NotifyMessage,
+	})
+}
+
+func (s *Service) notifyRoute(ctx context.Context, event notificationEvent) notificationOutcome {
+	notifier, ok := s.notifiers[event.Route.Manager]
+	if !ok {
+		return notificationOutcome{
+			Status: "unsupported",
+			Scheme: event.Route.Manager,
+		}
+	}
+	outcome := notifier.Notify(ctx, event)
+	if outcome.Scheme == "" {
+		outcome.Scheme = notifier.Name()
+	}
+	return outcome
+}
+
+func (n agentDeckNotifier) Name() string {
+	return "agent-deck"
+}
+
+func (n agentDeckNotifier) Notify(ctx context.Context, event notificationEvent) notificationOutcome {
+	if event.Kind != notificationDelivery && event.Kind != notificationStaleUnread {
+		return notificationOutcome{
+			Status: "unsupported",
+			Scheme: n.Name(),
+		}
+	}
+	if event.MessageOverride != nil && strings.TrimSpace(*event.MessageOverride) == "" {
+		return notificationOutcome{
+			Status: "skipped_disabled",
+			Scheme: n.Name(),
+		}
+	}
+
+	targetLabel := event.Route.Target
+	targetSession, err := n.service.resolveSessionShowBestEffort(ctx, event.Route.Target)
+	if err != nil {
+		return notificationOutcome{
+			Status: "failed",
+			Scheme: n.Name(),
+			Err:    err,
+		}
+	}
+	if targetSession != nil && strings.TrimSpace(targetSession.Title) != "" {
+		targetLabel = strings.TrimSpace(targetSession.Title)
+	}
+
+	notifyMessage := defaultNotifyMessage
+	if event.MessageOverride != nil && strings.TrimSpace(*event.MessageOverride) != "" {
+		notifyMessage = *event.MessageOverride
+	}
+	notifyMessage = ensureReceiverWorkflowHint(notifyMessage, defaultNotifyMessage, targetLabel)
+	_, err = runCommand(ctx, n.service.commandRunner, []string{
+		"agent-deck", "session", "send", "--no-wait", event.Route.Target, notifyMessage,
+	}, runOptions{timeout: syncCmdTimeout})
+	if err != nil {
+		return notificationOutcome{
+			Status: "failed",
+			Scheme: n.Name(),
+			Err:    err,
+		}
+	}
+
+	return notificationOutcome{
+		Status: "sent",
+		Scheme: n.Name(),
+	}
 }
 
 func (s *Service) mailboxWait(ctx context.Context, _ *mcp.CallToolRequest, input mailboxWaitInput) (*mcp.CallToolResult, map[string]any, error) {
@@ -1190,6 +1269,17 @@ func parseAddress(address string) (parsedAddress, error) {
 		return parsedAddress{}, fmt.Errorf("invalid address: %s", address)
 	}
 	return parsedAddress{Scheme: scheme, ID: id}, nil
+}
+
+func notificationRouteForAddress(address string) (notificationRoute, error) {
+	parsed, err := parseAddress(address)
+	if err != nil {
+		return notificationRoute{}, err
+	}
+	return notificationRoute{
+		Manager: parsed.Scheme,
+		Target:  parsed.ID,
+	}, nil
 }
 
 func agentDeckAddress(sessionID string) string {

@@ -134,6 +134,103 @@ func TestMailboxSendNotifiesWorkerTarget(t *testing.T) {
 	}
 }
 
+func TestMailboxSendAllowsAgentDeckNotifyDisable(t *testing.T) {
+	mailboxRunner := &fakeRunner{t: t, handler: func(args []string, input string) (RunResult, error) {
+		return RunResult{ExitCode: 0, Stdout: "delivery_id=dlv_disabled\n"}, nil
+	}}
+
+	service := newService(Options{
+		MailboxRunner: mailboxRunner,
+		CommandRunner: &fakeRunner{t: t, handler: func(args []string, input string) (RunResult, error) {
+			t.Fatalf("unexpected command call: %v", args)
+			return RunResult{}, nil
+		}},
+	})
+	service.state.boundAddresses = []string{"agent-deck/self"}
+	service.state.defaultSender = "agent-deck/self"
+	service.state.autoBindAttempted = true
+
+	output := callTool(t, service.Server(), "mailbox_send", map[string]any{
+		"to_address":     "agent-deck/target",
+		"subject":        "delegate",
+		"body":           "body",
+		"notify_message": "",
+	})
+
+	if got := output["delivery_id"]; got != "dlv_disabled" {
+		t.Fatalf("delivery_id = %v, want dlv_disabled", got)
+	}
+	if got := output["notify_status"]; got != "skipped_disabled" {
+		t.Fatalf("notify_status = %v, want skipped_disabled", got)
+	}
+	if got := output["notify_scheme"]; got != "agent-deck" {
+		t.Fatalf("notify_scheme = %v, want agent-deck", got)
+	}
+	if got := output["notify_error"]; got != nil {
+		t.Fatalf("notify_error = %v, want nil", got)
+	}
+}
+
+func TestMailboxSendPreservesCustomNotifyMessage(t *testing.T) {
+	const customNotify = "Check the delegated task immediately."
+
+	mailboxRunner := &fakeRunner{t: t, handler: func(args []string, input string) (RunResult, error) {
+		return RunResult{ExitCode: 0, Stdout: "delivery_id=dlv_custom\n"}, nil
+	}}
+
+	commandRunner := &fakeRunner{t: t, handler: func(args []string, input string) (RunResult, error) {
+		switch {
+		case strings.Join(args, "\x00") == strings.Join([]string{"agent-deck", "session", "show", "target", "--json"}, "\x00"):
+			return RunResult{ExitCode: 0, Stdout: `{"id":"target","title":"coder-123","status":"waiting"}`}, nil
+		case len(args) == 6 && args[0] == "agent-deck" && args[1] == "session" && args[2] == "send":
+			if args[4] != "target" {
+				t.Fatalf("notify target = %q, want target", args[4])
+			}
+			if !strings.Contains(args[5], customNotify) {
+				t.Fatalf("notify message %q missing custom override", args[5])
+			}
+			if strings.Contains(args[5], defaultNotifyMessage) {
+				t.Fatalf("notify message %q unexpectedly replaced custom override", args[5])
+			}
+			if !strings.Contains(args[5], "mailbox_read") {
+				t.Fatalf("notify message %q missing mailbox recovery hint", args[5])
+			}
+			return RunResult{ExitCode: 0}, nil
+		default:
+			t.Fatalf("unexpected command args: %v", args)
+			return RunResult{}, nil
+		}
+	}}
+
+	service := newService(Options{
+		MailboxRunner: mailboxRunner,
+		CommandRunner: commandRunner,
+	})
+	service.state.boundAddresses = []string{"agent-deck/self"}
+	service.state.defaultSender = "agent-deck/self"
+	service.state.autoBindAttempted = true
+
+	output := callTool(t, service.Server(), "mailbox_send", map[string]any{
+		"to_address":     "agent-deck/target",
+		"subject":        "delegate",
+		"body":           "body",
+		"notify_message": customNotify,
+	})
+
+	if got := output["delivery_id"]; got != "dlv_custom" {
+		t.Fatalf("delivery_id = %v, want dlv_custom", got)
+	}
+	if got := output["notify_status"]; got != "sent" {
+		t.Fatalf("notify_status = %v, want sent", got)
+	}
+	if got := output["notify_scheme"]; got != "agent-deck" {
+		t.Fatalf("notify_scheme = %v, want agent-deck", got)
+	}
+	if got := output["notify_error"]; got != nil {
+		t.Fatalf("notify_error = %v, want nil", got)
+	}
+}
+
 func TestMailboxSendPreservesMailboxDefaultsWhenMetadataOmitted(t *testing.T) {
 	mailboxRunner := &fakeRunner{t: t, handler: func(args []string, input string) (RunResult, error) {
 		for _, token := range args {
