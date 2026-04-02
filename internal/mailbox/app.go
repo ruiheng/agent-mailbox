@@ -173,7 +173,8 @@ func (a *App) prepareSendCommand(args []string) (preparedCommand, error) {
 	}
 
 	return func(ctx context.Context, store *Store) error {
-		result, err := store.Send(ctx, params)
+		ops := NewOperations(store)
+		result, err := ops.Send(ctx, params)
 		if err != nil {
 			return err
 		}
@@ -240,11 +241,12 @@ func (a *App) prepareListCommand(args []string) (preparedCommand, error) {
 	}
 
 	return func(ctx context.Context, store *Store) error {
+		ops := NewOperations(store)
 		if strings.TrimSpace(person) != "" {
 			if strings.TrimSpace(state) != "" {
 				return errors.New("--state is not supported with --as")
 			}
-			messages, err := store.ListGroupMessages(ctx, GroupListParams{
+			messages, err := ops.ListGroupMessages(ctx, GroupListParams{
 				Address: address,
 				Person:  person,
 			})
@@ -266,7 +268,7 @@ func (a *App) prepareListCommand(args []string) (preparedCommand, error) {
 			return nil
 		}
 
-		deliveries, err := store.List(ctx, params)
+		deliveries, err := ops.List(ctx, params)
 		if err != nil {
 			return err
 		}
@@ -328,7 +330,8 @@ func (a *App) prepareStaleCommand(args []string) (preparedCommand, error) {
 	}
 
 	return func(ctx context.Context, store *Store) error {
-		stale, err := store.ListStaleAddresses(ctx, params)
+		ops := NewOperations(store)
+		stale, err := ops.ListStaleAddresses(ctx, params)
 		if err != nil {
 			return err
 		}
@@ -375,6 +378,7 @@ func (a *App) prepareRecvCommand(args []string) (preparedCommand, error) {
 	}
 
 	return func(ctx context.Context, store *Store) error {
+		ops := NewOperations(store)
 		if person != "" {
 			if maxProvided {
 				return errors.New("--max is not supported with --as")
@@ -420,7 +424,7 @@ func (a *App) prepareRecvCommand(args []string) (preparedCommand, error) {
 			return a.writeReceivedMessageText(summarizeReceivedMessage(message))
 		}
 
-		result, err := store.ReceiveBatch(ctx, params)
+		result, err := ops.ReceiveBatch(ctx, params)
 		if err != nil {
 			return err
 		}
@@ -524,6 +528,7 @@ func (a *App) prepareWaitCommand(args []string) (preparedCommand, error) {
 	}
 
 	return func(ctx context.Context, store *Store) error {
+		ops := NewOperations(store)
 		if person != "" {
 			if len(normalizedAddresses) != 1 {
 				return errors.New("--as requires exactly one --for address")
@@ -548,7 +553,7 @@ func (a *App) prepareWaitCommand(args []string) (preparedCommand, error) {
 			return a.writeGroupWaitedMessageText(summarizeGroupListedMessage(message))
 		}
 
-		delivery, err := store.Wait(ctx, params)
+		delivery, err := ops.Wait(ctx, params)
 		if err != nil {
 			return err
 		}
@@ -632,8 +637,9 @@ func (a *App) prepareReadCommand(args []string) (preparedCommand, error) {
 	state = strings.TrimSpace(state)
 
 	return func(ctx context.Context, store *Store) error {
+		ops := NewOperations(store)
 		if len(normalizedMessageIDs) > 0 {
-			messages, err := store.ReadMessages(ctx, normalizedMessageIDs)
+			messages, err := ops.ReadMessages(ctx, normalizedMessageIDs)
 			if err != nil {
 				return err
 			}
@@ -648,7 +654,7 @@ func (a *App) prepareReadCommand(args []string) (preparedCommand, error) {
 		}
 
 		if latest {
-			deliveries, hasMore, err := store.ReadLatestDeliveries(ctx, normalizedAddresses, state, limit)
+			deliveries, hasMore, err := ops.ReadLatestDeliveries(ctx, normalizedAddresses, state, limit)
 			if err != nil {
 				return err
 			}
@@ -662,7 +668,7 @@ func (a *App) prepareReadCommand(args []string) (preparedCommand, error) {
 			return a.writeReadDeliveryResultText(result)
 		}
 
-		deliveries, err := store.ReadDeliveries(ctx, normalizedDeliveryIDs)
+		deliveries, err := ops.ReadDeliveries(ctx, normalizedDeliveryIDs)
 		if err != nil {
 			return err
 		}
@@ -697,7 +703,8 @@ func (a *App) prepareAckCommand(args []string) (preparedCommand, error) {
 	}
 
 	return func(ctx context.Context, store *Store) error {
-		result, err := store.Ack(ctx, deliveryID, leaseToken)
+		ops := NewOperations(store)
+		result, err := ops.Ack(ctx, deliveryID, leaseToken)
 		if err != nil {
 			return err
 		}
@@ -730,7 +737,8 @@ func (a *App) prepareRenewCommand(args []string) (preparedCommand, error) {
 	}
 
 	return func(ctx context.Context, store *Store) error {
-		result, err := store.Renew(ctx, deliveryID, leaseToken, extendBy)
+		ops := NewOperations(store)
+		result, err := ops.Renew(ctx, deliveryID, leaseToken, extendBy)
 		if err != nil {
 			return err
 		}
@@ -758,7 +766,8 @@ func (a *App) prepareReleaseCommand(args []string) (preparedCommand, error) {
 	}
 
 	return func(ctx context.Context, store *Store) error {
-		result, err := store.Release(ctx, deliveryID, leaseToken)
+		ops := NewOperations(store)
+		result, err := ops.Release(ctx, deliveryID, leaseToken)
 		if err != nil {
 			return err
 		}
@@ -796,7 +805,8 @@ func (a *App) prepareDeferCommand(args []string) (preparedCommand, error) {
 	}
 
 	return func(ctx context.Context, store *Store) error {
-		result, err := store.Defer(ctx, deliveryID, leaseToken, until)
+		ops := NewOperations(store)
+		result, err := ops.Defer(ctx, deliveryID, leaseToken, until)
 		if err != nil {
 			return err
 		}
@@ -829,7 +839,8 @@ func (a *App) prepareFailCommand(args []string) (preparedCommand, error) {
 	}
 
 	return func(ctx context.Context, store *Store) error {
-		result, err := store.Fail(ctx, deliveryID, leaseToken, reason)
+		ops := NewOperations(store)
+		result, err := ops.Fail(ctx, deliveryID, leaseToken, reason)
 		if err != nil {
 			return err
 		}

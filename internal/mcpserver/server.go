@@ -28,7 +28,6 @@ const (
 	defaultReminderConfirmDelay = 2 * time.Second
 	notificationDelivery        = "delivery_available"
 	notificationStaleUnread     = "stale_unread"
-	defaultListenerMessage      = "If agent_mailbox is not bound yet, first run agent-deck session current --json and call mailbox_bind for this session. When a wakeup message arrives, use the 'check-agent-mail' skill and execute its requested action."
 	defaultNotifyMessage        = "Use the 'check-agent-mail' skill now. Receive the pending message and execute its requested action."
 	mailboxRecoveryHint         = "If you forget the mailbox details or next action after ack, use `mailbox_read` on the latest `acked` delivery for this session. For older mail, use `mailbox_list` with `state: acked` and then `mailbox_read` by delivery id."
 	serverInstructions          = "Bootstrap this MCP process once per agent-managed session. If it is not bound yet, run `agent-deck session current --json`, take the current session id, and call `mailbox_bind`. Use `agent-deck/<id>` as the default sender. Pass `default_workdir` when you want later `agent_deck_ensure_session` calls to create sessions in the current project. `mailbox_wait` is not recommended for normal workflow; prefer `mailbox_recv`. Later reuse the bound addresses until MCP state is lost."
@@ -56,8 +55,41 @@ type RunResult struct {
 	Stderr   string
 }
 
+type mailboxService interface {
+	Send(context.Context, mailbox.SendParams) (mailbox.SendResult, error)
+	List(context.Context, mailbox.ListParams) ([]mailbox.ListedDelivery, error)
+	ListGroupMessages(context.Context, mailbox.GroupListParams) ([]mailbox.GroupListedMessage, error)
+	ListStaleAddresses(context.Context, mailbox.StaleAddressesParams) ([]mailbox.StaleAddress, error)
+	ReceiveBatch(context.Context, mailbox.ReceiveBatchParams) (mailbox.ReceiveResult, error)
+	Wait(context.Context, mailbox.WaitParams) (mailbox.ListedDelivery, error)
+	ReadMessages(context.Context, []string) ([]mailbox.ReadMessage, error)
+	ReadLatestDeliveries(context.Context, []string, string, int) ([]mailbox.ReadDelivery, bool, error)
+	ReadDeliveries(context.Context, []string) ([]mailbox.ReadDelivery, error)
+	Ack(context.Context, string, string) (mailbox.DeliveryTransitionResult, error)
+	Release(context.Context, string, string) (mailbox.DeliveryTransitionResult, error)
+	Defer(context.Context, string, string, time.Time) (mailbox.DeliveryTransitionResult, error)
+	Fail(context.Context, string, string, string) (mailbox.DeliveryTransitionResult, error)
+}
+
+type mailboxServiceFactory interface {
+	Open(context.Context) (mailboxService, func() error, error)
+}
+
+type runtimeMailboxServiceFactory struct {
+	stateDir    string
+	openRuntime func(context.Context, string) (*mailbox.Runtime, error)
+}
+
+func (f runtimeMailboxServiceFactory) Open(ctx context.Context) (mailboxService, func() error, error) {
+	runtime, err := f.openRuntime(ctx, f.stateDir)
+	if err != nil {
+		return nil, nil, err
+	}
+	return mailbox.NewOperations(runtime.Store()), runtime.Close, nil
+}
+
 type Options struct {
-	MailboxRunner             Runner
+	MailboxServiceFactory     mailboxServiceFactory
 	CommandRunner             Runner
 	StateDir                  string
 	Now                       func() time.Time
@@ -67,7 +99,7 @@ type Options struct {
 }
 
 type Service struct {
-	mailboxRunner             Runner
+	mailboxServices           mailboxServiceFactory
 	commandRunner             Runner
 	notifiers                 map[string]managerNotifier
 	state                     *serverState
@@ -268,6 +300,41 @@ type staleAddress struct {
 	ClaimableCount   int    `json:"claimable_count"`
 }
 
+type listedDeliverySummary struct {
+	DeliveryID       string `json:"delivery_id"`
+	RecipientAddress string `json:"recipient_address"`
+	Subject          string `json:"subject"`
+	ContentType      string `json:"content_type,omitempty"`
+}
+
+type receivedMessageSummary struct {
+	DeliveryID       string `json:"delivery_id"`
+	RecipientAddress string `json:"recipient_address"`
+	LeaseToken       string `json:"lease_token"`
+	Subject          string `json:"subject"`
+	ContentType      string `json:"content_type,omitempty"`
+	Body             string `json:"body"`
+}
+
+type receiveResultSummary struct {
+	Messages []receivedMessageSummary `json:"messages"`
+	HasMore  bool                     `json:"has_more"`
+}
+
+type groupListedMessageSummary struct {
+	MessageID        string  `json:"message_id"`
+	GroupID          string  `json:"group_id"`
+	GroupAddress     string  `json:"group_address"`
+	Person           string  `json:"person"`
+	MessageCreatedAt string  `json:"message_created_at"`
+	Subject          string  `json:"subject"`
+	ContentType      string  `json:"content_type,omitempty"`
+	Read             bool    `json:"read"`
+	FirstReadAt      *string `json:"first_read_at,omitempty"`
+	ReadCount        int     `json:"read_count"`
+	EligibleCount    int     `json:"eligible_count"`
+}
+
 type reminderCurrentState struct {
 	Stale             bool   `json:"stale"`
 	StaleAddressCount int    `json:"stale_address_count"`
@@ -339,10 +406,6 @@ type osCommandRunner struct {
 	cwd string
 }
 
-type mailboxAppRunner struct {
-	prefixArgs []string
-}
-
 type agentDeckNotifier struct {
 	service *Service
 }
@@ -352,15 +415,18 @@ func New(opts Options) *mcp.Server {
 }
 
 func newService(opts Options) *Service {
-	if opts.MailboxRunner == nil {
-		opts.MailboxRunner = mailboxAppRunner{prefixArgs: stateDirArgs(opts.StateDir)}
+	if opts.MailboxServiceFactory == nil {
+		opts.MailboxServiceFactory = runtimeMailboxServiceFactory{
+			stateDir:    opts.StateDir,
+			openRuntime: mailbox.OpenRuntime,
+		}
 	}
 	if opts.CommandRunner == nil {
 		opts.CommandRunner = osCommandRunner{cwd: currentWorkingDir()}
 	}
 	service := &Service{
-		mailboxRunner: opts.MailboxRunner,
-		commandRunner: opts.CommandRunner,
+		mailboxServices: opts.MailboxServiceFactory,
+		commandRunner:   opts.CommandRunner,
 		state: &serverState{
 			reminderSubscriptions: map[string]reminderSubscription{},
 		},
@@ -497,32 +563,19 @@ func (r osCommandRunner) Run(ctx context.Context, args []string, input string) (
 	return RunResult{}, err
 }
 
-func (r mailboxAppRunner) Run(ctx context.Context, args []string, input string) (RunResult, error) {
-	var stdout bytes.Buffer
-	var stderr bytes.Buffer
-	app := mailbox.NewApp(strings.NewReader(input), &stdout, &stderr)
-	forwarded := append([]string(nil), r.prefixArgs...)
-	forwarded = append(forwarded, args...)
-	err := app.Run(ctx, forwarded)
-	switch {
-	case err == nil, errors.Is(err, mailbox.ErrHelpRequested):
-		return RunResult{ExitCode: 0, Stdout: stdout.String(), Stderr: stderr.String()}, nil
-	case errors.Is(err, mailbox.ErrNoMessage):
-		return RunResult{ExitCode: 2, Stdout: stdout.String(), Stderr: stderr.String()}, nil
-	default:
-		if stderr.Len() == 0 && err != nil {
-			stderr.WriteString(err.Error())
-		}
-		return RunResult{ExitCode: 1, Stdout: stdout.String(), Stderr: stderr.String()}, nil
-	}
+type readLatestResult struct {
+	Items   []mailbox.ReadDelivery
+	HasMore bool
 }
 
-func stateDirArgs(stateDir string) []string {
-	trimmed := strings.TrimSpace(stateDir)
-	if trimmed == "" {
-		return nil
+func withMailboxService[T any](ctx context.Context, factory mailboxServiceFactory, fn func(mailboxService) (T, error)) (T, error) {
+	var zero T
+	service, closeFunc, err := factory.Open(ctx)
+	if err != nil {
+		return zero, err
 	}
-	return []string{"--state-dir", trimmed}
+	defer closeFunc()
+	return fn(service)
 }
 
 func (s *Service) mailboxBind(ctx context.Context, _ *mcp.CallToolRequest, input mailboxBindInput) (*mcp.CallToolResult, map[string]any, error) {
@@ -637,26 +690,16 @@ func (s *Service) mailboxSend(ctx context.Context, _ *mcp.CallToolRequest, input
 		return nil, nil, err
 	}
 
-	sendArgs := []string{
-		"send",
-		"--to", input.ToAddress,
-		"--from", fromAddress,
-		"--subject", input.Subject,
-		"--body-file", "-",
-	}
-	if contentType := strings.TrimSpace(input.ContentType); contentType != "" {
-		sendArgs = append(sendArgs, "--content-type", contentType)
-	}
-	if schemaVersion := strings.TrimSpace(input.SchemaVersion); schemaVersion != "" {
-		sendArgs = append(sendArgs, "--schema-version", schemaVersion)
-	}
-
-	sendResult, err := runCommand(ctx, s.mailboxRunner, sendArgs, runOptions{input: input.Body})
-	if err != nil {
-		return nil, nil, err
-	}
-
-	sendIDs, err := validateSendReceipt(parseSendTokens(sendResult.Stdout), sendResult.Stdout)
+	sendResult, err := withMailboxService(ctx, s.mailboxServices, func(service mailboxService) (mailbox.SendResult, error) {
+		return service.Send(ctx, mailbox.SendParams{
+			ToAddress:     input.ToAddress,
+			FromAddress:   fromAddress,
+			Subject:       input.Subject,
+			ContentType:   strings.TrimSpace(input.ContentType),
+			SchemaVersion: strings.TrimSpace(input.SchemaVersion),
+			Body:          []byte(input.Body),
+		})
+	})
 	if err != nil {
 		return nil, nil, err
 	}
@@ -676,7 +719,7 @@ func (s *Service) mailboxSend(ctx context.Context, _ *mcp.CallToolRequest, input
 		"from_address":  fromAddress,
 		"to_address":    input.ToAddress,
 		"subject":       input.Subject,
-		"delivery_id":   sendIDs.DeliveryID,
+		"delivery_id":   sendResult.DeliveryID,
 		"notify_status": notify.Status,
 		"notify_scheme": notifyScheme,
 		"notify_error":  notifyError,
@@ -908,6 +951,53 @@ func notificationOutcomeDelivered(outcome notificationOutcome) bool {
 	return strings.TrimSpace(outcome.Status) == "sent"
 }
 
+func summarizeListedDelivery(delivery mailbox.ListedDelivery) listedDeliverySummary {
+	return listedDeliverySummary{
+		DeliveryID:       delivery.DeliveryID,
+		RecipientAddress: delivery.RecipientAddress,
+		Subject:          delivery.Subject,
+		ContentType:      delivery.ContentType,
+	}
+}
+
+func summarizeReceivedMessage(message mailbox.ReceivedMessage) receivedMessageSummary {
+	return receivedMessageSummary{
+		DeliveryID:       message.DeliveryID,
+		RecipientAddress: message.RecipientAddress,
+		LeaseToken:       message.LeaseToken,
+		Subject:          message.Subject,
+		ContentType:      message.ContentType,
+		Body:             message.Body,
+	}
+}
+
+func summarizeReceiveResult(result mailbox.ReceiveResult) receiveResultSummary {
+	messages := make([]receivedMessageSummary, 0, len(result.Messages))
+	for _, message := range result.Messages {
+		messages = append(messages, summarizeReceivedMessage(message))
+	}
+	return receiveResultSummary{
+		Messages: messages,
+		HasMore:  result.HasMore,
+	}
+}
+
+func summarizeGroupListedMessage(message mailbox.GroupListedMessage) groupListedMessageSummary {
+	return groupListedMessageSummary{
+		MessageID:        message.MessageID,
+		GroupID:          message.GroupID,
+		GroupAddress:     message.GroupAddress,
+		Person:           message.Person,
+		MessageCreatedAt: message.MessageCreatedAt,
+		Subject:          message.Subject,
+		ContentType:      message.ContentType,
+		Read:             message.Read,
+		FirstReadAt:      message.FirstReadAt,
+		ReadCount:        message.ReadCount,
+		EligibleCount:    message.EligibleCount,
+	}
+}
+
 func inReminderCooldown(lastNotifiedAt string, now time.Time, cooldown time.Duration) bool {
 	if cooldown <= 0 || strings.TrimSpace(lastNotifiedAt) == "" {
 		return false
@@ -925,34 +1015,34 @@ func (s *Service) mailboxWait(ctx context.Context, _ *mcp.CallToolRequest, input
 		return nil, nil, err
 	}
 
-	args := []string{"wait"}
-	for _, address := range addresses {
-		args = append(args, "--for", address)
+	timeoutText := strings.TrimSpace(input.Timeout)
+	timeout := time.Duration(0)
+	if timeoutText != "" {
+		timeout, err = time.ParseDuration(timeoutText)
+		if err != nil {
+			return nil, nil, fmt.Errorf("parse timeout: %w", err)
+		}
 	}
-	if strings.TrimSpace(input.Timeout) != "" {
-		args = append(args, "--timeout", strings.TrimSpace(input.Timeout))
-	}
-	args = append(args, "--json")
 
-	result, err := runCommand(ctx, s.mailboxRunner, args, runOptions{okCodes: []int{0, 2}})
-	if err != nil {
-		return nil, nil, err
-	}
-	if result.ExitCode == 2 {
+	delivery, err := withMailboxService(ctx, s.mailboxServices, func(service mailboxService) (mailbox.ListedDelivery, error) {
+		return service.Wait(ctx, mailbox.WaitParams{
+			Addresses: addresses,
+			Timeout:   timeout,
+		})
+	})
+	if errors.Is(err, mailbox.ErrNoMessage) {
 		return s.mailboxToolResult(ctx, map[string]any{
 			"status":    "no_message",
 			"addresses": addresses,
 		})
 	}
-
-	delivery, err := parseJSONValue(result.Stdout, "agent-mailbox wait")
 	if err != nil {
 		return nil, nil, err
 	}
 	return s.mailboxToolResult(ctx, map[string]any{
 		"status":    "message_available",
 		"addresses": addresses,
-		"delivery":  delivery,
+		"delivery":  summarizeListedDelivery(delivery),
 	})
 }
 
@@ -962,31 +1052,25 @@ func (s *Service) mailboxRecv(ctx context.Context, _ *mcp.CallToolRequest, input
 		return nil, nil, err
 	}
 
-	args := []string{"recv"}
-	for _, address := range addresses {
-		args = append(args, "--for", address)
-	}
-	args = append(args, "--max", "1", "--json")
-
-	result, err := runCommand(ctx, s.mailboxRunner, args, runOptions{okCodes: []int{0, 2}})
-	if err != nil {
-		return nil, nil, err
-	}
-	if result.ExitCode == 2 {
+	delivery, err := withMailboxService(ctx, s.mailboxServices, func(service mailboxService) (mailbox.ReceiveResult, error) {
+		return service.ReceiveBatch(ctx, mailbox.ReceiveBatchParams{
+			Addresses: addresses,
+			Max:       1,
+		})
+	})
+	if errors.Is(err, mailbox.ErrNoMessage) {
 		return s.mailboxToolResult(ctx, map[string]any{
 			"status":    "no_message",
 			"addresses": addresses,
 		})
 	}
-
-	delivery, err := parseJSONValue(result.Stdout, "agent-mailbox recv")
 	if err != nil {
 		return nil, nil, err
 	}
 	return s.mailboxToolResult(ctx, map[string]any{
 		"status":    "received",
 		"addresses": addresses,
-		"delivery":  delivery,
+		"delivery":  summarizeReceiveResult(delivery),
 	})
 }
 
@@ -1008,16 +1092,26 @@ func (s *Service) mailboxList(ctx context.Context, _ *mcp.CallToolRequest, input
 		return nil, nil, errors.New("mailbox_list does not support state together with as_person")
 	}
 
-	args := []string{"list", "--for", address}
-	if input.AsPerson != "" {
-		args = append(args, "--as", input.AsPerson)
-	}
-	if input.State != "" {
-		args = append(args, "--state", input.State)
-	}
-	args = append(args, "--json")
-
-	deliveries, err := parseJSONFromRunner(ctx, s.mailboxRunner, args, "agent-mailbox list")
+	deliveries, err := withMailboxService(ctx, s.mailboxServices, func(service mailboxService) (any, error) {
+		if input.AsPerson != "" {
+			messages, err := service.ListGroupMessages(ctx, mailbox.GroupListParams{
+				Address: address,
+				Person:  input.AsPerson,
+			})
+			if err != nil {
+				return nil, err
+			}
+			summaries := make([]groupListedMessageSummary, 0, len(messages))
+			for _, message := range messages {
+				summaries = append(summaries, summarizeGroupListedMessage(message))
+			}
+			return summaries, nil
+		}
+		return service.List(ctx, mailbox.ListParams{
+			Address: address,
+			State:   input.State,
+		})
+	})
 	if err != nil {
 		return nil, nil, err
 	}
@@ -1048,7 +1142,6 @@ func (s *Service) mailboxRead(ctx context.Context, _ *mcp.CallToolRequest, input
 		return nil, nil, errors.New("mailbox_read requires exactly one mode: message_ids, delivery_ids, or latest=true")
 	}
 
-	args := []string{"read"}
 	result := map[string]any{
 		"status": "read",
 		"mode":   "unknown",
@@ -1059,16 +1152,6 @@ func (s *Service) mailboxRead(ctx context.Context, _ *mcp.CallToolRequest, input
 		addresses, err := s.mailboxAddresses(ctx, input.Addresses)
 		if err != nil {
 			return nil, nil, err
-		}
-		args = append(args, "--latest")
-		for _, address := range addresses {
-			args = append(args, "--for", address)
-		}
-		if input.State != "" {
-			args = append(args, "--state", input.State)
-		}
-		if input.Limit != nil {
-			args = append(args, "--limit", strconv.Itoa(*input.Limit))
 		}
 		result["mode"] = "latest"
 		result["addresses"] = addresses
@@ -1087,38 +1170,58 @@ func (s *Service) mailboxRead(ctx context.Context, _ *mcp.CallToolRequest, input
 			return nil, nil, errors.New("mailbox_read message_ids mode does not support addresses, state, or limit")
 		}
 		messageIDs := dedupe(input.MessageIDs)
-		for _, messageID := range messageIDs {
-			args = append(args, "--message", messageID)
-		}
 		result["mode"] = "message_ids"
 		result["message_ids"] = messageIDs
+		messages, err := withMailboxService(ctx, s.mailboxServices, func(service mailboxService) ([]mailbox.ReadMessage, error) {
+			return service.ReadMessages(ctx, messageIDs)
+		})
+		if err != nil {
+			return nil, nil, err
+		}
+		result["items"] = messages
+		result["has_more"] = false
+		return s.mailboxToolResult(ctx, result)
 	default:
 		if len(input.Addresses) > 0 || input.State != "" || input.Limit != nil {
 			return nil, nil, errors.New("mailbox_read delivery_ids mode does not support addresses, state, or limit")
 		}
 		deliveryIDs := dedupe(input.DeliveryIDs)
-		for _, deliveryID := range deliveryIDs {
-			args = append(args, "--delivery", deliveryID)
-		}
 		result["mode"] = "delivery_ids"
 		result["delivery_ids"] = deliveryIDs
+		deliveries, err := withMailboxService(ctx, s.mailboxServices, func(service mailboxService) ([]mailbox.ReadDelivery, error) {
+			return service.ReadDeliveries(ctx, deliveryIDs)
+		})
+		if err != nil {
+			return nil, nil, err
+		}
+		result["items"] = deliveries
+		result["has_more"] = false
+		return s.mailboxToolResult(ctx, result)
 	}
 
-	args = append(args, "--json")
-	readResult, err := parseJSONFromRunner(ctx, s.mailboxRunner, args, "agent-mailbox read")
+	latest, err := withMailboxService(ctx, s.mailboxServices, func(service mailboxService) (readLatestResult, error) {
+		limit := 1
+		if input.Limit != nil {
+			limit = *input.Limit
+		}
+		items, hasMore, err := service.ReadLatestDeliveries(ctx, result["addresses"].([]string), input.State, limit)
+		if err != nil {
+			return readLatestResult{}, err
+		}
+		return readLatestResult{Items: items, HasMore: hasMore}, nil
+	})
 	if err != nil {
 		return nil, nil, err
 	}
-	for key, value := range readResult.(map[string]any) {
-		result[key] = value
-	}
+	result["items"] = latest.Items
+	result["has_more"] = latest.HasMore
 	return s.mailboxToolResult(ctx, result)
 }
 
 func (s *Service) mailboxAck(ctx context.Context, _ *mcp.CallToolRequest, input mailboxAckInput) (*mcp.CallToolResult, map[string]any, error) {
-	_, err := runCommand(ctx, s.mailboxRunner, []string{
-		"ack", "--delivery", input.DeliveryID, "--lease-token", input.LeaseToken,
-	}, runOptions{})
+	_, err := withMailboxService(ctx, s.mailboxServices, func(service mailboxService) (mailbox.DeliveryTransitionResult, error) {
+		return service.Ack(ctx, input.DeliveryID, input.LeaseToken)
+	})
 	if err != nil {
 		return nil, nil, err
 	}
@@ -1126,9 +1229,9 @@ func (s *Service) mailboxAck(ctx context.Context, _ *mcp.CallToolRequest, input 
 }
 
 func (s *Service) mailboxRelease(ctx context.Context, _ *mcp.CallToolRequest, input mailboxAckInput) (*mcp.CallToolResult, map[string]any, error) {
-	_, err := runCommand(ctx, s.mailboxRunner, []string{
-		"release", "--delivery", input.DeliveryID, "--lease-token", input.LeaseToken,
-	}, runOptions{})
+	_, err := withMailboxService(ctx, s.mailboxServices, func(service mailboxService) (mailbox.DeliveryTransitionResult, error) {
+		return service.Release(ctx, input.DeliveryID, input.LeaseToken)
+	})
 	if err != nil {
 		return nil, nil, err
 	}
@@ -1136,9 +1239,13 @@ func (s *Service) mailboxRelease(ctx context.Context, _ *mcp.CallToolRequest, in
 }
 
 func (s *Service) mailboxDefer(ctx context.Context, _ *mcp.CallToolRequest, input mailboxDeferInput) (*mcp.CallToolResult, map[string]any, error) {
-	_, err := runCommand(ctx, s.mailboxRunner, []string{
-		"defer", "--delivery", input.DeliveryID, "--lease-token", input.LeaseToken, "--until", input.Until,
-	}, runOptions{})
+	until, err := time.Parse(time.RFC3339Nano, input.Until)
+	if err != nil {
+		return nil, nil, fmt.Errorf("parse until: %w", err)
+	}
+	_, err = withMailboxService(ctx, s.mailboxServices, func(service mailboxService) (mailbox.DeliveryTransitionResult, error) {
+		return service.Defer(ctx, input.DeliveryID, input.LeaseToken, until)
+	})
 	if err != nil {
 		return nil, nil, err
 	}
@@ -1146,9 +1253,9 @@ func (s *Service) mailboxDefer(ctx context.Context, _ *mcp.CallToolRequest, inpu
 }
 
 func (s *Service) mailboxFail(ctx context.Context, _ *mcp.CallToolRequest, input mailboxFailInput) (*mcp.CallToolResult, map[string]any, error) {
-	_, err := runCommand(ctx, s.mailboxRunner, []string{
-		"fail", "--delivery", input.DeliveryID, "--lease-token", input.LeaseToken, "--reason", input.Reason,
-	}, runOptions{})
+	_, err := withMailboxService(ctx, s.mailboxServices, func(service mailboxService) (mailbox.DeliveryTransitionResult, error) {
+		return service.Fail(ctx, input.DeliveryID, input.LeaseToken, input.Reason)
+	})
 	if err != nil {
 		return nil, nil, err
 	}
@@ -1293,26 +1400,36 @@ func (s *Service) listStaleEntries(ctx context.Context, selector reminderSelecto
 }
 
 func (s *Service) listStaleAddresses(ctx context.Context, addresses []string, person string, policy reminderPolicy) ([]staleAddress, error) {
-	args := []string{"stale", "--older-than", policy.OlderThanRaw}
-	for _, address := range addresses {
-		args = append(args, "--for", address)
+	olderThan, err := time.ParseDuration(policy.OlderThanRaw)
+	if err != nil {
+		return nil, err
 	}
-	if strings.TrimSpace(person) != "" {
-		args = append(args, "--as", strings.TrimSpace(person))
-	}
-	args = append(args, "--json")
 
-	value, err := parseJSONFromRunner(ctx, s.mailboxRunner, args, "agent-mailbox stale")
+	params := mailbox.StaleAddressesParams{OlderThan: olderThan}
+	if strings.TrimSpace(person) != "" {
+		params.GroupViews = []mailbox.GroupStaleView{{
+			Address: addresses[0],
+			Person:  strings.TrimSpace(person),
+		}}
+	} else {
+		params.Addresses = append([]string(nil), addresses...)
+	}
+
+	values, err := withMailboxService(ctx, s.mailboxServices, func(service mailboxService) ([]mailbox.StaleAddress, error) {
+		return service.ListStaleAddresses(ctx, params)
+	})
 	if err != nil {
 		return nil, err
 	}
-	encoded, err := json.Marshal(value)
-	if err != nil {
-		return nil, err
-	}
-	var staleEntries []staleAddress
-	if err := json.Unmarshal(encoded, &staleEntries); err != nil {
-		return nil, fmt.Errorf("agent-mailbox stale returned invalid JSON: %w", err)
+
+	staleEntries := make([]staleAddress, 0, len(values))
+	for _, value := range values {
+		staleEntries = append(staleEntries, staleAddress{
+			Address:          value.Address,
+			Person:           value.Person,
+			OldestEligibleAt: value.OldestEligibleAt,
+			ClaimableCount:   value.ClaimableCount,
+		})
 	}
 	return staleEntries, nil
 }
@@ -1372,16 +1489,18 @@ func (s *Service) agentDeckEnsureSession(ctx context.Context, _ *mcp.CallToolReq
 			return nil, nil, fmt.Errorf("workdir does not exist: %s", workdir)
 		}
 
-		targetLabel := firstNonEmpty(input.EnsureTitle, input.SessionRef, identifier)
-		listenerMessage := ensureReceiverWorkflowHint(firstNonEmpty(input.ListenerMessage, defaultListenerMessage), defaultListenerMessage, targetLabel)
-		launchResult, err := runCommand(ctx, s.commandRunner, []string{
+		listenerMessage := strings.TrimSpace(input.ListenerMessage)
+		launchArgs := []string{
 			"agent-deck", "launch", "--json",
 			"--title", input.EnsureTitle,
 			"--parent", input.ParentSessionID,
 			"--cmd", input.EnsureCmd,
-			"--message", listenerMessage,
-			workdir,
-		}, runOptions{})
+		}
+		if listenerMessage != "" {
+			launchArgs = append(launchArgs, "--message", listenerMessage)
+		}
+		launchArgs = append(launchArgs, workdir)
+		launchResult, err := runCommand(ctx, s.commandRunner, launchArgs, runOptions{})
 		if err != nil {
 			return nil, nil, err
 		}
@@ -1393,8 +1512,7 @@ func (s *Service) agentDeckEnsureSession(ctx context.Context, _ *mcp.CallToolReq
 		startedSession = true
 		listenerStatus = "started_waiting"
 	} else {
-		targetLabel := firstNonEmpty(data.Title, input.SessionRef, identifier, data.ID)
-		listenerMessage := ensureReceiverWorkflowHint(firstNonEmpty(input.ListenerMessage, defaultListenerMessage), defaultListenerMessage, targetLabel)
+		listenerMessage := strings.TrimSpace(input.ListenerMessage)
 		if activeSessionStatuses[strings.TrimSpace(data.Status)] {
 			notifyNeeded = true
 			listenerStatus = "not_needed_existing_session"
@@ -1705,22 +1823,6 @@ func parseSessionData(text, context string) (*sessionData, error) {
 	return &data, nil
 }
 
-func parseJSONFromRunner(ctx context.Context, runner Runner, args []string, contextLabel string) (any, error) {
-	result, err := runCommand(ctx, runner, args, runOptions{})
-	if err != nil {
-		return nil, err
-	}
-	return parseJSONValue(result.Stdout, contextLabel)
-}
-
-func parseJSONValue(text, contextLabel string) (any, error) {
-	var value any
-	if err := json.Unmarshal([]byte(text), &value); err != nil {
-		return nil, fmt.Errorf("%s returned invalid JSON: %w", contextLabel, err)
-	}
-	return value, nil
-}
-
 func runCommand(ctx context.Context, runner Runner, args []string, opts runOptions) (RunResult, error) {
 	runCtx := ctx
 	var cancel context.CancelFunc
@@ -1850,31 +1952,6 @@ func extractCodexSessionIDFromArgs(args string) string {
 		return ""
 	}
 	return match[1]
-}
-
-type sendReceipt struct {
-	DeliveryID string
-}
-
-func parseSendTokens(output string) sendReceipt {
-	var receipt sendReceipt
-	for _, token := range strings.Fields(output) {
-		if strings.HasPrefix(token, "delivery_id=") {
-			receipt.DeliveryID = strings.TrimPrefix(token, "delivery_id=")
-		}
-	}
-	return receipt
-}
-
-func validateSendReceipt(ids sendReceipt, output string) (sendReceipt, error) {
-	if ids.DeliveryID != "" {
-		return ids, nil
-	}
-	detail := strings.TrimSpace(output)
-	if detail == "" {
-		detail = "<empty stdout>"
-	}
-	return sendReceipt{}, fmt.Errorf("agent-mailbox send returned incomplete receipt: missing delivery_id :: %s", detail)
 }
 
 func buildReminderSubscription(addresses []string, groupViews []reminderGroupViewInput, route, olderThan string, activePush bool) (reminderSubscription, error) {
