@@ -51,10 +51,10 @@ Show the available build targets:
 make help
 ```
 
-Build the stdio MCP server:
+Run the stdio MCP server from the main binary:
 
 ```bash
-make build-mcp
+make run-mcp
 ```
 
 ## Install
@@ -81,22 +81,22 @@ reference, see [`docs/cli.md`](docs/cli.md).
 
 ## MCP Server
 
-This repo also ships an in-repo Go stdio MCP server that mirrors the mailbox
-and agent-deck tool surface previously hosted out of tree.
+This repo ships an in-repo Go stdio MCP server that now runs as a built-in
+subcommand of the main `agent-mailbox` binary.
 
-Build it locally:
+Build the main binary locally:
 
 ```bash
-make build-mcp
+make build
 ```
 
-This produces:
+Run the MCP server directly:
 
-```text
-./bin/agent-mailbox-mcp
+```bash
+./bin/agent-mailbox mcp
 ```
 
-Run it directly:
+Or use the convenience target:
 
 ```bash
 make run-mcp
@@ -106,7 +106,8 @@ Example MCP config:
 
 ```toml
 [mcp_servers.agent_mailbox]
-command = "/absolute/path/to/agent-mailbox/bin/agent-mailbox-mcp"
+command = "/absolute/path/to/agent-mailbox/bin/agent-mailbox"
+args = ["mcp"]
 ```
 
 The Go MCP entrypoint keeps the existing tool names:

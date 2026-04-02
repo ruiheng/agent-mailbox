@@ -264,6 +264,20 @@ Rules:
 
 ## Commands
 
+### `mcp`
+
+Run the built-in stdio MCP server from the main binary.
+
+```bash
+agent-mailbox mcp
+```
+
+Notes:
+
+- this starts the mailbox MCP server over stdio
+- use the main `agent-mailbox` binary in MCP configs and pass `mcp` as the first argument
+- `--state-dir` remains a global option on the main binary, but the MCP server manages mailbox state through its own tool calls rather than per-command CLI flags
+
 ### `send`
 
 Queue one message for a recipient address, or append one message to a known group

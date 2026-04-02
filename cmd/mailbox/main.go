@@ -7,10 +7,11 @@ import (
 	"os"
 
 	"github.com/ruiheng/agent-mailbox/internal/mailbox"
+	"github.com/ruiheng/agent-mailbox/internal/rootcmd"
 )
 
 func main() {
-	app := mailbox.NewApp(os.Stdin, os.Stdout, os.Stderr)
+	app := rootcmd.New(os.Stdin, os.Stdout, os.Stderr)
 	if err := app.Run(context.Background(), os.Args[1:]); err != nil {
 		if errors.Is(err, mailbox.ErrHelpRequested) {
 			return
