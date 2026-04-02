@@ -72,8 +72,6 @@ func TestMailboxSendNotifiesWorkerTarget(t *testing.T) {
 			"--to", "agent-deck/target",
 			"--from", "agent-deck/self",
 			"--subject", "delegate",
-			"--content-type", "text/markdown",
-			"--schema-version", "1",
 			"--body-file", "-",
 		}
 		if strings.Join(args, "\x00") != strings.Join(wantArgs, "\x00") {
@@ -128,6 +126,92 @@ func TestMailboxSendNotifiesWorkerTarget(t *testing.T) {
 	}
 	if got := output["notify_scheme"]; got != "agent-deck" {
 		t.Fatalf("notify_scheme = %v, want agent-deck", got)
+	}
+	if got := output["notify_error"]; got != nil {
+		t.Fatalf("notify_error = %v, want nil", got)
+	}
+}
+
+func TestMailboxSendPreservesMailboxDefaultsWhenMetadataOmitted(t *testing.T) {
+	mailboxRunner := &fakeRunner{t: t, handler: func(args []string, input string) (RunResult, error) {
+		for _, token := range args {
+			if token == "--content-type" || token == "--schema-version" {
+				t.Fatalf("unexpected explicit metadata flag in args: %v", args)
+			}
+		}
+		return RunResult{ExitCode: 0, Stdout: "delivery_id=dlv_2\n"}, nil
+	}}
+
+	service := newService(Options{
+		MailboxRunner: mailboxRunner,
+		CommandRunner: &fakeRunner{t: t, handler: func(args []string, input string) (RunResult, error) {
+			t.Fatalf("unexpected command call: %v", args)
+			return RunResult{}, nil
+		}},
+	})
+	service.state.boundAddresses = []string{"agent-deck/self"}
+	service.state.defaultSender = "agent-deck/self"
+	service.state.autoBindAttempted = true
+
+	output := callTool(t, service.Server(), "mailbox_send", map[string]any{
+		"to_address":   "agent-deck/self",
+		"subject":      "delegate",
+		"body":         "body",
+		"from_address": "agent-deck/self",
+	})
+
+	if got := output["delivery_id"]; got != "dlv_2" {
+		t.Fatalf("delivery_id = %v, want dlv_2", got)
+	}
+	if got := output["notify_status"]; got != "skipped_local" {
+		t.Fatalf("notify_status = %v, want skipped_local", got)
+	}
+}
+
+func TestMailboxSendReturnsReceiptWhenNotifyFails(t *testing.T) {
+	mailboxRunner := &fakeRunner{t: t, handler: func(args []string, input string) (RunResult, error) {
+		return RunResult{ExitCode: 0, Stdout: "delivery_id=dlv_3\n"}, nil
+	}}
+	commandRunner := &fakeRunner{t: t, handler: func(args []string, input string) (RunResult, error) {
+		switch {
+		case strings.Join(args, "\x00") == strings.Join([]string{"agent-deck", "session", "show", "target", "--json"}, "\x00"):
+			return RunResult{ExitCode: 0, Stdout: `{"id":"target","title":"coder-123","status":"waiting"}`}, nil
+		case len(args) == 6 && args[0] == "agent-deck" && args[1] == "session" && args[2] == "send":
+			return RunResult{ExitCode: 1, Stderr: "wakeup failed"}, nil
+		default:
+			t.Fatalf("unexpected command args: %v", args)
+			return RunResult{}, nil
+		}
+	}}
+
+	service := newService(Options{
+		MailboxRunner: mailboxRunner,
+		CommandRunner: commandRunner,
+	})
+	service.state.boundAddresses = []string{"agent-deck/self"}
+	service.state.defaultSender = "agent-deck/self"
+	service.state.autoBindAttempted = true
+
+	output := callTool(t, service.Server(), "mailbox_send", map[string]any{
+		"to_address": "agent-deck/target",
+		"subject":    "delegate",
+		"body":       "body",
+	})
+
+	if got := output["status"]; got != "sent" {
+		t.Fatalf("status = %v, want sent", got)
+	}
+	if got := output["delivery_id"]; got != "dlv_3" {
+		t.Fatalf("delivery_id = %v, want dlv_3", got)
+	}
+	if got := output["notify_status"]; got != "failed" {
+		t.Fatalf("notify_status = %v, want failed", got)
+	}
+	if got := output["notify_scheme"]; got != "agent-deck" {
+		t.Fatalf("notify_scheme = %v, want agent-deck", got)
+	}
+	if got := output["notify_error"]; got == nil || !strings.Contains(got.(string), "wakeup failed") {
+		t.Fatalf("notify_error = %v, want wakeup failure detail", got)
 	}
 }
 

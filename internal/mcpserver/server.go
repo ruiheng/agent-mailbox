@@ -371,24 +371,21 @@ func (s *Service) mailboxSend(ctx context.Context, _ *mcp.CallToolRequest, input
 		return nil, nil, err
 	}
 
-	contentType := strings.TrimSpace(input.ContentType)
-	if contentType == "" {
-		contentType = "text/markdown"
-	}
-	schemaVersion := strings.TrimSpace(input.SchemaVersion)
-	if schemaVersion == "" {
-		schemaVersion = "1"
-	}
-
-	sendResult, err := runCommand(ctx, s.mailboxRunner, []string{
+	sendArgs := []string{
 		"send",
 		"--to", input.ToAddress,
 		"--from", fromAddress,
 		"--subject", input.Subject,
-		"--content-type", contentType,
-		"--schema-version", schemaVersion,
 		"--body-file", "-",
-	}, runOptions{input: input.Body})
+	}
+	if contentType := strings.TrimSpace(input.ContentType); contentType != "" {
+		sendArgs = append(sendArgs, "--content-type", contentType)
+	}
+	if schemaVersion := strings.TrimSpace(input.SchemaVersion); schemaVersion != "" {
+		sendArgs = append(sendArgs, "--schema-version", schemaVersion)
+	}
+
+	sendResult, err := runCommand(ctx, s.mailboxRunner, sendArgs, runOptions{input: input.Body})
 	if err != nil {
 		return nil, nil, err
 	}
@@ -400,45 +397,54 @@ func (s *Service) mailboxSend(ctx context.Context, _ *mcp.CallToolRequest, input
 
 	notifyStatus := "skipped_local"
 	var notifyScheme any
+	var notifyError any
 	if !s.isLocalAddress(ctx, input.ToAddress) {
-		address, err := parseAddress(input.ToAddress)
-		if err != nil {
-			return nil, nil, err
-		}
-		switch address.Scheme {
-		case "agent-deck":
-			if input.NotifyMessage != nil && strings.TrimSpace(*input.NotifyMessage) == "" {
-				notifyStatus = "skipped_disabled"
+		address, parseErr := parseAddress(input.ToAddress)
+		if parseErr != nil {
+			notifyStatus = "failed"
+			notifyError = parseErr.Error()
+		} else {
+			switch address.Scheme {
+			case "agent-deck":
+				if input.NotifyMessage != nil && strings.TrimSpace(*input.NotifyMessage) == "" {
+					notifyStatus = "skipped_disabled"
+					notifyScheme = address.Scheme
+					break
+				}
+				targetLabel := address.ID
+				targetSession, resolveErr := s.resolveSessionShowBestEffort(ctx, address.ID)
+				if resolveErr != nil {
+					notifyStatus = "failed"
+					notifyScheme = address.Scheme
+					notifyError = resolveErr.Error()
+					break
+				}
+				if targetSession != nil && strings.TrimSpace(targetSession.Title) != "" {
+					targetLabel = strings.TrimSpace(targetSession.Title)
+				}
+				notifyMessage := defaultNotifyMessage
+				if input.NotifyMessage != nil && strings.TrimSpace(*input.NotifyMessage) != "" {
+					notifyMessage = *input.NotifyMessage
+				}
+				notifyMessage = ensureReceiverWorkflowHint(notifyMessage, defaultNotifyMessage, targetLabel)
+				_, notifyErr := runCommand(ctx, s.commandRunner, []string{
+					"agent-deck", "session", "send", "--no-wait", address.ID, notifyMessage,
+				}, runOptions{timeout: syncCmdTimeout})
+				if notifyErr != nil {
+					notifyStatus = "failed"
+					notifyScheme = address.Scheme
+					notifyError = notifyErr.Error()
+					break
+				}
+				notifyStatus = "sent"
 				notifyScheme = address.Scheme
-				break
+			case "codex":
+				notifyStatus = "unsupported"
+				notifyScheme = address.Scheme
+			default:
+				notifyStatus = "unsupported"
+				notifyScheme = address.Scheme
 			}
-			targetSession, err := s.resolveSessionShowBestEffort(ctx, address.ID)
-			if err != nil {
-				return nil, nil, err
-			}
-			targetLabel := address.ID
-			if targetSession != nil && strings.TrimSpace(targetSession.Title) != "" {
-				targetLabel = strings.TrimSpace(targetSession.Title)
-			}
-			notifyMessage := defaultNotifyMessage
-			if input.NotifyMessage != nil && strings.TrimSpace(*input.NotifyMessage) != "" {
-				notifyMessage = *input.NotifyMessage
-			}
-			notifyMessage = ensureReceiverWorkflowHint(notifyMessage, defaultNotifyMessage, targetLabel)
-			_, err = runCommand(ctx, s.commandRunner, []string{
-				"agent-deck", "session", "send", "--no-wait", address.ID, notifyMessage,
-			}, runOptions{timeout: syncCmdTimeout})
-			if err != nil {
-				return nil, nil, err
-			}
-			notifyStatus = "sent"
-			notifyScheme = address.Scheme
-		case "codex":
-			notifyStatus = "unsupported"
-			notifyScheme = address.Scheme
-		default:
-			notifyStatus = "unsupported"
-			notifyScheme = address.Scheme
 		}
 	}
 
@@ -450,6 +456,7 @@ func (s *Service) mailboxSend(ctx context.Context, _ *mcp.CallToolRequest, input
 		"delivery_id":   sendIDs.DeliveryID,
 		"notify_status": notifyStatus,
 		"notify_scheme": notifyScheme,
+		"notify_error":  notifyError,
 	}, nil
 }
 
