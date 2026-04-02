@@ -28,6 +28,7 @@ const (
 	defaultReminderConfirmDelay = 2 * time.Second
 	notificationDelivery        = "delivery_available"
 	notificationStaleUnread     = "stale_unread"
+	defaultListenerMessage      = "If agent_mailbox is not bound yet, first run agent-deck session current --json and call mailbox_bind for this session. When a wakeup message arrives, use the 'check-agent-mail' skill and execute its requested action."
 	defaultNotifyMessage        = "Use the 'check-agent-mail' skill now. Receive the pending message and execute its requested action."
 	mailboxRecoveryHint         = "If you forget the mailbox details or next action after ack, use `mailbox_read` on the latest `acked` delivery for this session. For older mail, use `mailbox_list` with `state: acked` and then `mailbox_read` by delivery id."
 	serverInstructions          = "Bootstrap this MCP process once per agent-managed session. If it is not bound yet, run `agent-deck session current --json`, take the current session id, and call `mailbox_bind`. Use `agent-deck/<id>` as the default sender. Pass `default_workdir` when you want later `agent_deck_ensure_session` calls to create sessions in the current project. `mailbox_wait` is not recommended for normal workflow; prefer `mailbox_recv`. Later reuse the bound addresses until MCP state is lost."
@@ -1489,16 +1490,15 @@ func (s *Service) agentDeckEnsureSession(ctx context.Context, _ *mcp.CallToolReq
 			return nil, nil, fmt.Errorf("workdir does not exist: %s", workdir)
 		}
 
-		listenerMessage := strings.TrimSpace(input.ListenerMessage)
+		targetLabel := firstNonEmpty(input.EnsureTitle, input.SessionRef, identifier)
+		listenerMessage := ensureReceiverWorkflowHint(firstNonEmpty(input.ListenerMessage, defaultListenerMessage), defaultListenerMessage, targetLabel)
 		launchArgs := []string{
 			"agent-deck", "launch", "--json",
 			"--title", input.EnsureTitle,
 			"--parent", input.ParentSessionID,
 			"--cmd", input.EnsureCmd,
 		}
-		if listenerMessage != "" {
-			launchArgs = append(launchArgs, "--message", listenerMessage)
-		}
+		launchArgs = append(launchArgs, "--message", listenerMessage)
 		launchArgs = append(launchArgs, workdir)
 		launchResult, err := runCommand(ctx, s.commandRunner, launchArgs, runOptions{})
 		if err != nil {
@@ -1512,16 +1512,13 @@ func (s *Service) agentDeckEnsureSession(ctx context.Context, _ *mcp.CallToolReq
 		startedSession = true
 		listenerStatus = "started_waiting"
 	} else {
-		listenerMessage := strings.TrimSpace(input.ListenerMessage)
+		targetLabel := firstNonEmpty(data.Title, input.SessionRef, identifier, data.ID)
+		listenerMessage := ensureReceiverWorkflowHint(firstNonEmpty(input.ListenerMessage, defaultListenerMessage), defaultListenerMessage, targetLabel)
 		if activeSessionStatuses[strings.TrimSpace(data.Status)] {
 			notifyNeeded = true
 			listenerStatus = "not_needed_existing_session"
 		} else {
-			startArgs := []string{"agent-deck", "session", "start", "--json"}
-			if listenerMessage != "" {
-				startArgs = append(startArgs, "-m", listenerMessage)
-			}
-			startArgs = append(startArgs, data.ID)
+			startArgs := []string{"agent-deck", "session", "start", "--json", "-m", listenerMessage, data.ID}
 			if _, err := runCommand(ctx, s.commandRunner, startArgs, runOptions{}); err != nil {
 				return nil, nil, err
 			}
@@ -1533,11 +1530,7 @@ func (s *Service) agentDeckEnsureSession(ctx context.Context, _ *mcp.CallToolReq
 				data = refreshed
 			}
 			startedSession = true
-			if listenerMessage != "" {
-				listenerStatus = "started_waiting"
-			} else {
-				listenerStatus = "started"
-			}
+			listenerStatus = "started_waiting"
 		}
 	}
 

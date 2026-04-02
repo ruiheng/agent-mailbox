@@ -1060,7 +1060,7 @@ func TestAgentDeckEnsureSessionStartsInactiveTarget(t *testing.T) {
 		switch {
 		case strings.Join(args, "\x00") == strings.Join([]string{"agent-deck", "session", "show", "coder-ref", "--json"}, "\x00"):
 			return RunResult{ExitCode: 0, Stdout: `{"id":"session-1","title":"coder-123","status":"stopped"}`}, nil
-		case strings.Join(args, "\x00") == strings.Join([]string{"agent-deck", "session", "start", "--json", "session-1"}, "\x00"):
+		case strings.Join(args, "\x00") == strings.Join([]string{"agent-deck", "session", "start", "--json", "-m", ensureReceiverWorkflowHint(defaultListenerMessage, defaultListenerMessage, "coder-123"), "session-1"}, "\x00"):
 			return RunResult{ExitCode: 0}, nil
 		case strings.Join(args, "\x00") == strings.Join([]string{"agent-deck", "session", "show", "session-1", "--json"}, "\x00"):
 			return RunResult{ExitCode: 0, Stdout: `{"id":"session-1","title":"coder-123","status":"waiting"}`}, nil
@@ -1092,8 +1092,8 @@ func TestAgentDeckEnsureSessionStartsInactiveTarget(t *testing.T) {
 	if got := output["notify_needed"]; got != false {
 		t.Fatalf("notify_needed = %v, want false", got)
 	}
-	if got := output["listener_status"]; got != "started" {
-		t.Fatalf("listener_status = %v, want started", got)
+	if got := output["listener_status"]; got != "started_waiting" {
+		t.Fatalf("listener_status = %v, want started_waiting", got)
 	}
 }
 
@@ -1102,7 +1102,7 @@ func TestAgentDeckEnsureSessionStartsInactiveTargetWithExplicitListenerMessage(t
 		switch {
 		case strings.Join(args, "\x00") == strings.Join([]string{"agent-deck", "session", "show", "coder-ref", "--json"}, "\x00"):
 			return RunResult{ExitCode: 0, Stdout: `{"id":"session-1","title":"coder-123","status":"stopped"}`}, nil
-		case strings.Join(args, "\x00") == strings.Join([]string{"agent-deck", "session", "start", "--json", "-m", "listen now", "session-1"}, "\x00"):
+		case strings.Join(args, "\x00") == strings.Join([]string{"agent-deck", "session", "start", "--json", "-m", ensureReceiverWorkflowHint("listen now", defaultListenerMessage, "coder-123"), "session-1"}, "\x00"):
 			return RunResult{ExitCode: 0}, nil
 		case strings.Join(args, "\x00") == strings.Join([]string{"agent-deck", "session", "show", "session-1", "--json"}, "\x00"):
 			return RunResult{ExitCode: 0, Stdout: `{"id":"session-1","title":"coder-123","status":"waiting"}`}, nil
@@ -1131,7 +1131,7 @@ func TestAgentDeckEnsureSessionStartsInactiveTargetWithExplicitListenerMessage(t
 func TestAgentDeckEnsureSessionCreatesTargetWithoutDefaultListenerMessage(t *testing.T) {
 	commandRunner := &fakeRunner{t: t, handler: func(args []string, input string) (RunResult, error) {
 		switch {
-		case strings.Join(args, "\x00") == strings.Join([]string{"agent-deck", "launch", "--json", "--title", "coder-ref", "--parent", "planner-1", "--cmd", "codex --model gpt-5.4 --ask-for-approval on-request", "/tmp"}, "\x00"):
+		case strings.Join(args, "\x00") == strings.Join([]string{"agent-deck", "launch", "--json", "--title", "coder-ref", "--parent", "planner-1", "--cmd", "codex --model gpt-5.4 --ask-for-approval on-request", "--message", ensureReceiverWorkflowHint(defaultListenerMessage, defaultListenerMessage, "coder-ref"), "/tmp"}, "\x00"):
 			return RunResult{ExitCode: 0, Stdout: `{"id":"session-2","title":"coder-ref","status":"waiting"}`}, nil
 		default:
 			t.Fatalf("unexpected command args: %v", args)
