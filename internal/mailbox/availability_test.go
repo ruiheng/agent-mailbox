@@ -107,6 +107,59 @@ func TestAvailabilityListPersonalStaleAddressesUsesClaimableEligibility(t *testi
 	}
 }
 
+func TestAvailabilityListClaimablePersonalAddressesUsesClaimableEligibility(t *testing.T) {
+	t.Parallel()
+
+	runtime, store := newLeaseTestStore(t)
+	defer runtime.Close()
+
+	current := time.Date(2026, 4, 1, 11, 30, 0, 0, time.UTC)
+	store.now = func() time.Time { return current }
+
+	queued := mustSendMessage(t, store, "workflow/claimable-queued", "agent/sender", "queued", "queued body")
+
+	current = current.Add(time.Second)
+	mustSendMessage(t, store, "workflow/claimable-leased", "agent/sender", "leased", "leased body")
+	received, err := store.Receive(context.Background(), ReceiveParams{Address: "workflow/claimable-leased"})
+	if err != nil {
+		t.Fatalf("Receive(claimable leased) error = %v", err)
+	}
+
+	current = current.Add(defaultLeaseTimeout + time.Second)
+	scope, err := store.availability().resolvePersonal(context.Background(), store.readDB, []string{
+		"workflow/claimable-queued",
+		"workflow/claimable-leased",
+	})
+	if err != nil {
+		t.Fatalf("resolvePersonal() error = %v", err)
+	}
+
+	claimable, err := store.availability().listClaimablePersonalAddresses(
+		context.Background(),
+		store.readDB,
+		scope,
+		formatTimestamp(store.now()),
+	)
+	if err != nil {
+		t.Fatalf("listClaimablePersonalAddresses() error = %v", err)
+	}
+	if len(claimable) != 2 {
+		t.Fatalf("len(listClaimablePersonalAddresses()) = %d, want 2", len(claimable))
+	}
+	if claimable[0].Address != "workflow/claimable-queued" || claimable[1].Address != "workflow/claimable-leased" {
+		t.Fatalf("listClaimablePersonalAddresses() addresses = [%q %q], want [workflow/claimable-queued workflow/claimable-leased]", claimable[0].Address, claimable[1].Address)
+	}
+	if claimable[0].OldestEligibleAt != queued.VisibleAtUTC {
+		t.Fatalf("claimable[0].oldest_eligible_at = %q, want %q", claimable[0].OldestEligibleAt, queued.VisibleAtUTC)
+	}
+	if claimable[1].OldestEligibleAt != received.LeaseExpiresAt {
+		t.Fatalf("claimable[1].oldest_eligible_at = %q, want %q", claimable[1].OldestEligibleAt, received.LeaseExpiresAt)
+	}
+	if claimable[0].ClaimableCount != 1 || claimable[1].ClaimableCount != 1 {
+		t.Fatalf("claimable counts = [%d %d], want [1 1]", claimable[0].ClaimableCount, claimable[1].ClaimableCount)
+	}
+}
+
 func TestAvailabilityListGroupMessagesUsesVisibilityCutoffForUnreadView(t *testing.T) {
 	t.Parallel()
 

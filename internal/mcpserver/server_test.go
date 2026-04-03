@@ -20,6 +20,7 @@ type fakeMailboxService struct {
 	sendFunc                func(context.Context, mailbox.SendParams) (mailbox.SendResult, error)
 	listFunc                func(context.Context, mailbox.ListParams) ([]mailbox.ListedDelivery, error)
 	listGroupMessagesFunc   func(context.Context, mailbox.GroupListParams) ([]mailbox.GroupListedMessage, error)
+	listClaimableFunc       func(context.Context, []string) ([]mailbox.ClaimableAddress, error)
 	listStaleAddressesFunc  func(context.Context, mailbox.StaleAddressesParams) ([]mailbox.StaleAddress, error)
 	receiveBatchFunc        func(context.Context, mailbox.ReceiveBatchParams) (mailbox.ReceiveResult, error)
 	receiveBatchWithTTLFunc func(context.Context, mailbox.ReceiveBatchParams, time.Duration) (mailbox.ReceiveResult, error)
@@ -54,6 +55,13 @@ func (f *fakeMailboxService) ListGroupMessages(ctx context.Context, params mailb
 		f.t.Fatalf("unexpected ListGroupMessages call: %+v", params)
 	}
 	return f.listGroupMessagesFunc(ctx, params)
+}
+
+func (f *fakeMailboxService) ListClaimableAddresses(ctx context.Context, addresses []string) ([]mailbox.ClaimableAddress, error) {
+	if f.listClaimableFunc == nil {
+		return []mailbox.ClaimableAddress{}, nil
+	}
+	return f.listClaimableFunc(ctx, addresses)
 }
 
 func (f *fakeMailboxService) ListStaleAddresses(ctx context.Context, params mailbox.StaleAddressesParams) ([]mailbox.StaleAddress, error) {
@@ -555,16 +563,14 @@ func TestServiceServerReturnsStableInstance(t *testing.T) {
 func TestMailboxOverviewResourceCapabilitiesAndNotifications(t *testing.T) {
 	updateCh := make(chan struct{}, 1)
 	mailboxService := &fakeMailboxService{t: t}
-	mailboxService.listFunc = func(_ context.Context, params mailbox.ListParams) ([]mailbox.ListedDelivery, error) {
-		if params.Address != "agent-deck/self" {
-			t.Fatalf("list address = %q, want agent-deck/self", params.Address)
+	mailboxService.listClaimableFunc = func(_ context.Context, addresses []string) ([]mailbox.ClaimableAddress, error) {
+		if len(addresses) != 1 || addresses[0] != "agent-deck/self" {
+			t.Fatalf("claimable addresses = %v, want [agent-deck/self]", addresses)
 		}
-		return []mailbox.ListedDelivery{{
-			DeliveryID:       "dlv_visible",
-			RecipientAddress: "agent-deck/self",
-			VisibleAt:        "2026-04-03T00:40:00Z",
-			MessageCreatedAt: "2026-04-03T00:40:00Z",
-			Subject:          "delegate",
+		return []mailbox.ClaimableAddress{{
+			Address:          "agent-deck/self",
+			OldestEligibleAt: "2026-04-03T00:40:00Z",
+			ClaimableCount:   1,
 		}}, nil
 	}
 
@@ -627,14 +633,14 @@ func TestMailboxOverviewResourceCapabilitiesAndNotifications(t *testing.T) {
 	if got := overview["default_sender"]; got != "agent-deck/self" {
 		t.Fatalf("default_sender = %v, want agent-deck/self", got)
 	}
-	if got := overview["has_visible_delivery"]; got != true {
-		t.Fatalf("has_visible_delivery = %v, want true", got)
+	if got := overview["has_claimable_delivery"]; got != true {
+		t.Fatalf("has_claimable_delivery = %v, want true", got)
 	}
-	if got := overview["queued_visible_count"]; got != float64(1) {
-		t.Fatalf("queued_visible_count = %v, want 1", got)
+	if got := overview["claimable_delivery_count"]; got != float64(1) {
+		t.Fatalf("claimable_delivery_count = %v, want 1", got)
 	}
-	if got := overview["oldest_eligible_at"]; got != "2026-04-03T00:40:00Z" {
-		t.Fatalf("oldest_eligible_at = %v, want oldest visible timestamp", got)
+	if got := overview["oldest_claimable_at"]; got != "2026-04-03T00:40:00Z" {
+		t.Fatalf("oldest_claimable_at = %v, want oldest claimable timestamp", got)
 	}
 }
 
@@ -642,21 +648,18 @@ func TestProcessWakeSchedulerUsesLocalHintThenAgentDeckWake(t *testing.T) {
 	current := time.Date(2026, 4, 3, 6, 0, 0, 0, time.UTC)
 	mailboxService := &fakeMailboxService{t: t}
 	mailboxService.listFunc = func(_ context.Context, params mailbox.ListParams) ([]mailbox.ListedDelivery, error) {
-		switch params.Address {
-		case "agent-deck/worker":
-			return []mailbox.ListedDelivery{}, nil
-		case "codex/self":
-			return []mailbox.ListedDelivery{{
-				DeliveryID:       "dlv_pending",
-				RecipientAddress: "codex/self",
-				VisibleAt:        current.Add(-4 * time.Minute).Format(time.RFC3339Nano),
-				MessageCreatedAt: current.Add(-4 * time.Minute).Format(time.RFC3339Nano),
-				Subject:          "delegate",
-			}}, nil
-		default:
-			t.Fatalf("unexpected List address: %q", params.Address)
-			return nil, nil
+		t.Fatalf("wake scheduler should not use List for claimable state: %+v", params)
+		return nil, nil
+	}
+	mailboxService.listClaimableFunc = func(_ context.Context, addresses []string) ([]mailbox.ClaimableAddress, error) {
+		if len(addresses) != 2 {
+			t.Fatalf("claimable addresses = %v, want two bound addresses", addresses)
 		}
+		return []mailbox.ClaimableAddress{{
+			Address:          "codex/self",
+			OldestEligibleAt: current.Add(-4 * time.Minute).Format(time.RFC3339Nano),
+			ClaimableCount:   1,
+		}}, nil
 	}
 
 	commandRunner := &fakeRunner{t: t, handler: func(args []string, input string) (RunResult, error) {
@@ -725,21 +728,18 @@ func TestProcessWakeSchedulerIgnoresDisconnectedOverviewSubscriber(t *testing.T)
 	current := time.Date(2026, 4, 3, 6, 0, 0, 0, time.UTC)
 	mailboxService := &fakeMailboxService{t: t}
 	mailboxService.listFunc = func(_ context.Context, params mailbox.ListParams) ([]mailbox.ListedDelivery, error) {
-		switch params.Address {
-		case "agent-deck/worker":
-			return []mailbox.ListedDelivery{}, nil
-		case "codex/self":
-			return []mailbox.ListedDelivery{{
-				DeliveryID:       "dlv_pending",
-				RecipientAddress: "codex/self",
-				VisibleAt:        current.Add(-4 * time.Minute).Format(time.RFC3339Nano),
-				MessageCreatedAt: current.Add(-4 * time.Minute).Format(time.RFC3339Nano),
-				Subject:          "delegate",
-			}}, nil
-		default:
-			t.Fatalf("unexpected List address: %q", params.Address)
-			return nil, nil
+		t.Fatalf("wake scheduler should not use List for claimable state: %+v", params)
+		return nil, nil
+	}
+	mailboxService.listClaimableFunc = func(_ context.Context, addresses []string) ([]mailbox.ClaimableAddress, error) {
+		if len(addresses) != 2 {
+			t.Fatalf("claimable addresses = %v, want two bound addresses", addresses)
 		}
+		return []mailbox.ClaimableAddress{{
+			Address:          "codex/self",
+			OldestEligibleAt: current.Add(-4 * time.Minute).Format(time.RFC3339Nano),
+			ClaimableCount:   1,
+		}}, nil
 	}
 
 	commandRunner := &fakeRunner{t: t, handler: func(args []string, input string) (RunResult, error) {
@@ -795,21 +795,18 @@ func TestProcessWakeSchedulerExhaustsWakeableAgentDeckTargets(t *testing.T) {
 	current := time.Date(2026, 4, 3, 6, 0, 0, 0, time.UTC)
 	mailboxService := &fakeMailboxService{t: t}
 	mailboxService.listFunc = func(_ context.Context, params mailbox.ListParams) ([]mailbox.ListedDelivery, error) {
-		switch params.Address {
-		case "agent-deck/worker-a", "agent-deck/worker-b":
-			return []mailbox.ListedDelivery{}, nil
-		case "codex/self":
-			return []mailbox.ListedDelivery{{
-				DeliveryID:       "dlv_pending",
-				RecipientAddress: "codex/self",
-				VisibleAt:        current.Add(-4 * time.Minute).Format(time.RFC3339Nano),
-				MessageCreatedAt: current.Add(-4 * time.Minute).Format(time.RFC3339Nano),
-				Subject:          "delegate",
-			}}, nil
-		default:
-			t.Fatalf("unexpected List address: %q", params.Address)
-			return nil, nil
+		t.Fatalf("wake scheduler should not use List for claimable state: %+v", params)
+		return nil, nil
+	}
+	mailboxService.listClaimableFunc = func(_ context.Context, addresses []string) ([]mailbox.ClaimableAddress, error) {
+		if len(addresses) != 3 {
+			t.Fatalf("claimable addresses = %v, want three bound addresses", addresses)
 		}
+		return []mailbox.ClaimableAddress{{
+			Address:          "codex/self",
+			OldestEligibleAt: current.Add(-4 * time.Minute).Format(time.RFC3339Nano),
+			ClaimableCount:   1,
+		}}, nil
 	}
 
 	commandRunner := &fakeRunner{t: t, handler: func(args []string, input string) (RunResult, error) {
@@ -858,6 +855,73 @@ func TestProcessWakeSchedulerExhaustsWakeableAgentDeckTargets(t *testing.T) {
 	runtime := service.wakeSchedulerState.runtimeForScope("local/agent-deck/worker-a", current.Add(-4*time.Minute).Format(time.RFC3339Nano))
 	if runtime.LastWakeByChannel[WakeChannelAgentDeck] == "" {
 		t.Fatal("agent_deck wake was not recorded after second target succeeded")
+	}
+}
+
+func TestProcessWakeSchedulerFallsThroughWhenMailboxOverviewUpdateFails(t *testing.T) {
+	current := time.Date(2026, 4, 3, 6, 0, 0, 0, time.UTC)
+	mailboxService := &fakeMailboxService{t: t}
+	mailboxService.listClaimableFunc = func(_ context.Context, addresses []string) ([]mailbox.ClaimableAddress, error) {
+		return []mailbox.ClaimableAddress{{
+			Address:          "codex/self",
+			OldestEligibleAt: current.Add(-4 * time.Minute).Format(time.RFC3339Nano),
+			ClaimableCount:   1,
+		}}, nil
+	}
+
+	commandRunner := &fakeRunner{t: t, handler: func(args []string, input string) (RunResult, error) {
+		switch {
+		case strings.Join(args, "\x00") == strings.Join([]string{"agent-deck", "session", "show", "worker", "--json"}, "\x00"):
+			return RunResult{ExitCode: 0, Stdout: `{"id":"worker","title":"coder-123","status":"waiting"}`}, nil
+		case len(args) == 6 && args[0] == "agent-deck" && args[1] == "session" && args[2] == "send":
+			return RunResult{ExitCode: 0}, nil
+		default:
+			t.Fatalf("unexpected command args: %v", args)
+			return RunResult{}, nil
+		}
+	}}
+
+	service := newService(Options{
+		MailboxServiceFactory: fakeMailboxServiceFactory{service: mailboxService},
+		CommandRunner:         commandRunner,
+		Now:                   func() time.Time { return current },
+		DisableWakeScheduler:  true,
+	})
+	service.state.boundAddresses = []string{"agent-deck/worker", "codex/self"}
+	service.state.defaultSender = "agent-deck/worker"
+	service.state.autoBindAttempted = true
+	service.state.detectedAgentDeckSession = "worker"
+	service.state.detectedAgentSession = "self"
+	service.mailboxOverviewEmitter = func(context.Context) notificationOutcome {
+		return notificationOutcome{
+			Status: "failed",
+			Scheme: string(WakeHintMCPResourceUpdated),
+			Err:    fmt.Errorf("resource update failed"),
+		}
+	}
+
+	server := service.Server()
+	clientSession, cleanup := connectTestClientSession(t, server, nil)
+	defer cleanup()
+	if err := clientSession.Subscribe(context.Background(), &mcp.SubscribeParams{URI: mailboxOverviewURI}); err != nil {
+		t.Fatalf("Subscribe() error = %v", err)
+	}
+
+	if err := service.processWakeScheduler(context.Background()); err != nil {
+		t.Fatalf("processWakeScheduler() error = %v", err)
+	}
+
+	calls := commandRunner.Calls()
+	if len(calls) != 2 {
+		t.Fatalf("command calls = %v, want probe + send after local hint failure", calls)
+	}
+
+	runtime := service.wakeSchedulerState.runtimeForScope("local/agent-deck/worker", current.Add(-4*time.Minute).Format(time.RFC3339Nano))
+	if runtime.LastWakeByChannel[WakeHintMCPResourceUpdated] != "" {
+		t.Fatal("mcp_resource_updated should not be recorded after failed local hint")
+	}
+	if runtime.LastWakeByChannel[WakeChannelAgentDeck] == "" {
+		t.Fatal("agent_deck wake should be recorded after local hint failure")
 	}
 }
 

@@ -53,6 +53,7 @@ type mailboxService interface {
 	Send(context.Context, mailbox.SendParams) (mailbox.SendResult, error)
 	List(context.Context, mailbox.ListParams) ([]mailbox.ListedDelivery, error)
 	ListGroupMessages(context.Context, mailbox.GroupListParams) ([]mailbox.GroupListedMessage, error)
+	ListClaimableAddresses(context.Context, []string) ([]mailbox.ClaimableAddress, error)
 	ListStaleAddresses(context.Context, mailbox.StaleAddressesParams) ([]mailbox.StaleAddress, error)
 	ReceiveBatch(context.Context, mailbox.ReceiveBatchParams) (mailbox.ReceiveResult, error)
 	ReceiveBatchWithLeaseTTL(context.Context, mailbox.ReceiveBatchParams, time.Duration) (mailbox.ReceiveResult, error)
@@ -98,24 +99,25 @@ type Options struct {
 }
 
 type Service struct {
-	mailboxServices       mailboxServiceFactory
-	commandRunner         Runner
-	sessions              *sessionManager
-	notifications         *notificationManager
-	activeLeases          *activeLeaseManager
-	state                 *serverState
-	now                   func() time.Time
-	mcpLeaseTTL           time.Duration
-	leaseRenewInterval    time.Duration
-	disableLeaseRenewLoop bool
-	wakePollInterval      time.Duration
-	disableWakeScheduler  bool
-	wakeSchedulerState    *wakeSchedulerState
-	overviewSubscriptions *resourceSubscriptionState
-	leaseRenewLoopOnce    sync.Once
-	wakeSchedulerLoopOnce sync.Once
-	serverMu              sync.Mutex
-	server                *mcp.Server
+	mailboxServices        mailboxServiceFactory
+	commandRunner          Runner
+	sessions               *sessionManager
+	notifications          *notificationManager
+	activeLeases           *activeLeaseManager
+	state                  *serverState
+	now                    func() time.Time
+	mcpLeaseTTL            time.Duration
+	leaseRenewInterval     time.Duration
+	disableLeaseRenewLoop  bool
+	wakePollInterval       time.Duration
+	disableWakeScheduler   bool
+	wakeSchedulerState     *wakeSchedulerState
+	overviewSubscriptions  *resourceSubscriptionState
+	mailboxOverviewEmitter func(context.Context) notificationOutcome
+	leaseRenewLoopOnce     sync.Once
+	wakeSchedulerLoopOnce  sync.Once
+	serverMu               sync.Mutex
+	server                 *mcp.Server
 }
 
 type runOptions struct {
@@ -179,6 +181,7 @@ func newService(opts Options) *Service {
 	service.activeLeases = newActiveLeaseManager()
 	service.wakeSchedulerState = newWakeSchedulerState()
 	service.overviewSubscriptions = newResourceSubscriptionState()
+	service.mailboxOverviewEmitter = service.emitMailboxOverviewUpdated
 	return service
 }
 

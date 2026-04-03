@@ -26,7 +26,7 @@ func (s *Service) registerMailboxOverviewResource(server *mcp.Server) {
 		URI:         mailboxOverviewURI,
 		Name:        "mailbox-bound-overview",
 		Title:       "Mailbox Overview",
-		Description: "Summary snapshot of the currently bound mailbox scope for this MCP server instance.",
+		Description: "Summary snapshot of currently claimable mailbox work for the bound scope in this MCP server instance.",
 		MIMEType:    "application/json",
 	}, s.readMailboxOverviewResource)
 }
@@ -79,21 +79,31 @@ func (s *Service) mailboxOverviewSnapshot(ctx context.Context) (map[string]any, 
 		return nil, err
 	}
 	return map[string]any{
-		"bound_addresses":      bound.BoundAddresses,
-		"default_sender":       nilIfEmpty(bound.DefaultSender),
-		"has_visible_delivery": visible.QueuedVisibleCount > 0,
-		"queued_visible_count": visible.QueuedVisibleCount,
-		"oldest_eligible_at":   nilIfEmpty(visible.OldestEligibleAt),
+		"bound_addresses":          bound.BoundAddresses,
+		"default_sender":           nilIfEmpty(bound.DefaultSender),
+		"has_claimable_delivery":   visible.QueuedVisibleCount > 0,
+		"claimable_delivery_count": visible.QueuedVisibleCount,
+		"oldest_claimable_at":      nilIfEmpty(visible.OldestEligibleAt),
 	}, nil
 }
 
-func (s *Service) emitMailboxOverviewUpdatedBestEffort(ctx context.Context) {
+func (s *Service) emitMailboxOverviewUpdated(ctx context.Context) notificationOutcome {
 	if !s.overviewSubscriptions.hasLiveSubscribers(s.Server()) {
-		return
+		return notificationOutcome{Status: "unsupported", Scheme: string(WakeHintMCPResourceUpdated)}
 	}
 	if err := s.Server().ResourceUpdated(ctx, &mcp.ResourceUpdatedNotificationParams{URI: mailboxOverviewURI}); err != nil {
 		log.Printf("mcpserver mailbox_overview_update_failed uri=%s err=%v", mailboxOverviewURI, err)
+		return notificationOutcome{
+			Status: "failed",
+			Scheme: string(WakeHintMCPResourceUpdated),
+			Err:    err,
+		}
 	}
+	return notificationOutcome{Status: "sent", Scheme: string(WakeHintMCPResourceUpdated)}
+}
+
+func (s *Service) emitMailboxOverviewUpdatedBestEffort(ctx context.Context) {
+	_ = s.emitMailboxOverviewUpdated(ctx)
 }
 
 func (s *resourceSubscriptionState) add(session *mcp.ServerSession) {

@@ -496,9 +496,9 @@ Suggested content:
 {
   "bound_addresses": ["agent-deck/<id>", "codex/<id>"],
   "default_sender": "agent-deck/<id>",
-  "has_visible_delivery": true,
-  "queued_visible_count": 2,
-  "oldest_eligible_at": "2026-04-03T00:40:00Z"
+  "has_claimable_delivery": true,
+  "claimable_delivery_count": 2,
+  "oldest_claimable_at": "2026-04-03T00:40:00Z"
 }
 ```
 

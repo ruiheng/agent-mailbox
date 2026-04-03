@@ -32,6 +32,10 @@ func (o *Operations) ListStaleAddresses(ctx context.Context, params StaleAddress
 	return o.store.ListStaleAddresses(ctx, params)
 }
 
+func (o *Operations) ListClaimableAddresses(ctx context.Context, addresses []string) ([]ClaimableAddress, error) {
+	return o.store.ListClaimableAddresses(ctx, addresses)
+}
+
 func (o *Operations) ReceiveBatch(ctx context.Context, params ReceiveBatchParams) (ReceiveResult, error) {
 	return o.store.ReceiveBatch(ctx, params)
 }

@@ -7,8 +7,6 @@ import (
 	"strings"
 	"sync"
 	"time"
-
-	"github.com/ruiheng/agent-mailbox/internal/mailbox"
 )
 
 type WakeChannelName string
@@ -135,11 +133,13 @@ func (s *Service) tryWakeChannel(ctx context.Context, snapshot wakeSnapshot, run
 			logWakeSuppressed(snapshot, runtime, now, channel, config.Category, mailboxOverviewURI, "unavailable:no_subscribers")
 			return false
 		}
-		outcome := notificationOutcome{Status: "sent", Scheme: string(channel)}
-		s.emitMailboxOverviewUpdatedBestEffort(ctx)
+		outcome := s.mailboxOverviewEmitter(ctx)
 		logWakeAttempt(snapshot, now, channel, config.Category, mailboxOverviewURI, outcome)
-		s.wakeSchedulerState.markDelivered(snapshot.ScopeID, channel, now, snapshot.PendingSince)
-		return true
+		if notificationOutcomeDelivered(outcome) {
+			s.wakeSchedulerState.markDelivered(snapshot.ScopeID, channel, now, snapshot.PendingSince)
+			return true
+		}
+		return false
 	case WakeChannelAgentDeck:
 		attemptedWakeableTarget := false
 		for _, target := range snapshotTargetsForChannel(snapshot, channel) {
@@ -276,16 +276,14 @@ func (s *Service) visibleMailboxSnapshot(ctx context.Context, addresses []string
 	}
 	return withMailboxService(ctx, s.mailboxServices, func(service mailboxService) (visibleMailboxState, error) {
 		state := visibleMailboxState{}
-		for _, address := range addresses {
-			deliveries, err := service.List(ctx, mailbox.ListParams{Address: address})
-			if err != nil {
-				return visibleMailboxState{}, err
-			}
-			state.QueuedVisibleCount += len(deliveries)
-			for _, delivery := range deliveries {
-				if state.OldestEligibleAt == "" || delivery.VisibleAt < state.OldestEligibleAt {
-					state.OldestEligibleAt = delivery.VisibleAt
-				}
+		claimable, err := service.ListClaimableAddresses(ctx, addresses)
+		if err != nil {
+			return visibleMailboxState{}, err
+		}
+		for _, address := range claimable {
+			state.QueuedVisibleCount += address.ClaimableCount
+			if state.OldestEligibleAt == "" || address.OldestEligibleAt < state.OldestEligibleAt {
+				state.OldestEligibleAt = address.OldestEligibleAt
 			}
 		}
 		return state, nil

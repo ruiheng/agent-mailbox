@@ -285,6 +285,55 @@ ORDER BY d.visible_at ASC, m.created_at ASC, d.delivery_id ASC
 	return deliveries, nil
 }
 
+func (o availabilityOwner) listClaimablePersonalAddresses(ctx context.Context, querier rowsQuerier, scope personalAvailabilityScope, nowText string) ([]ClaimableAddress, error) {
+	if scope.empty() {
+		return []ClaimableAddress{}, nil
+	}
+
+	placeholders := strings.TrimSuffix(strings.Repeat("?,", len(scope.recipientEndpointIDs)), ",")
+	args := make([]any, 0, len(scope.recipientEndpointIDs)+2)
+	for _, recipientEndpointID := range scope.recipientEndpointIDs {
+		args = append(args, recipientEndpointID)
+	}
+	args = append(args, nowText, nowText)
+
+	rows, err := querier.QueryContext(ctx, fmt.Sprintf(`
+SELECT
+  d.recipient_endpoint_id,
+  MIN(%s) AS oldest_eligible_at,
+  COUNT(*) AS claimable_count
+FROM deliveries AS d
+WHERE d.recipient_endpoint_id IN (%s)
+  AND %s
+GROUP BY d.recipient_endpoint_id
+ORDER BY oldest_eligible_at ASC, d.recipient_endpoint_id ASC
+`, claimableDeliveryEligibleAtExpr, placeholders, claimableDeliveryFilter), args...)
+	if err != nil {
+		return nil, fmt.Errorf("query claimable addresses: %w", err)
+	}
+	defer rows.Close()
+
+	claimable := make([]ClaimableAddress, 0)
+	for rows.Next() {
+		var endpointID string
+		var oldestEligibleAt string
+		var count int
+		if err := rows.Scan(&endpointID, &oldestEligibleAt, &count); err != nil {
+			return nil, fmt.Errorf("scan claimable address row: %w", err)
+		}
+		claimable = append(claimable, ClaimableAddress{
+			Address:          scope.addressByEndpointID[endpointID],
+			OldestEligibleAt: oldestEligibleAt,
+			ClaimableCount:   count,
+		})
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate claimable address rows: %w", err)
+	}
+
+	return claimable, nil
+}
+
 func (o availabilityOwner) listPersonalStaleAddresses(ctx context.Context, querier rowsQuerier, scope personalAvailabilityScope, nowText, staleBeforeText string) ([]StaleAddress, error) {
 	if scope.empty() {
 		return []StaleAddress{}, nil

@@ -26,6 +26,12 @@ type StaleAddress struct {
 	ClaimableCount   int    `json:"claimable_count" yaml:"claimable_count"`
 }
 
+type ClaimableAddress struct {
+	Address          string `json:"address" yaml:"address"`
+	OldestEligibleAt string `json:"oldest_eligible_at" yaml:"oldest_eligible_at"`
+	ClaimableCount   int    `json:"claimable_count" yaml:"claimable_count"`
+}
+
 func (s *Store) ListStaleAddresses(ctx context.Context, params StaleAddressesParams) ([]StaleAddress, error) {
 	if params.OlderThan <= 0 {
 		return nil, errors.New("older_than must be greater than 0")
@@ -67,6 +73,23 @@ func (s *Store) ListStaleAddresses(ctx context.Context, params StaleAddressesPar
 	})
 
 	return stale, nil
+}
+
+func (s *Store) ListClaimableAddresses(ctx context.Context, addresses []string) ([]ClaimableAddress, error) {
+	addresses, err := normalizeAddresses("", addresses, "--for")
+	if err != nil {
+		return nil, err
+	}
+
+	scope, err := s.availability().resolvePersonal(ctx, s.readDB, addresses)
+	if err != nil {
+		return nil, err
+	}
+	if scope.empty() {
+		return []ClaimableAddress{}, nil
+	}
+
+	return s.availability().listClaimablePersonalAddresses(ctx, s.readDB, scope, formatTimestamp(s.now()))
 }
 
 func (s *Store) listPersonalStaleAddresses(ctx context.Context, addresses []string, olderThan time.Duration) ([]StaleAddress, error) {
