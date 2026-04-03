@@ -825,6 +825,30 @@ func TestInvalidCLIPathsDoNotCreateRuntimeState(t *testing.T) {
 			args: []string{"stale", "--for", "group/ops", "--for", "group/dev", "--as", "alice", "--older-than", "5m", "--json"},
 		},
 		{
+			name: "group missing subcommand",
+			args: []string{"group"},
+		},
+		{
+			name: "group unknown subcommand",
+			args: []string{"group", "bogus"},
+		},
+		{
+			name: "group create missing group",
+			args: []string{"group", "create"},
+		},
+		{
+			name: "address missing subcommand",
+			args: []string{"address"},
+		},
+		{
+			name: "address unknown subcommand",
+			args: []string{"address", "bogus"},
+		},
+		{
+			name: "address inspect missing address",
+			args: []string{"address", "inspect"},
+		},
+		{
 			name: "recv missing for",
 			args: []string{"recv"},
 		},
@@ -1006,6 +1030,26 @@ func TestHelpCLIPathsDoNotCreateRuntimeState(t *testing.T) {
 			name:         "wait help",
 			args:         []string{"wait", "--help"},
 			wantContains: "Usage:\n  agent-mailbox wait --for ADDRESS [--for ADDRESS ...] [--timeout DURATION] [--json | --yaml] [--full]",
+		},
+		{
+			name:         "group help",
+			args:         []string{"group", "--help"},
+			wantContains: "Usage:\n  agent-mailbox group <subcommand> [options]",
+		},
+		{
+			name:         "group create help",
+			args:         []string{"group", "create", "--help"},
+			wantContains: "Usage:\n  agent-mailbox group create --group ADDRESS [--json | --yaml]",
+		},
+		{
+			name:         "address help",
+			args:         []string{"address", "--help"},
+			wantContains: "Usage:\n  agent-mailbox address <subcommand> [options]",
+		},
+		{
+			name:         "address inspect help",
+			args:         []string{"address", "inspect", "--help"},
+			wantContains: "Usage:\n  agent-mailbox address inspect --address ADDRESS [--json | --yaml]",
 		},
 	}
 
