@@ -171,6 +171,22 @@ func TestEnsureReceiverWorkflowHint(t *testing.T) {
 	}
 }
 
+func TestResolveNotifyMessageUsesFixedWakeText(t *testing.T) {
+	if got := resolveNotifyMessage(nil, defaultNotifyMessage); got != defaultNotifyMessage {
+		t.Fatalf("resolveNotifyMessage(nil) = %q, want %q", got, defaultNotifyMessage)
+	}
+
+	custom := "Check the delegated task immediately."
+	if got := resolveNotifyMessage(&custom, defaultNotifyMessage); got != defaultNotifyMessage {
+		t.Fatalf("resolveNotifyMessage(custom) = %q, want fixed default", got)
+	}
+
+	disabled := ""
+	if got := resolveNotifyMessage(&disabled, defaultNotifyMessage); got != "" {
+		t.Fatalf("resolveNotifyMessage(empty) = %q, want empty", got)
+	}
+}
+
 func TestMailboxSendNotifiesWorkerTarget(t *testing.T) {
 	mailboxService := &fakeMailboxService{t: t}
 	mailboxService.sendFunc = func(_ context.Context, params mailbox.SendParams) (mailbox.SendResult, error) {
@@ -185,17 +201,12 @@ func TestMailboxSendNotifiesWorkerTarget(t *testing.T) {
 
 	commandRunner := &fakeRunner{t: t, handler: func(args []string, input string) (RunResult, error) {
 		switch {
-		case strings.Join(args, "\x00") == strings.Join([]string{"agent-deck", "session", "show", "target", "--json"}, "\x00"):
-			return RunResult{ExitCode: 0, Stdout: `{"id":"target","title":"coder-123","status":"waiting"}`}, nil
 		case len(args) == 6 && args[0] == "agent-deck" && args[1] == "session" && args[2] == "send":
 			if args[4] != "target" {
 				t.Fatalf("notify target = %q, want target", args[4])
 			}
-			if !strings.Contains(args[5], "check-agent-mail") {
-				t.Fatalf("notify message %q missing check-agent-mail", args[5])
-			}
-			if !strings.Contains(args[5], "mailbox_read") {
-				t.Fatalf("notify message %q missing mailbox recovery hint", args[5])
+			if args[5] != defaultNotifyMessage {
+				t.Fatalf("notify message = %q, want fixed default", args[5])
 			}
 			return RunResult{ExitCode: 0}, nil
 		default:
@@ -270,7 +281,7 @@ func TestMailboxSendAllowsAgentDeckNotifyDisable(t *testing.T) {
 	}
 }
 
-func TestMailboxSendPreservesCustomNotifyMessage(t *testing.T) {
+func TestMailboxSendIgnoresCustomNotifyMessage(t *testing.T) {
 	const customNotify = "Check the delegated task immediately."
 
 	mailboxService := &fakeMailboxService{t: t}
@@ -280,20 +291,12 @@ func TestMailboxSendPreservesCustomNotifyMessage(t *testing.T) {
 
 	commandRunner := &fakeRunner{t: t, handler: func(args []string, input string) (RunResult, error) {
 		switch {
-		case strings.Join(args, "\x00") == strings.Join([]string{"agent-deck", "session", "show", "target", "--json"}, "\x00"):
-			return RunResult{ExitCode: 0, Stdout: `{"id":"target","title":"coder-123","status":"waiting"}`}, nil
 		case len(args) == 6 && args[0] == "agent-deck" && args[1] == "session" && args[2] == "send":
 			if args[4] != "target" {
 				t.Fatalf("notify target = %q, want target", args[4])
 			}
-			if !strings.Contains(args[5], customNotify) {
-				t.Fatalf("notify message %q missing custom override", args[5])
-			}
-			if strings.Contains(args[5], defaultNotifyMessage) {
-				t.Fatalf("notify message %q unexpectedly replaced custom override", args[5])
-			}
-			if !strings.Contains(args[5], "mailbox_read") {
-				t.Fatalf("notify message %q missing mailbox recovery hint", args[5])
+			if args[5] != defaultNotifyMessage {
+				t.Fatalf("notify message = %q, want fixed default", args[5])
 			}
 			return RunResult{ExitCode: 0}, nil
 		default:
@@ -373,8 +376,6 @@ func TestMailboxSendReturnsReceiptWhenNotifyFails(t *testing.T) {
 	}
 	commandRunner := &fakeRunner{t: t, handler: func(args []string, input string) (RunResult, error) {
 		switch {
-		case strings.Join(args, "\x00") == strings.Join([]string{"agent-deck", "session", "show", "target", "--json"}, "\x00"):
-			return RunResult{ExitCode: 0, Stdout: `{"id":"target","title":"coder-123","status":"waiting"}`}, nil
 		case len(args) == 6 && args[0] == "agent-deck" && args[1] == "session" && args[2] == "send":
 			return RunResult{ExitCode: 1, Stderr: "wakeup failed"}, nil
 		default:

@@ -155,25 +155,15 @@ func (n agentDeckNotifier) Notify(ctx context.Context, event notificationEvent) 
 		}
 	}
 
-	targetLabel := event.Route.Target
-	targetSession, err := n.sessions.resolveSessionShowBestEffort(ctx, event.Route.Target)
-	if err != nil {
+	notifyMessage := resolveNotifyMessage(event.MessageOverride, defaultNotifyMessage)
+	if notifyMessage == "" {
 		return notificationOutcome{
-			Status: "failed",
+			Status: "skipped_disabled",
 			Scheme: n.Name(),
-			Err:    err,
 		}
 	}
-	if targetSession != nil && strings.TrimSpace(targetSession.Title) != "" {
-		targetLabel = strings.TrimSpace(targetSession.Title)
-	}
 
-	notifyMessage := defaultNotifyMessage
-	if event.MessageOverride != nil && strings.TrimSpace(*event.MessageOverride) != "" {
-		notifyMessage = *event.MessageOverride
-	}
-	notifyMessage = ensureReceiverWorkflowHint(notifyMessage, defaultNotifyMessage, targetLabel)
-	_, err = runCommand(ctx, n.runner, []string{
+	_, err := runCommand(ctx, n.runner, []string{
 		"agent-deck", "session", "send", "--no-wait", event.Route.Target, notifyMessage,
 	}, runOptions{timeout: syncCmdTimeout})
 	if err != nil {
@@ -188,6 +178,13 @@ func (n agentDeckNotifier) Notify(ctx context.Context, event notificationEvent) 
 		Status: "sent",
 		Scheme: n.Name(),
 	}
+}
+
+func resolveNotifyMessage(message *string, defaultMessage string) string {
+	if message != nil && strings.TrimSpace(*message) == "" {
+		return ""
+	}
+	return defaultMessage
 }
 
 func ensureCheckAgentMailHint(message, defaultMessage string) string {

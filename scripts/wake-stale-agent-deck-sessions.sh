@@ -18,7 +18,7 @@ Options:
   --confirm-delay SECONDS     Delay before rechecking a candidate session (default: 2)
   --profile NAME             Agent-deck profile to query
   --state-dir PATH           Mailbox state directory to query
-  --wake-message TEXT        Wakeup message body for agent-deck session send
+  --wake-message TEXT        Ignored; agent-deck wake instruction is fixed
   --all-mail-states          Pass --all to agent-deck list (include sessions hidden by default)
   -h, --help                 Show help
 
@@ -167,7 +167,7 @@ older_than=""
 confirm_delay_seconds=2
 profile=""
 state_dir=""
-wake_message="Use the check-agent-mail skill now. Receive the pending message for your current agent-deck session and execute its requested action."
+readonly fixed_wake_message="Use the check-agent-mail skill now. Receive the pending message for your current agent-deck session and execute its requested action."
 list_all=0
 
 while [[ $# -gt 0 ]]; do
@@ -176,7 +176,7 @@ while [[ $# -gt 0 ]]; do
   --confirm-delay) confirm_delay_seconds="${2:-}"; shift 2 ;;
   --profile) profile="${2:-}"; shift 2 ;;
   --state-dir) state_dir="${2:-}"; shift 2 ;;
-  --wake-message) wake_message="${2:-}"; shift 2 ;;
+  --wake-message) shift 2 ;;
   --all-mail-states) list_all=1; shift 1 ;;
   -h|--help) usage; exit 0 ;;
   *) die "unknown option: $1" ;;
@@ -294,7 +294,7 @@ for address in "${stale_addresses[@]}"; do
   fi
 
   set +e
-  wake_output="$(ad session send --no-wait "$session_id" "$wake_message" 2>&1)"
+  wake_output="$(ad session send --no-wait "$session_id" "$fixed_wake_message" 2>&1)"
   wake_status=$?
   set -e
   if (( wake_status != 0 )); then

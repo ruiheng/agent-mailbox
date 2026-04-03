@@ -86,7 +86,7 @@ func (s *Service) registerMailboxTools(server *mcp.Server) {
 	}, s.mailboxStatus)
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "mailbox_send",
-		Description: "Send one mailbox message and automatically push-notify a non-local target when the address scheme supports it. Pass an empty notify_message to disable notify for that send.",
+		Description: "Send one mailbox message and automatically push-notify a non-local target when the address scheme supports it. Pass an empty notify_message to disable notify for that send; non-empty custom wake text is ignored.",
 	}, s.mailboxSend)
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "mailbox_wait",
