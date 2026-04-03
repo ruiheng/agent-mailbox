@@ -25,7 +25,7 @@ const (
 	defaultReminderConfirmDelay = 2 * time.Second
 	notificationDelivery        = "delivery_available"
 	notificationStaleUnread     = "stale_unread"
-	defaultListenerMessage      = "If agent_mailbox is not bound yet, first run agent-deck session current --json and call mailbox_bind for this session. When a wakeup message arrives, use the 'check-agent-mail' skill and execute its requested action."
+	defaultListenerMessage      = ""
 	defaultNotifyMessage        = "Use the check-agent-mail skill now. Receive the pending message for your current agent-deck session and execute its requested action."
 	mailboxRecoveryHint         = "If you forget the mailbox details or next action after ack, use `mailbox_read` on the latest `acked` delivery for this session. For older mail, use `mailbox_list` with `state: acked` and then `mailbox_read` by delivery id."
 	serverInstructions          = "Bootstrap this MCP process once per agent-managed session. If it is not bound yet, run `agent-deck session current --json`, take the current session id, and call `mailbox_bind`. Use `agent-deck/<id>` as the default sender. Pass `default_workdir` when you want later `agent_deck_ensure_session` calls to create sessions in the current project. `mailbox_wait` is not recommended for normal workflow; prefer `mailbox_recv`. Later reuse the bound addresses until MCP state is lost."

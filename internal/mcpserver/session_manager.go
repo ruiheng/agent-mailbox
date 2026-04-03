@@ -400,16 +400,17 @@ func (m *sessionManager) ensureSession(ctx context.Context, input agentDeckEnsur
 			return nil, fmt.Errorf("workdir does not exist: %s", workdir)
 		}
 
-		targetLabel := firstNonEmpty(input.EnsureTitle, input.SessionRef, identifier)
-		listenerMessage := ensureReceiverWorkflowHint(firstNonEmpty(input.ListenerMessage, defaultListenerMessage), defaultListenerMessage, targetLabel)
+		listenerMessage := strings.TrimSpace(input.ListenerMessage)
 		launchArgs := []string{
 			"agent-deck", "launch", "--json",
 			"--title", input.EnsureTitle,
 			"--parent", input.ParentSessionID,
 			"--cmd", input.EnsureCmd,
-			"--message", listenerMessage,
-			workdir,
 		}
+		if listenerMessage != "" {
+			launchArgs = append(launchArgs, "--message", listenerMessage)
+		}
+		launchArgs = append(launchArgs, workdir)
 		launchResult, err := runCommand(ctx, m.runner, launchArgs, runOptions{})
 		if err != nil {
 			return nil, err
@@ -422,13 +423,16 @@ func (m *sessionManager) ensureSession(ctx context.Context, input agentDeckEnsur
 		startedSession = true
 		listenerStatus = "started_waiting"
 	} else {
-		targetLabel := firstNonEmpty(data.Title, input.SessionRef, identifier, data.ID)
-		listenerMessage := ensureReceiverWorkflowHint(firstNonEmpty(input.ListenerMessage, defaultListenerMessage), defaultListenerMessage, targetLabel)
+		listenerMessage := strings.TrimSpace(input.ListenerMessage)
 		if activeSessionStatuses[strings.TrimSpace(data.Status)] {
 			notifyNeeded = true
 			listenerStatus = "not_needed_existing_session"
 		} else {
-			startArgs := []string{"agent-deck", "session", "start", "--json", "-m", listenerMessage, data.ID}
+			startArgs := []string{"agent-deck", "session", "start", "--json"}
+			if listenerMessage != "" {
+				startArgs = append(startArgs, "-m", listenerMessage)
+			}
+			startArgs = append(startArgs, data.ID)
 			if _, err := runCommand(ctx, m.runner, startArgs, runOptions{}); err != nil {
 				return nil, err
 			}
