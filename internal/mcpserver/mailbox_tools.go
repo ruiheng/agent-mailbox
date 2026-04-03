@@ -230,10 +230,14 @@ func (s *Service) mailboxRecv(ctx context.Context, _ *mcp.CallToolRequest, input
 	}
 
 	delivery, err := withMailboxService(ctx, s.mailboxServices, func(service mailboxService) (mailbox.ReceiveResult, error) {
-		return service.ReceiveBatch(ctx, mailbox.ReceiveBatchParams{
+		// MCP intentionally claims work with a short liveness window and relies on
+		// in-process renewals while this Service instance is alive. This keeps
+		// abandoned work reclaimable quickly after MCP death or long stalls instead
+		// of inheriting the mailbox core's legacy 5m receive lease.
+		return service.ReceiveBatchWithLeaseTTL(ctx, mailbox.ReceiveBatchParams{
 			Addresses: addresses,
 			Max:       1,
-		})
+		}, s.mcpLeaseTTL)
 	})
 	if errors.Is(err, mailbox.ErrNoMessage) {
 		return s.mailboxToolResult(ctx, map[string]any{
@@ -244,6 +248,8 @@ func (s *Service) mailboxRecv(ctx context.Context, _ *mcp.CallToolRequest, input
 	if err != nil {
 		return nil, nil, err
 	}
+	s.activeLeases.trackReceive(delivery)
+	s.startLeaseRenewLoop()
 	return s.mailboxToolResult(ctx, map[string]any{
 		"status":    "received",
 		"addresses": addresses,
@@ -396,26 +402,37 @@ func (s *Service) mailboxRead(ctx context.Context, _ *mcp.CallToolRequest, input
 }
 
 func (s *Service) mailboxAck(ctx context.Context, _ *mcp.CallToolRequest, input mailboxAckInput) (*mcp.CallToolResult, map[string]any, error) {
+	if err := s.activeLeases.terminalMutationAllowed(s.now().UTC(), input.DeliveryID); err != nil {
+		return nil, nil, err
+	}
 	_, err := withMailboxService(ctx, s.mailboxServices, func(service mailboxService) (mailbox.DeliveryTransitionResult, error) {
 		return service.Ack(ctx, input.DeliveryID, input.LeaseToken)
 	})
 	if err != nil {
 		return nil, nil, err
 	}
+	s.activeLeases.remove(input.DeliveryID)
 	return s.mailboxToolResult(ctx, map[string]any{"status": "acked", "delivery_id": input.DeliveryID})
 }
 
 func (s *Service) mailboxRelease(ctx context.Context, _ *mcp.CallToolRequest, input mailboxAckInput) (*mcp.CallToolResult, map[string]any, error) {
+	if err := s.activeLeases.terminalMutationAllowed(s.now().UTC(), input.DeliveryID); err != nil {
+		return nil, nil, err
+	}
 	_, err := withMailboxService(ctx, s.mailboxServices, func(service mailboxService) (mailbox.DeliveryTransitionResult, error) {
 		return service.Release(ctx, input.DeliveryID, input.LeaseToken)
 	})
 	if err != nil {
 		return nil, nil, err
 	}
+	s.activeLeases.remove(input.DeliveryID)
 	return s.mailboxToolResult(ctx, map[string]any{"status": "released", "delivery_id": input.DeliveryID})
 }
 
 func (s *Service) mailboxDefer(ctx context.Context, _ *mcp.CallToolRequest, input mailboxDeferInput) (*mcp.CallToolResult, map[string]any, error) {
+	if err := s.activeLeases.terminalMutationAllowed(s.now().UTC(), input.DeliveryID); err != nil {
+		return nil, nil, err
+	}
 	until, err := time.Parse(time.RFC3339Nano, input.Until)
 	if err != nil {
 		return nil, nil, fmt.Errorf("parse until: %w", err)
@@ -426,16 +443,21 @@ func (s *Service) mailboxDefer(ctx context.Context, _ *mcp.CallToolRequest, inpu
 	if err != nil {
 		return nil, nil, err
 	}
+	s.activeLeases.remove(input.DeliveryID)
 	return s.mailboxToolResult(ctx, map[string]any{"status": "deferred", "delivery_id": input.DeliveryID, "until": input.Until})
 }
 
 func (s *Service) mailboxFail(ctx context.Context, _ *mcp.CallToolRequest, input mailboxFailInput) (*mcp.CallToolResult, map[string]any, error) {
+	if err := s.activeLeases.terminalMutationAllowed(s.now().UTC(), input.DeliveryID); err != nil {
+		return nil, nil, err
+	}
 	_, err := withMailboxService(ctx, s.mailboxServices, func(service mailboxService) (mailbox.DeliveryTransitionResult, error) {
 		return service.Fail(ctx, input.DeliveryID, input.LeaseToken, input.Reason)
 	})
 	if err != nil {
 		return nil, nil, err
 	}
+	s.activeLeases.remove(input.DeliveryID)
 	return s.mailboxToolResult(ctx, map[string]any{"status": "failed", "delivery_id": input.DeliveryID, "reason": input.Reason})
 }
 

@@ -2,6 +2,7 @@ package mailbox
 
 import (
 	"context"
+	"fmt"
 	"time"
 )
 
@@ -33,6 +34,20 @@ func (o *Operations) ListStaleAddresses(ctx context.Context, params StaleAddress
 
 func (o *Operations) ReceiveBatch(ctx context.Context, params ReceiveBatchParams) (ReceiveResult, error) {
 	return o.store.ReceiveBatch(ctx, params)
+}
+
+func (o *Operations) ReceiveBatchWithLeaseTTL(ctx context.Context, params ReceiveBatchParams, ttl time.Duration) (ReceiveResult, error) {
+	addresses, err := normalizeAddresses(params.Address, params.Addresses, "--for")
+	if err != nil {
+		return ReceiveResult{}, err
+	}
+
+	maxMessages := params.Max
+	if maxMessages < 1 || maxMessages > maxReceiveBatchSize {
+		return ReceiveResult{}, fmt.Errorf("--max must be between 1 and %d", maxReceiveBatchSize)
+	}
+
+	return o.store.receiveBatchWithLeasePolicy(ctx, addresses, maxMessages, receiveLeasePolicy{LeaseTTL: ttl})
 }
 
 func (o *Operations) Wait(ctx context.Context, params WaitParams) (ListedDelivery, error) {

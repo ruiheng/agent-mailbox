@@ -21,6 +21,8 @@ const (
 	serverVersion               = "0.4.0"
 	syncCmdTimeout              = 30 * time.Second
 	ensureSessionShowTimeout    = 30 * time.Second
+	defaultMCPLeaseTTL          = 30 * time.Second
+	defaultLeaseRenewInterval   = 10 * time.Second
 	defaultReminderPollInterval = 30 * time.Second
 	defaultReminderConfirmDelay = 2 * time.Second
 	notificationDelivery        = "delivery_available"
@@ -48,11 +50,13 @@ type mailboxService interface {
 	ListGroupMessages(context.Context, mailbox.GroupListParams) ([]mailbox.GroupListedMessage, error)
 	ListStaleAddresses(context.Context, mailbox.StaleAddressesParams) ([]mailbox.StaleAddress, error)
 	ReceiveBatch(context.Context, mailbox.ReceiveBatchParams) (mailbox.ReceiveResult, error)
+	ReceiveBatchWithLeaseTTL(context.Context, mailbox.ReceiveBatchParams, time.Duration) (mailbox.ReceiveResult, error)
 	Wait(context.Context, mailbox.WaitParams) (mailbox.ListedDelivery, error)
 	ReadMessages(context.Context, []string) ([]mailbox.ReadMessage, error)
 	ReadLatestDeliveries(context.Context, []string, string, int) ([]mailbox.ReadDelivery, bool, error)
 	ReadDeliveries(context.Context, []string) ([]mailbox.ReadDelivery, error)
 	Ack(context.Context, string, string) (mailbox.DeliveryTransitionResult, error)
+	Renew(context.Context, string, string, time.Duration) (mailbox.LeaseRenewResult, error)
 	Release(context.Context, string, string) (mailbox.DeliveryTransitionResult, error)
 	Defer(context.Context, string, string, time.Time) (mailbox.DeliveryTransitionResult, error)
 	Fail(context.Context, string, string, string) (mailbox.DeliveryTransitionResult, error)
@@ -80,6 +84,9 @@ type Options struct {
 	CommandRunner             Runner
 	StateDir                  string
 	Now                       func() time.Time
+	MCPLeaseTTL               time.Duration
+	LeaseRenewInterval        time.Duration
+	DisableLeaseRenewLoop     bool
 	ReminderPollInterval      time.Duration
 	ReminderConfirmDelay      time.Duration
 	DisableActiveReminderLoop bool
@@ -91,11 +98,16 @@ type Service struct {
 	sessions                  *sessionManager
 	notifications             *notificationManager
 	reminders                 *reminderManager
+	activeLeases              *activeLeaseManager
 	state                     *serverState
 	now                       func() time.Time
+	mcpLeaseTTL               time.Duration
+	leaseRenewInterval        time.Duration
+	disableLeaseRenewLoop     bool
 	reminderPollInterval      time.Duration
 	reminderConfirmDelay      time.Duration
 	disableActiveReminderLoop bool
+	leaseRenewLoopOnce        sync.Once
 	activeReminderLoopOnce    sync.Once
 }
 
@@ -136,6 +148,9 @@ func newService(opts Options) *Service {
 		sessions:                  sessions,
 		state:                     state,
 		now:                       opts.Now,
+		mcpLeaseTTL:               opts.MCPLeaseTTL,
+		leaseRenewInterval:        opts.LeaseRenewInterval,
+		disableLeaseRenewLoop:     opts.DisableLeaseRenewLoop,
 		reminderPollInterval:      opts.ReminderPollInterval,
 		reminderConfirmDelay:      opts.ReminderConfirmDelay,
 		disableActiveReminderLoop: opts.DisableActiveReminderLoop,
@@ -145,6 +160,12 @@ func newService(opts Options) *Service {
 			return time.Now().UTC()
 		}
 	}
+	if service.mcpLeaseTTL <= 0 {
+		service.mcpLeaseTTL = defaultMCPLeaseTTL
+	}
+	if service.leaseRenewInterval <= 0 {
+		service.leaseRenewInterval = defaultLeaseRenewInterval
+	}
 	if service.reminderPollInterval <= 0 {
 		service.reminderPollInterval = defaultReminderPollInterval
 	}
@@ -152,6 +173,7 @@ func newService(opts Options) *Service {
 		service.reminderConfirmDelay = defaultReminderConfirmDelay
 	}
 	service.notifications = newNotificationManager(service.commandRunner, service.sessions)
+	service.activeLeases = newActiveLeaseManager()
 	service.reminders = newReminderManager(reminderManagerDeps{
 		now:          service.now,
 		confirmDelay: service.reminderConfirmDelay,

@@ -3,6 +3,7 @@ package mcpserver
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -16,19 +17,21 @@ import (
 type fakeMailboxService struct {
 	t *testing.T
 
-	sendFunc               func(context.Context, mailbox.SendParams) (mailbox.SendResult, error)
-	listFunc               func(context.Context, mailbox.ListParams) ([]mailbox.ListedDelivery, error)
-	listGroupMessagesFunc  func(context.Context, mailbox.GroupListParams) ([]mailbox.GroupListedMessage, error)
-	listStaleAddressesFunc func(context.Context, mailbox.StaleAddressesParams) ([]mailbox.StaleAddress, error)
-	receiveBatchFunc       func(context.Context, mailbox.ReceiveBatchParams) (mailbox.ReceiveResult, error)
-	waitFunc               func(context.Context, mailbox.WaitParams) (mailbox.ListedDelivery, error)
-	readMessagesFunc       func(context.Context, []string) ([]mailbox.ReadMessage, error)
-	readLatestFunc         func(context.Context, []string, string, int) ([]mailbox.ReadDelivery, bool, error)
-	readDeliveriesFunc     func(context.Context, []string) ([]mailbox.ReadDelivery, error)
-	ackFunc                func(context.Context, string, string) (mailbox.DeliveryTransitionResult, error)
-	releaseFunc            func(context.Context, string, string) (mailbox.DeliveryTransitionResult, error)
-	deferFunc              func(context.Context, string, string, time.Time) (mailbox.DeliveryTransitionResult, error)
-	failFunc               func(context.Context, string, string, string) (mailbox.DeliveryTransitionResult, error)
+	sendFunc                func(context.Context, mailbox.SendParams) (mailbox.SendResult, error)
+	listFunc                func(context.Context, mailbox.ListParams) ([]mailbox.ListedDelivery, error)
+	listGroupMessagesFunc   func(context.Context, mailbox.GroupListParams) ([]mailbox.GroupListedMessage, error)
+	listStaleAddressesFunc  func(context.Context, mailbox.StaleAddressesParams) ([]mailbox.StaleAddress, error)
+	receiveBatchFunc        func(context.Context, mailbox.ReceiveBatchParams) (mailbox.ReceiveResult, error)
+	receiveBatchWithTTLFunc func(context.Context, mailbox.ReceiveBatchParams, time.Duration) (mailbox.ReceiveResult, error)
+	waitFunc                func(context.Context, mailbox.WaitParams) (mailbox.ListedDelivery, error)
+	readMessagesFunc        func(context.Context, []string) ([]mailbox.ReadMessage, error)
+	readLatestFunc          func(context.Context, []string, string, int) ([]mailbox.ReadDelivery, bool, error)
+	readDeliveriesFunc      func(context.Context, []string) ([]mailbox.ReadDelivery, error)
+	ackFunc                 func(context.Context, string, string) (mailbox.DeliveryTransitionResult, error)
+	renewFunc               func(context.Context, string, string, time.Duration) (mailbox.LeaseRenewResult, error)
+	releaseFunc             func(context.Context, string, string) (mailbox.DeliveryTransitionResult, error)
+	deferFunc               func(context.Context, string, string, time.Time) (mailbox.DeliveryTransitionResult, error)
+	failFunc                func(context.Context, string, string, string) (mailbox.DeliveryTransitionResult, error)
 }
 
 func (f *fakeMailboxService) Send(ctx context.Context, params mailbox.SendParams) (mailbox.SendResult, error) {
@@ -66,6 +69,16 @@ func (f *fakeMailboxService) ReceiveBatch(ctx context.Context, params mailbox.Re
 	return f.receiveBatchFunc(ctx, params)
 }
 
+func (f *fakeMailboxService) ReceiveBatchWithLeaseTTL(ctx context.Context, params mailbox.ReceiveBatchParams, ttl time.Duration) (mailbox.ReceiveResult, error) {
+	if f.receiveBatchWithTTLFunc != nil {
+		return f.receiveBatchWithTTLFunc(ctx, params, ttl)
+	}
+	if f.receiveBatchFunc == nil {
+		f.t.Fatalf("unexpected ReceiveBatchWithLeaseTTL call: %+v ttl=%s", params, ttl)
+	}
+	return f.receiveBatchFunc(ctx, params)
+}
+
 func (f *fakeMailboxService) Wait(ctx context.Context, params mailbox.WaitParams) (mailbox.ListedDelivery, error) {
 	if f.waitFunc == nil {
 		f.t.Fatalf("unexpected Wait call: %+v", params)
@@ -99,6 +112,13 @@ func (f *fakeMailboxService) Ack(ctx context.Context, deliveryID, leaseToken str
 		f.t.Fatalf("unexpected Ack call: delivery=%q lease=%q", deliveryID, leaseToken)
 	}
 	return f.ackFunc(ctx, deliveryID, leaseToken)
+}
+
+func (f *fakeMailboxService) Renew(ctx context.Context, deliveryID, leaseToken string, extendBy time.Duration) (mailbox.LeaseRenewResult, error) {
+	if f.renewFunc == nil {
+		f.t.Fatalf("unexpected Renew call: delivery=%q lease=%q extendBy=%s", deliveryID, leaseToken, extendBy)
+	}
+	return f.renewFunc(ctx, deliveryID, leaseToken, extendBy)
 }
 
 func (f *fakeMailboxService) Release(ctx context.Context, deliveryID, leaseToken string) (mailbox.DeliveryTransitionResult, error) {
@@ -564,6 +584,59 @@ func TestMailboxReminderSubscribeSupportsGroupViewsAndActivePush(t *testing.T) {
 	}
 	if callCount != 2 {
 		t.Fatalf("stale call count = %d, want 2", callCount)
+	}
+}
+
+func TestMailboxReminderSubscribeStartsActiveLoop(t *testing.T) {
+	mailboxService := &fakeMailboxService{t: t}
+	mailboxService.listStaleAddressesFunc = func(_ context.Context, params mailbox.StaleAddressesParams) ([]mailbox.StaleAddress, error) {
+		if params.OlderThan != 10*time.Minute || len(params.Addresses) != 1 || params.Addresses[0] != "agent-deck/worker" {
+			t.Fatalf("stale params = %+v, want worker selector at 10m", params)
+		}
+		return []mailbox.StaleAddress{{
+			Address:          "agent-deck/worker",
+			OldestEligibleAt: "2026-04-03T00:40:00Z",
+			ClaimableCount:   1,
+		}}, nil
+	}
+
+	notified := make(chan struct{}, 1)
+	commandRunner := &fakeRunner{t: t, handler: func(args []string, input string) (RunResult, error) {
+		switch {
+		case strings.Join(args, "\x00") == strings.Join([]string{"agent-deck", "session", "show", "worker", "--json"}, "\x00"):
+			return RunResult{ExitCode: 0, Stdout: `{"id":"worker","title":"coder-123","status":"waiting"}`}, nil
+		case len(args) == 6 && args[0] == "agent-deck" && args[1] == "session" && args[2] == "send":
+			select {
+			case notified <- struct{}{}:
+			default:
+			}
+			return RunResult{ExitCode: 0}, nil
+		default:
+			t.Fatalf("unexpected command args: %v", args)
+			return RunResult{}, nil
+		}
+	}}
+
+	service := newService(Options{
+		MailboxServiceFactory: fakeMailboxServiceFactory{service: mailboxService},
+		CommandRunner:         commandRunner,
+		Now:                   time.Now,
+		ReminderPollInterval:  10 * time.Millisecond,
+		ReminderConfirmDelay:  time.Millisecond,
+	})
+	service.state.autoBindAttempted = true
+
+	callTool(t, service.Server(), "mailbox_reminder_subscribe", map[string]any{
+		"addresses":   []string{"agent-deck/worker"},
+		"route":       "agent-deck/worker",
+		"older_than":  "10m",
+		"active_push": true,
+	})
+
+	select {
+	case <-notified:
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("timed out waiting for active reminder notification")
 	}
 }
 
@@ -1301,6 +1374,312 @@ func TestMailboxLifecycleToolsUseDirectMailboxService(t *testing.T) {
 	}
 }
 
+func TestMailboxRecvStartsLeaseRenewLoopWithShortTTL(t *testing.T) {
+	current := time.Date(2026, 4, 3, 6, 0, 0, 0, time.UTC)
+	renewed := make(chan struct{}, 1)
+
+	mailboxService := &fakeMailboxService{t: t}
+	mailboxService.receiveBatchWithTTLFunc = func(_ context.Context, params mailbox.ReceiveBatchParams, ttl time.Duration) (mailbox.ReceiveResult, error) {
+		if ttl != defaultMCPLeaseTTL {
+			t.Fatalf("recv lease ttl = %s, want %s", ttl, defaultMCPLeaseTTL)
+		}
+		if params.Max != 1 || len(params.Addresses) != 1 || params.Addresses[0] != "agent-deck/self" {
+			t.Fatalf("recv params = %+v, want one bound address", params)
+		}
+		return mailbox.ReceiveResult{
+			Messages: []mailbox.ReceivedMessage{{
+				DeliveryID:       "dlv_lease",
+				LeaseToken:       "lease_1",
+				LeaseExpiresAt:   current.Add(defaultMCPLeaseTTL).Format(time.RFC3339Nano),
+				RecipientAddress: "agent-deck/self",
+				Subject:          "delegate",
+				Body:             "body",
+			}},
+		}, nil
+	}
+	mailboxService.renewFunc = func(_ context.Context, deliveryID, leaseToken string, extendBy time.Duration) (mailbox.LeaseRenewResult, error) {
+		if deliveryID != "dlv_lease" || leaseToken != "lease_1" {
+			t.Fatalf("renew args = delivery=%q lease=%q", deliveryID, leaseToken)
+		}
+		if extendBy != defaultMCPLeaseTTL {
+			t.Fatalf("renew extendBy = %s, want %s", extendBy, defaultMCPLeaseTTL)
+		}
+		select {
+		case renewed <- struct{}{}:
+		default:
+		}
+		return mailbox.LeaseRenewResult{
+			DeliveryID:     deliveryID,
+			LeaseToken:     leaseToken,
+			LeaseExpiresAt: time.Now().UTC().Add(defaultMCPLeaseTTL).Format(time.RFC3339Nano),
+		}, nil
+	}
+
+	service := newService(Options{
+		MailboxServiceFactory: fakeMailboxServiceFactory{service: mailboxService},
+		CommandRunner: &fakeRunner{t: t, handler: func(args []string, input string) (RunResult, error) {
+			t.Fatalf("unexpected command call: %v", args)
+			return RunResult{}, nil
+		}},
+		LeaseRenewInterval: 10 * time.Millisecond,
+	})
+	service.state.boundAddresses = []string{"agent-deck/self"}
+	service.state.defaultSender = "agent-deck/self"
+	service.state.autoBindAttempted = true
+
+	callTool(t, service.Server(), "mailbox_recv", map[string]any{
+		"addresses": []string{"agent-deck/self"},
+	})
+
+	select {
+	case <-renewed:
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("timed out waiting for lease renew")
+	}
+}
+
+func TestProcessLeaseRenewalsRetriesTransientFailureWithinLeaseWindow(t *testing.T) {
+	current := time.Date(2026, 4, 3, 6, 15, 0, 0, time.UTC)
+	renewCalls := 0
+	ackCalled := false
+
+	mailboxService := &fakeMailboxService{t: t}
+	mailboxService.receiveBatchWithTTLFunc = func(_ context.Context, params mailbox.ReceiveBatchParams, ttl time.Duration) (mailbox.ReceiveResult, error) {
+		return mailbox.ReceiveResult{
+			Messages: []mailbox.ReceivedMessage{{
+				DeliveryID:       "dlv_retry",
+				LeaseToken:       "lease_retry",
+				LeaseExpiresAt:   current.Add(defaultMCPLeaseTTL).Format(time.RFC3339Nano),
+				RecipientAddress: "agent-deck/self",
+				Subject:          "delegate",
+				Body:             "body",
+			}},
+		}, nil
+	}
+	mailboxService.renewFunc = func(_ context.Context, deliveryID, leaseToken string, extendBy time.Duration) (mailbox.LeaseRenewResult, error) {
+		renewCalls++
+		if renewCalls == 1 {
+			return mailbox.LeaseRenewResult{}, context.DeadlineExceeded
+		}
+		return mailbox.LeaseRenewResult{
+			DeliveryID:     deliveryID,
+			LeaseToken:     leaseToken,
+			LeaseExpiresAt: current.Add(defaultMCPLeaseTTL).Format(time.RFC3339Nano),
+		}, nil
+	}
+	mailboxService.ackFunc = func(_ context.Context, deliveryID, leaseToken string) (mailbox.DeliveryTransitionResult, error) {
+		ackCalled = true
+		return mailbox.DeliveryTransitionResult{DeliveryID: deliveryID, State: "acked"}, nil
+	}
+
+	service := newService(Options{
+		MailboxServiceFactory: fakeMailboxServiceFactory{service: mailboxService},
+		CommandRunner: &fakeRunner{t: t, handler: func(args []string, input string) (RunResult, error) {
+			t.Fatalf("unexpected command call: %v", args)
+			return RunResult{}, nil
+		}},
+		Now:                   func() time.Time { return current },
+		DisableLeaseRenewLoop: true,
+	})
+	service.state.boundAddresses = []string{"agent-deck/self"}
+	service.state.defaultSender = "agent-deck/self"
+	service.state.autoBindAttempted = true
+
+	callTool(t, service.Server(), "mailbox_recv", map[string]any{
+		"addresses": []string{"agent-deck/self"},
+	})
+
+	if err := service.processLeaseRenewals(context.Background()); err != nil {
+		t.Fatalf("processLeaseRenewals() error = %v, want nil after transient retry", err)
+	}
+	if renewCalls != 2 {
+		t.Fatalf("renewCalls = %d, want 2", renewCalls)
+	}
+	if failure := service.activeLeases.lastRenewalError(); failure != nil {
+		t.Fatalf("lastRenewalError() = %v, want nil after successful retry", failure)
+	}
+
+	output := callTool(t, service.Server(), "mailbox_ack", map[string]any{
+		"delivery_id": "dlv_retry",
+		"lease_token": "lease_retry",
+	})
+	if got := output["status"]; got != "acked" {
+		t.Fatalf("mailbox_ack status = %v, want acked", got)
+	}
+	if !ackCalled {
+		t.Fatal("Ack was not forwarded after transient renew retry")
+	}
+}
+
+func TestProcessLeaseRenewalsAllowsTerminalMutationBeforeExpiryAfterTransientFailure(t *testing.T) {
+	current := time.Date(2026, 4, 3, 6, 30, 0, 0, time.UTC)
+	mailboxService := &fakeMailboxService{t: t}
+	mailboxService.receiveBatchWithTTLFunc = func(_ context.Context, params mailbox.ReceiveBatchParams, ttl time.Duration) (mailbox.ReceiveResult, error) {
+		return mailbox.ReceiveResult{
+			Messages: []mailbox.ReceivedMessage{{
+				DeliveryID:       "dlv_failure",
+				LeaseToken:       "lease_failure",
+				LeaseExpiresAt:   current.Add(defaultMCPLeaseTTL).Format(time.RFC3339Nano),
+				RecipientAddress: "agent-deck/self",
+				Subject:          "delegate",
+				Body:             "body",
+			}},
+		}, nil
+	}
+	mailboxService.renewFunc = func(_ context.Context, deliveryID, leaseToken string, extendBy time.Duration) (mailbox.LeaseRenewResult, error) {
+		return mailbox.LeaseRenewResult{}, context.DeadlineExceeded
+	}
+	ackCalled := false
+	mailboxService.ackFunc = func(_ context.Context, deliveryID, leaseToken string) (mailbox.DeliveryTransitionResult, error) {
+		ackCalled = true
+		return mailbox.DeliveryTransitionResult{DeliveryID: deliveryID, State: "acked"}, nil
+	}
+
+	service := newService(Options{
+		MailboxServiceFactory: fakeMailboxServiceFactory{service: mailboxService},
+		CommandRunner: &fakeRunner{t: t, handler: func(args []string, input string) (RunResult, error) {
+			t.Fatalf("unexpected command call: %v", args)
+			return RunResult{}, nil
+		}},
+		Now:                   func() time.Time { return current },
+		DisableLeaseRenewLoop: true,
+	})
+	service.state.boundAddresses = []string{"agent-deck/self"}
+	service.state.defaultSender = "agent-deck/self"
+	service.state.autoBindAttempted = true
+
+	callTool(t, service.Server(), "mailbox_recv", map[string]any{
+		"addresses": []string{"agent-deck/self"},
+	})
+
+	err := service.processLeaseRenewals(context.Background())
+	if err == nil || !isLeaseRenewalFailure(err) {
+		t.Fatalf("processLeaseRenewals() error = %v, want lease renewal failure", err)
+	}
+	if !service.activeLeases.hasTrackedLeases() {
+		t.Fatal("active lease tracking removed after transient renewal failure")
+	}
+
+	output := callTool(t, service.Server(), "mailbox_ack", map[string]any{
+		"delivery_id": "dlv_failure",
+		"lease_token": "lease_failure",
+	})
+	if got := output["status"]; got != "acked" {
+		t.Fatalf("mailbox_ack status = %v, want acked", got)
+	}
+	if !ackCalled {
+		t.Fatal("Ack was not forwarded before lease expiry")
+	}
+}
+
+func TestProcessLeaseRenewalsBlocksTerminalMutationAfterExpiryFollowingTransientFailure(t *testing.T) {
+	current := time.Date(2026, 4, 3, 6, 45, 0, 0, time.UTC)
+
+	mailboxService := &fakeMailboxService{t: t}
+	mailboxService.receiveBatchWithTTLFunc = func(_ context.Context, params mailbox.ReceiveBatchParams, ttl time.Duration) (mailbox.ReceiveResult, error) {
+		return mailbox.ReceiveResult{
+			Messages: []mailbox.ReceivedMessage{{
+				DeliveryID:       "dlv_expired_failure",
+				LeaseToken:       "lease_expired_failure",
+				LeaseExpiresAt:   current.Add(defaultMCPLeaseTTL).Format(time.RFC3339Nano),
+				RecipientAddress: "agent-deck/self",
+				Subject:          "delegate",
+				Body:             "body",
+			}},
+		}, nil
+	}
+	mailboxService.renewFunc = func(_ context.Context, deliveryID, leaseToken string, extendBy time.Duration) (mailbox.LeaseRenewResult, error) {
+		return mailbox.LeaseRenewResult{}, context.DeadlineExceeded
+	}
+	mailboxService.ackFunc = func(_ context.Context, deliveryID, leaseToken string) (mailbox.DeliveryTransitionResult, error) {
+		t.Fatalf("Ack should not be called after lease expiry")
+		return mailbox.DeliveryTransitionResult{}, nil
+	}
+
+	service := newService(Options{
+		MailboxServiceFactory: fakeMailboxServiceFactory{service: mailboxService},
+		CommandRunner: &fakeRunner{t: t, handler: func(args []string, input string) (RunResult, error) {
+			t.Fatalf("unexpected command call: %v", args)
+			return RunResult{}, nil
+		}},
+		Now:                   func() time.Time { return current },
+		DisableLeaseRenewLoop: true,
+	})
+	service.state.boundAddresses = []string{"agent-deck/self"}
+	service.state.defaultSender = "agent-deck/self"
+	service.state.autoBindAttempted = true
+
+	callTool(t, service.Server(), "mailbox_recv", map[string]any{
+		"addresses": []string{"agent-deck/self"},
+	})
+
+	err := service.processLeaseRenewals(context.Background())
+	if err == nil || !isLeaseRenewalFailure(err) {
+		t.Fatalf("processLeaseRenewals() error = %v, want lease renewal failure", err)
+	}
+
+	current = current.Add(defaultMCPLeaseTTL + time.Second)
+	toolErr := callToolExpectError(t, service.Server(), "mailbox_ack", map[string]any{
+		"delivery_id": "dlv_expired_failure",
+		"lease_token": "lease_expired_failure",
+	})
+	if !strings.Contains(toolErr.Error(), "lease ownership is no longer guaranteed") {
+		t.Fatalf("mailbox_ack error = %v, want lease renewal failure text", toolErr)
+	}
+}
+
+func TestMailboxAckStopsTrackingActiveLease(t *testing.T) {
+	mailboxService := &fakeMailboxService{t: t}
+	mailboxService.receiveBatchWithTTLFunc = func(_ context.Context, params mailbox.ReceiveBatchParams, ttl time.Duration) (mailbox.ReceiveResult, error) {
+		return mailbox.ReceiveResult{
+			Messages: []mailbox.ReceivedMessage{{
+				DeliveryID:       "dlv_acked",
+				LeaseToken:       "lease_acked",
+				LeaseExpiresAt:   time.Now().UTC().Add(defaultMCPLeaseTTL).Format(time.RFC3339Nano),
+				RecipientAddress: "agent-deck/self",
+				Subject:          "delegate",
+				Body:             "body",
+			}},
+		}, nil
+	}
+	mailboxService.ackFunc = func(_ context.Context, deliveryID, leaseToken string) (mailbox.DeliveryTransitionResult, error) {
+		if deliveryID != "dlv_acked" || leaseToken != "lease_acked" {
+			t.Fatalf("ack args = delivery=%q lease=%q", deliveryID, leaseToken)
+		}
+		return mailbox.DeliveryTransitionResult{DeliveryID: deliveryID, State: "acked"}, nil
+	}
+
+	service := newService(Options{
+		MailboxServiceFactory: fakeMailboxServiceFactory{service: mailboxService},
+		CommandRunner: &fakeRunner{t: t, handler: func(args []string, input string) (RunResult, error) {
+			t.Fatalf("unexpected command call: %v", args)
+			return RunResult{}, nil
+		}},
+		DisableLeaseRenewLoop: true,
+	})
+	service.state.boundAddresses = []string{"agent-deck/self"}
+	service.state.defaultSender = "agent-deck/self"
+	service.state.autoBindAttempted = true
+
+	recv := callTool(t, service.Server(), "mailbox_recv", map[string]any{
+		"addresses": []string{"agent-deck/self"},
+	})
+	delivery := recv["delivery"].(map[string]any)
+	message := delivery["messages"].([]any)[0].(map[string]any)
+
+	callTool(t, service.Server(), "mailbox_ack", map[string]any{
+		"delivery_id": "dlv_acked",
+		"lease_token": message["lease_token"],
+	})
+
+	if err := service.processLeaseRenewals(context.Background()); err != nil {
+		t.Fatalf("processLeaseRenewals() error = %v", err)
+	}
+	if service.activeLeases.hasTrackedLeases() {
+		t.Fatal("active leases still tracked after ack")
+	}
+}
+
 func TestMailboxReleaseDeferAndFailUseDirectMailboxService(t *testing.T) {
 	t.Parallel()
 
@@ -1418,4 +1797,44 @@ func callTool(t *testing.T, server *mcp.Server, name string, args map[string]any
 		t.Fatalf("unmarshal structured content: %v", err)
 	}
 	return output
+}
+
+func callToolExpectError(t *testing.T, server *mcp.Server, name string, args map[string]any) error {
+	t.Helper()
+
+	ctx := context.Background()
+	clientTransport, serverTransport := mcp.NewInMemoryTransports()
+
+	serverSession, err := server.Connect(ctx, serverTransport, nil)
+	if err != nil {
+		t.Fatalf("server connect: %v", err)
+	}
+	client := mcp.NewClient(&mcp.Implementation{Name: "test-client", Version: "v0.0.1"}, nil)
+	clientSession, err := client.Connect(ctx, clientTransport, nil)
+	if err != nil {
+		t.Fatalf("client connect: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = clientSession.Close()
+		_ = serverSession.Wait()
+	})
+
+	result, err := clientSession.CallTool(ctx, &mcp.CallToolParams{
+		Name:      name,
+		Arguments: args,
+	})
+	if err != nil {
+		return err
+	}
+	if result.IsError {
+		encoded, marshalErr := json.Marshal(result.Content)
+		if marshalErr != nil {
+			return fmt.Errorf("marshal tool error content: %w", marshalErr)
+		}
+		return fmt.Errorf("%s", encoded)
+	}
+	if err == nil {
+		t.Fatalf("call tool %s unexpectedly succeeded", name)
+	}
+	return nil
 }

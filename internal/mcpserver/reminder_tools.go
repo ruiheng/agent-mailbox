@@ -90,6 +90,7 @@ func (s *Service) startActiveReminderLoop() {
 }
 
 func (s *Service) runActiveReminderLoop() {
+	_ = s.processActiveReminderSubscriptions(context.Background())
 	ticker := time.NewTicker(s.reminderPollInterval)
 	defer ticker.Stop()
 	for range ticker.C {
