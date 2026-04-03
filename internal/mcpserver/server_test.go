@@ -20,10 +20,10 @@ type fakeMailboxService struct {
 	sendFunc                func(context.Context, mailbox.SendParams) (mailbox.SendResult, error)
 	listFunc                func(context.Context, mailbox.ListParams) ([]mailbox.ListedDelivery, error)
 	listGroupMessagesFunc   func(context.Context, mailbox.GroupListParams) ([]mailbox.GroupListedMessage, error)
-	listStaleAddressesFunc  func(context.Context, mailbox.StaleAddressesParams) ([]mailbox.StaleAddress, error)
 	receiveBatchFunc        func(context.Context, mailbox.ReceiveBatchParams) (mailbox.ReceiveResult, error)
 	receiveBatchWithTTLFunc func(context.Context, mailbox.ReceiveBatchParams, time.Duration) (mailbox.ReceiveResult, error)
 	waitFunc                func(context.Context, mailbox.WaitParams) (mailbox.ListedDelivery, error)
+	hasVisibleDeliveryFunc  func(context.Context, mailbox.WaitParams) (bool, error)
 	readMessagesFunc        func(context.Context, []string) ([]mailbox.ReadMessage, error)
 	readLatestFunc          func(context.Context, []string, string, int) ([]mailbox.ReadDelivery, bool, error)
 	readDeliveriesFunc      func(context.Context, []string) ([]mailbox.ReadDelivery, error)
@@ -55,13 +55,6 @@ func (f *fakeMailboxService) ListGroupMessages(ctx context.Context, params mailb
 	return f.listGroupMessagesFunc(ctx, params)
 }
 
-func (f *fakeMailboxService) ListStaleAddresses(ctx context.Context, params mailbox.StaleAddressesParams) ([]mailbox.StaleAddress, error) {
-	if f.listStaleAddressesFunc == nil {
-		f.t.Fatalf("unexpected ListStaleAddresses call: %+v", params)
-	}
-	return f.listStaleAddressesFunc(ctx, params)
-}
-
 func (f *fakeMailboxService) ReceiveBatch(ctx context.Context, params mailbox.ReceiveBatchParams) (mailbox.ReceiveResult, error) {
 	if f.receiveBatchFunc == nil {
 		f.t.Fatalf("unexpected ReceiveBatch call: %+v", params)
@@ -84,6 +77,13 @@ func (f *fakeMailboxService) Wait(ctx context.Context, params mailbox.WaitParams
 		f.t.Fatalf("unexpected Wait call: %+v", params)
 	}
 	return f.waitFunc(ctx, params)
+}
+
+func (f *fakeMailboxService) HasVisibleDelivery(ctx context.Context, params mailbox.WaitParams) (bool, error) {
+	if f.hasVisibleDeliveryFunc == nil {
+		return false, nil
+	}
+	return f.hasVisibleDeliveryFunc(ctx, params)
 }
 
 func (f *fakeMailboxService) ReadMessages(ctx context.Context, messageIDs []string) ([]mailbox.ReadMessage, error) {
@@ -420,563 +420,13 @@ func TestMailboxSendReturnsReceiptWhenNotifyFails(t *testing.T) {
 	}
 }
 
-func TestMailboxReminderSubscribeUpsertsBySelectorAndRoute(t *testing.T) {
-	var staleCalls []mailbox.StaleAddressesParams
+func TestToolResultsIncludeMailHintWhenBoundAddressesHaveMail(t *testing.T) {
 	mailboxService := &fakeMailboxService{t: t}
-	mailboxService.listStaleAddressesFunc = func(_ context.Context, params mailbox.StaleAddressesParams) ([]mailbox.StaleAddress, error) {
-		staleCalls = append(staleCalls, params)
-		return []mailbox.StaleAddress{}, nil
-	}
-
-	service := newService(Options{
-		MailboxServiceFactory: fakeMailboxServiceFactory{service: mailboxService},
-		CommandRunner: &fakeRunner{t: t, handler: func(args []string, input string) (RunResult, error) {
-			t.Fatalf("unexpected command call: %v", args)
-			return RunResult{}, nil
-		}},
-	})
-	service.state.autoBindAttempted = true
-
-	first := callTool(t, service.Server(), "mailbox_reminder_subscribe", map[string]any{
-		"addresses":  []string{"agent-deck/b", "agent-deck/a", "agent-deck/a"},
-		"route":      "agent-deck/worker",
-		"older_than": "10m",
-	})
-	if got := first["updated"]; got != false {
-		t.Fatalf("updated = %v, want false", got)
-	}
-	firstSub := first["subscription"].(map[string]any)
-	firstSelector := firstSub["selector"].(map[string]any)
-	if got := firstSelector["addresses"].([]any); len(got) != 2 || got[0] != "agent-deck/a" || got[1] != "agent-deck/b" {
-		t.Fatalf("selector addresses = %v, want sorted deduped values", got)
-	}
-
-	second := callTool(t, service.Server(), "mailbox_reminder_subscribe", map[string]any{
-		"addresses":  []string{"agent-deck/a", "agent-deck/b"},
-		"route":      "agent-deck/worker",
-		"older_than": "15m",
-	})
-	if got := second["updated"]; got != true {
-		t.Fatalf("updated = %v, want true", got)
-	}
-
-	status := callTool(t, service.Server(), "mailbox_reminder_status", nil)
-	subs := status["subscriptions"].([]any)
-	if len(subs) != 1 {
-		t.Fatalf("subscriptions = %d, want 1", len(subs))
-	}
-	entry := subs[0].(map[string]any)
-	subscription := entry["subscription"].(map[string]any)
-	policy := subscription["policy"].(map[string]any)
-	if got := policy["older_than"]; got != "15m" {
-		t.Fatalf("older_than = %v, want 15m", got)
-	}
-
-	if len(staleCalls) != 3 {
-		t.Fatalf("stale call count = %d, want 3", len(staleCalls))
-	}
-	for _, params := range staleCalls {
-		if params.OlderThan != 10*time.Minute && params.OlderThan != 15*time.Minute {
-			t.Fatalf("older_than = %s, want 10m or 15m", params.OlderThan)
+	mailboxService.hasVisibleDeliveryFunc = func(_ context.Context, params mailbox.WaitParams) (bool, error) {
+		if len(params.Addresses) != 1 || params.Addresses[0] != "agent-deck/self" {
+			t.Fatalf("hasVisibleDelivery params = %+v, want bound self address", params)
 		}
-		if len(params.Addresses) != 2 || params.Addresses[0] != "agent-deck/a" || params.Addresses[1] != "agent-deck/b" {
-			t.Fatalf("stale addresses = %v, want sorted deduped values", params.Addresses)
-		}
-	}
-}
-
-func TestMailboxReminderUnsubscribeIsIdempotent(t *testing.T) {
-	mailboxService := &fakeMailboxService{t: t}
-	mailboxService.listStaleAddressesFunc = func(_ context.Context, params mailbox.StaleAddressesParams) ([]mailbox.StaleAddress, error) {
-		return []mailbox.StaleAddress{}, nil
-	}
-
-	service := newService(Options{
-		MailboxServiceFactory: fakeMailboxServiceFactory{service: mailboxService},
-		CommandRunner: &fakeRunner{t: t, handler: func(args []string, input string) (RunResult, error) {
-			t.Fatalf("unexpected command call: %v", args)
-			return RunResult{}, nil
-		}},
-	})
-	service.state.autoBindAttempted = true
-
-	callTool(t, service.Server(), "mailbox_reminder_subscribe", map[string]any{
-		"addresses":  []string{"agent-deck/a"},
-		"route":      "agent-deck/worker",
-		"older_than": "10m",
-	})
-
-	first := callTool(t, service.Server(), "mailbox_reminder_unsubscribe", map[string]any{
-		"addresses": []string{"agent-deck/a"},
-		"route":     "agent-deck/worker",
-	})
-	if got := first["removed"]; got != true {
-		t.Fatalf("removed = %v, want true", got)
-	}
-
-	second := callTool(t, service.Server(), "mailbox_reminder_unsubscribe", map[string]any{
-		"addresses": []string{"agent-deck/a"},
-		"route":     "agent-deck/worker",
-	})
-	if got := second["removed"]; got != false {
-		t.Fatalf("removed = %v, want false", got)
-	}
-}
-
-func TestMailboxReminderSubscribeSupportsGroupViewsAndActivePush(t *testing.T) {
-	callCount := 0
-	mailboxService := &fakeMailboxService{t: t}
-	mailboxService.listStaleAddressesFunc = func(_ context.Context, params mailbox.StaleAddressesParams) ([]mailbox.StaleAddress, error) {
-		callCount++
-		if params.OlderThan != 10*time.Minute || len(params.GroupViews) != 1 {
-			t.Fatalf("stale params = %+v, want one normalized group view at 10m", params)
-		}
-		groupView := params.GroupViews[0]
-		switch {
-		case groupView.Address == "group/a" && groupView.Person == "alice":
-			return []mailbox.StaleAddress{}, nil
-		case groupView.Address == "group/b" && groupView.Person == "bob":
-			return []mailbox.StaleAddress{}, nil
-		default:
-			t.Fatalf("group view = %+v, want normalized group query", groupView)
-			return nil, nil
-		}
-	}
-
-	service := newService(Options{
-		MailboxServiceFactory: fakeMailboxServiceFactory{service: mailboxService},
-		CommandRunner: &fakeRunner{t: t, handler: func(args []string, input string) (RunResult, error) {
-			t.Fatalf("unexpected command call: %v", args)
-			return RunResult{}, nil
-		}},
-		DisableActiveReminderLoop: true,
-	})
-	service.state.autoBindAttempted = true
-
-	output := callTool(t, service.Server(), "mailbox_reminder_subscribe", map[string]any{
-		"group_views": []map[string]any{
-			{"group_address": "group/b", "as_person": "bob"},
-			{"group_address": "group/a", "as_person": "alice"},
-			{"group_address": "group/a", "as_person": "alice"},
-		},
-		"route":       "agent-deck/worker",
-		"older_than":  "10m",
-		"active_push": true,
-	})
-
-	subscription := output["subscription"].(map[string]any)
-	selector := subscription["selector"].(map[string]any)
-	groupViews := selector["group_views"].([]any)
-	if len(groupViews) != 2 {
-		t.Fatalf("len(group_views) = %d, want 2", len(groupViews))
-	}
-	first := groupViews[0].(map[string]any)
-	second := groupViews[1].(map[string]any)
-	if first["group_address"] != "group/a" || first["as_person"] != "alice" {
-		t.Fatalf("first group view = %v, want group/a alice", first)
-	}
-	if second["group_address"] != "group/b" || second["as_person"] != "bob" {
-		t.Fatalf("second group view = %v, want group/b bob", second)
-	}
-	policy := subscription["policy"].(map[string]any)
-	if got := policy["active_push"]; got != true {
-		t.Fatalf("active_push = %v, want true", got)
-	}
-	if callCount != 2 {
-		t.Fatalf("stale call count = %d, want 2", callCount)
-	}
-}
-
-func TestMailboxReminderSubscribeStartsActiveLoop(t *testing.T) {
-	mailboxService := &fakeMailboxService{t: t}
-	mailboxService.listStaleAddressesFunc = func(_ context.Context, params mailbox.StaleAddressesParams) ([]mailbox.StaleAddress, error) {
-		if params.OlderThan != 10*time.Minute || len(params.Addresses) != 1 || params.Addresses[0] != "agent-deck/worker" {
-			t.Fatalf("stale params = %+v, want worker selector at 10m", params)
-		}
-		return []mailbox.StaleAddress{{
-			Address:          "agent-deck/worker",
-			OldestEligibleAt: "2026-04-03T00:40:00Z",
-			ClaimableCount:   1,
-		}}, nil
-	}
-
-	notified := make(chan struct{}, 1)
-	commandRunner := &fakeRunner{t: t, handler: func(args []string, input string) (RunResult, error) {
-		switch {
-		case strings.Join(args, "\x00") == strings.Join([]string{"agent-deck", "session", "show", "worker", "--json"}, "\x00"):
-			return RunResult{ExitCode: 0, Stdout: `{"id":"worker","title":"coder-123","status":"waiting"}`}, nil
-		case len(args) == 6 && args[0] == "agent-deck" && args[1] == "session" && args[2] == "send":
-			select {
-			case notified <- struct{}{}:
-			default:
-			}
-			return RunResult{ExitCode: 0}, nil
-		default:
-			t.Fatalf("unexpected command args: %v", args)
-			return RunResult{}, nil
-		}
-	}}
-
-	service := newService(Options{
-		MailboxServiceFactory: fakeMailboxServiceFactory{service: mailboxService},
-		CommandRunner:         commandRunner,
-		Now:                   time.Now,
-		ReminderPollInterval:  10 * time.Millisecond,
-		ReminderConfirmDelay:  time.Millisecond,
-	})
-	service.state.autoBindAttempted = true
-
-	callTool(t, service.Server(), "mailbox_reminder_subscribe", map[string]any{
-		"addresses":   []string{"agent-deck/worker"},
-		"route":       "agent-deck/worker",
-		"older_than":  "10m",
-		"active_push": true,
-	})
-
-	select {
-	case <-notified:
-	case <-time.After(500 * time.Millisecond):
-		t.Fatal("timed out waiting for active reminder notification")
-	}
-}
-
-func TestProcessActiveReminderSubscriptionsConfirmsThenCooldowns(t *testing.T) {
-	current := time.Date(2026, 4, 3, 1, 0, 0, 0, time.UTC)
-	sendCount := 0
-
-	mailboxService := &fakeMailboxService{t: t}
-	mailboxService.listStaleAddressesFunc = func(_ context.Context, params mailbox.StaleAddressesParams) ([]mailbox.StaleAddress, error) {
-		if params.OlderThan != 10*time.Minute || len(params.Addresses) != 1 || params.Addresses[0] != "agent-deck/worker" {
-			t.Fatalf("stale params = %+v, want worker selector at 10m", params)
-		}
-		return []mailbox.StaleAddress{{
-			Address:          "agent-deck/worker",
-			OldestEligibleAt: "2026-04-03T00:40:00Z",
-			ClaimableCount:   1,
-		}}, nil
-	}
-
-	commandRunner := &fakeRunner{t: t, handler: func(args []string, input string) (RunResult, error) {
-		switch {
-		case strings.Join(args, "\x00") == strings.Join([]string{"agent-deck", "session", "show", "worker", "--json"}, "\x00"):
-			return RunResult{ExitCode: 0, Stdout: `{"id":"worker","title":"coder-123","status":"waiting"}`}, nil
-		case len(args) == 6 && args[0] == "agent-deck" && args[1] == "session" && args[2] == "send":
-			sendCount++
-			return RunResult{ExitCode: 0}, nil
-		default:
-			t.Fatalf("unexpected command args: %v", args)
-			return RunResult{}, nil
-		}
-	}}
-
-	service := newService(Options{
-		MailboxServiceFactory:     fakeMailboxServiceFactory{service: mailboxService},
-		CommandRunner:             commandRunner,
-		Now:                       func() time.Time { return current },
-		ReminderConfirmDelay:      2 * time.Second,
-		DisableActiveReminderLoop: true,
-	})
-	subscription, err := buildReminderSubscription([]string{"agent-deck/worker"}, nil, "agent-deck/worker", "10m", true)
-	if err != nil {
-		t.Fatalf("buildReminderSubscription() error = %v", err)
-	}
-	service.reminders.setSubscription(subscription)
-
-	if err := service.processActiveReminderSubscriptions(context.Background()); err != nil {
-		t.Fatalf("processActiveReminderSubscriptions(first) error = %v", err)
-	}
-	if sendCount != 0 {
-		t.Fatalf("sendCount after first poll = %d, want 0", sendCount)
-	}
-
-	current = current.Add(time.Second)
-	if err := service.processActiveReminderSubscriptions(context.Background()); err != nil {
-		t.Fatalf("processActiveReminderSubscriptions(second) error = %v", err)
-	}
-	if sendCount != 0 {
-		t.Fatalf("sendCount after second poll = %d, want 0", sendCount)
-	}
-
-	current = current.Add(2 * time.Second)
-	if err := service.processActiveReminderSubscriptions(context.Background()); err != nil {
-		t.Fatalf("processActiveReminderSubscriptions(third) error = %v", err)
-	}
-	if sendCount != 1 {
-		t.Fatalf("sendCount after third poll = %d, want 1", sendCount)
-	}
-
-	current = current.Add(time.Second)
-	if err := service.processActiveReminderSubscriptions(context.Background()); err != nil {
-		t.Fatalf("processActiveReminderSubscriptions(cooldown) error = %v", err)
-	}
-	if sendCount != 1 {
-		t.Fatalf("sendCount during cooldown = %d, want 1", sendCount)
-	}
-
-	current = current.Add(10 * time.Minute)
-	if err := service.processActiveReminderSubscriptions(context.Background()); err != nil {
-		t.Fatalf("processActiveReminderSubscriptions(post-cooldown pending) error = %v", err)
-	}
-	if sendCount != 1 {
-		t.Fatalf("sendCount after cooldown reset = %d, want 1", sendCount)
-	}
-
-	current = current.Add(3 * time.Second)
-	if err := service.processActiveReminderSubscriptions(context.Background()); err != nil {
-		t.Fatalf("processActiveReminderSubscriptions(post-cooldown notify) error = %v", err)
-	}
-	if sendCount != 2 {
-		t.Fatalf("sendCount after post-cooldown notify = %d, want 2", sendCount)
-	}
-}
-
-func TestProcessActiveReminderSubscriptionsSuppressesRecentLocalActivity(t *testing.T) {
-	current := time.Date(2026, 4, 3, 2, 0, 0, 0, time.UTC)
-	showStatuses := []string{"running", "waiting", "waiting"}
-	sendCount := 0
-	showIndex := 0
-
-	mailboxService := &fakeMailboxService{t: t}
-	mailboxService.listStaleAddressesFunc = func(_ context.Context, params mailbox.StaleAddressesParams) ([]mailbox.StaleAddress, error) {
-		return []mailbox.StaleAddress{{
-			Address:          "agent-deck/worker",
-			OldestEligibleAt: "2026-04-03T01:40:00Z",
-			ClaimableCount:   1,
-		}}, nil
-	}
-
-	commandRunner := &fakeRunner{t: t, handler: func(args []string, input string) (RunResult, error) {
-		switch {
-		case strings.Join(args, "\x00") == strings.Join([]string{"agent-deck", "session", "show", "worker", "--json"}, "\x00"):
-			status := showStatuses[showIndex]
-			if showIndex < len(showStatuses)-1 {
-				showIndex++
-			}
-			return RunResult{ExitCode: 0, Stdout: `{"id":"worker","title":"coder-123","status":"` + status + `"}`}, nil
-		case len(args) == 6 && args[0] == "agent-deck" && args[1] == "session" && args[2] == "send":
-			sendCount++
-			return RunResult{ExitCode: 0}, nil
-		default:
-			t.Fatalf("unexpected command args: %v", args)
-			return RunResult{}, nil
-		}
-	}}
-
-	service := newService(Options{
-		MailboxServiceFactory:     fakeMailboxServiceFactory{service: mailboxService},
-		CommandRunner:             commandRunner,
-		Now:                       func() time.Time { return current },
-		ReminderConfirmDelay:      2 * time.Second,
-		DisableActiveReminderLoop: true,
-	})
-	subscription, err := buildReminderSubscription([]string{"agent-deck/worker"}, nil, "agent-deck/worker", "10m", true)
-	if err != nil {
-		t.Fatalf("buildReminderSubscription() error = %v", err)
-	}
-	service.reminders.setSubscription(subscription)
-
-	if err := service.processActiveReminderSubscriptions(context.Background()); err != nil {
-		t.Fatalf("processActiveReminderSubscriptions(first) error = %v", err)
-	}
-	if sendCount != 0 {
-		t.Fatalf("sendCount after suppressed poll = %d, want 0", sendCount)
-	}
-
-	current = current.Add(3 * time.Second)
-	if err := service.processActiveReminderSubscriptions(context.Background()); err != nil {
-		t.Fatalf("processActiveReminderSubscriptions(second) error = %v", err)
-	}
-	if sendCount != 0 {
-		t.Fatalf("sendCount after pending reset = %d, want 0", sendCount)
-	}
-
-	current = current.Add(3 * time.Second)
-	if err := service.processActiveReminderSubscriptions(context.Background()); err != nil {
-		t.Fatalf("processActiveReminderSubscriptions(third) error = %v", err)
-	}
-	if sendCount != 1 {
-		t.Fatalf("sendCount after wakeable re-confirm = %d, want 1", sendCount)
-	}
-}
-
-func TestProcessActiveReminderSubscriptionsCombinesPersonalAndGroupSelectors(t *testing.T) {
-	current := time.Date(2026, 4, 3, 3, 0, 0, 0, time.UTC)
-	personalCalls := 0
-	groupCalls := 0
-	sendCount := 0
-
-	mailboxService := &fakeMailboxService{t: t}
-	mailboxService.listStaleAddressesFunc = func(_ context.Context, params mailbox.StaleAddressesParams) ([]mailbox.StaleAddress, error) {
-		switch {
-		case params.OlderThan == 10*time.Minute && len(params.Addresses) == 1 && params.Addresses[0] == "agent-deck/personal":
-			personalCalls++
-			return []mailbox.StaleAddress{{
-				Address:          "agent-deck/personal",
-				OldestEligibleAt: "2026-04-03T02:40:00Z",
-				ClaimableCount:   1,
-			}}, nil
-		case params.OlderThan == 10*time.Minute && len(params.GroupViews) == 1 && params.GroupViews[0].Address == "group/ops" && params.GroupViews[0].Person == "alice":
-			groupCalls++
-			return []mailbox.StaleAddress{{
-				Address:          "group/ops",
-				Person:           "alice",
-				OldestEligibleAt: "2026-04-03T02:41:00Z",
-				ClaimableCount:   2,
-			}}, nil
-		default:
-			t.Fatalf("unexpected stale params: %+v", params)
-			return nil, nil
-		}
-	}
-
-	commandRunner := &fakeRunner{t: t, handler: func(args []string, input string) (RunResult, error) {
-		switch {
-		case strings.Join(args, "\x00") == strings.Join([]string{"agent-deck", "session", "show", "worker", "--json"}, "\x00"):
-			return RunResult{ExitCode: 0, Stdout: `{"id":"worker","title":"coder-123","status":"waiting"}`}, nil
-		case len(args) == 6 && args[0] == "agent-deck" && args[1] == "session" && args[2] == "send":
-			sendCount++
-			return RunResult{ExitCode: 0}, nil
-		default:
-			t.Fatalf("unexpected command args: %v", args)
-			return RunResult{}, nil
-		}
-	}}
-
-	service := newService(Options{
-		MailboxServiceFactory:     fakeMailboxServiceFactory{service: mailboxService},
-		CommandRunner:             commandRunner,
-		Now:                       func() time.Time { return current },
-		ReminderConfirmDelay:      2 * time.Second,
-		DisableActiveReminderLoop: true,
-	})
-	subscription, err := buildReminderSubscription(
-		[]string{"agent-deck/personal"},
-		[]reminderGroupViewInput{{GroupAddress: "group/ops", AsPerson: "alice"}},
-		"agent-deck/worker",
-		"10m",
-		true,
-	)
-	if err != nil {
-		t.Fatalf("buildReminderSubscription() error = %v", err)
-	}
-	service.reminders.setSubscription(subscription)
-
-	if err := service.processActiveReminderSubscriptions(context.Background()); err != nil {
-		t.Fatalf("processActiveReminderSubscriptions(first) error = %v", err)
-	}
-	current = current.Add(3 * time.Second)
-	if err := service.processActiveReminderSubscriptions(context.Background()); err != nil {
-		t.Fatalf("processActiveReminderSubscriptions(second) error = %v", err)
-	}
-
-	if personalCalls != 2 {
-		t.Fatalf("personal stale calls = %d, want 2", personalCalls)
-	}
-	if groupCalls != 2 {
-		t.Fatalf("group stale calls = %d, want 2", groupCalls)
-	}
-	if sendCount != 1 {
-		t.Fatalf("sendCount = %d, want 1", sendCount)
-	}
-}
-
-func TestProcessActiveReminderSubscriptionsRetriesAfterFailedNotifyWithoutCooldown(t *testing.T) {
-	current := time.Date(2026, 4, 3, 4, 0, 0, 0, time.UTC)
-	sendCount := 0
-
-	mailboxService := &fakeMailboxService{t: t}
-	mailboxService.listStaleAddressesFunc = func(_ context.Context, params mailbox.StaleAddressesParams) ([]mailbox.StaleAddress, error) {
-		if params.OlderThan != 10*time.Minute || len(params.Addresses) != 1 || params.Addresses[0] != "agent-deck/worker" {
-			t.Fatalf("stale params = %+v, want worker selector at 10m", params)
-		}
-		return []mailbox.StaleAddress{{
-			Address:          "agent-deck/worker",
-			OldestEligibleAt: "2026-04-03T03:40:00Z",
-			ClaimableCount:   1,
-		}}, nil
-	}
-
-	commandRunner := &fakeRunner{t: t, handler: func(args []string, input string) (RunResult, error) {
-		switch {
-		case strings.Join(args, "\x00") == strings.Join([]string{"agent-deck", "session", "show", "worker", "--json"}, "\x00"):
-			return RunResult{ExitCode: 0, Stdout: `{"id":"worker","title":"coder-123","status":"waiting"}`}, nil
-		case len(args) == 6 && args[0] == "agent-deck" && args[1] == "session" && args[2] == "send":
-			sendCount++
-			if sendCount == 1 {
-				return RunResult{ExitCode: 1, Stderr: "wakeup failed"}, nil
-			}
-			return RunResult{ExitCode: 0}, nil
-		default:
-			t.Fatalf("unexpected command args: %v", args)
-			return RunResult{}, nil
-		}
-	}}
-
-	service := newService(Options{
-		MailboxServiceFactory:     fakeMailboxServiceFactory{service: mailboxService},
-		CommandRunner:             commandRunner,
-		Now:                       func() time.Time { return current },
-		ReminderConfirmDelay:      2 * time.Second,
-		DisableActiveReminderLoop: true,
-	})
-	subscription, err := buildReminderSubscription([]string{"agent-deck/worker"}, nil, "agent-deck/worker", "10m", true)
-	if err != nil {
-		t.Fatalf("buildReminderSubscription() error = %v", err)
-	}
-	service.reminders.setSubscription(subscription)
-
-	if err := service.processActiveReminderSubscriptions(context.Background()); err != nil {
-		t.Fatalf("processActiveReminderSubscriptions(first) error = %v", err)
-	}
-
-	current = current.Add(3 * time.Second)
-	if err := service.processActiveReminderSubscriptions(context.Background()); err != nil {
-		t.Fatalf("processActiveReminderSubscriptions(failed notify) error = %v", err)
-	}
-	if sendCount != 1 {
-		t.Fatalf("sendCount after failed notify = %d, want 1", sendCount)
-	}
-	runtime, ok := service.reminders.subscriptionRuntime(subscription.Key)
-	if !ok {
-		t.Fatalf("subscription runtime missing for key %q", subscription.Key)
-	}
-	if runtime.LastNotifiedAt != "" {
-		t.Fatalf("LastNotifiedAt after failed notify = %q, want empty", runtime.LastNotifiedAt)
-	}
-	if runtime.PendingSince == "" {
-		t.Fatal("PendingSince after failed notify = empty, want preserved pending retry state")
-	}
-
-	current = current.Add(time.Second)
-	if err := service.processActiveReminderSubscriptions(context.Background()); err != nil {
-		t.Fatalf("processActiveReminderSubscriptions(retry) error = %v", err)
-	}
-	if sendCount != 2 {
-		t.Fatalf("sendCount after retry = %d, want 2", sendCount)
-	}
-	runtime, ok = service.reminders.subscriptionRuntime(subscription.Key)
-	if !ok {
-		t.Fatalf("subscription runtime missing for key %q", subscription.Key)
-	}
-	if runtime.LastNotifiedAt == "" {
-		t.Fatal("LastNotifiedAt after successful retry = empty, want cooldown stamp")
-	}
-	if runtime.PendingSince != "" {
-		t.Fatalf("PendingSince after successful retry = %q, want empty", runtime.PendingSince)
-	}
-}
-
-func TestMailboxStatusIncludesPassiveReminderHints(t *testing.T) {
-	mailboxService := &fakeMailboxService{t: t}
-	mailboxService.listStaleAddressesFunc = func(_ context.Context, params mailbox.StaleAddressesParams) ([]mailbox.StaleAddress, error) {
-		if params.OlderThan != 10*time.Minute || len(params.Addresses) != 1 || params.Addresses[0] != "agent-deck/worker" {
-			t.Fatalf("stale params = %+v, want worker selector at 10m", params)
-		}
-		return []mailbox.StaleAddress{{
-			Address:          "agent-deck/worker",
-			OldestEligibleAt: "2026-04-01T00:00:00Z",
-			ClaimableCount:   2,
-		}}, nil
+		return true, nil
 	}
 
 	service := newService(Options{
@@ -995,55 +445,26 @@ func TestMailboxStatusIncludesPassiveReminderHints(t *testing.T) {
 	service.state.defaultSender = "agent-deck/self"
 	service.state.autoBindAttempted = true
 
-	initial := callTool(t, service.Server(), "mailbox_status", nil)
-	if got := initial["reminders"]; got != nil {
-		t.Fatalf("reminders = %v, want nil before subscription", got)
-	}
-
-	subscription, err := buildReminderSubscription([]string{"agent-deck/worker"}, nil, "agent-deck/self", "10m", false)
-	if err != nil {
-		t.Fatalf("buildReminderSubscription() error = %v", err)
-	}
-	service.reminders.setSubscription(subscription)
-
 	status := callTool(t, service.Server(), "mailbox_status", nil)
-	reminders := status["reminders"].(map[string]any)
-	if got := reminders["configured_count"]; got != float64(1) {
-		t.Fatalf("configured_count = %v, want 1", got)
-	}
-	if got := reminders["stale_count"]; got != float64(1) {
-		t.Fatalf("stale_count = %v, want 1", got)
-	}
-	staleSubs := reminders["subscriptions"].([]any)
-	if len(staleSubs) != 1 {
-		t.Fatalf("subscriptions = %d, want 1", len(staleSubs))
-	}
-	staleSub := staleSubs[0].(map[string]any)
-	if got := staleSub["route"]; got != "agent-deck/self" {
-		t.Fatalf("route = %v, want agent-deck/self", got)
-	}
-	if got := staleSub["stale_address_count"]; got != float64(1) {
-		t.Fatalf("stale_address_count = %v, want 1", got)
-	}
-	if got := staleSub["claimable_count"]; got != float64(2) {
-		t.Fatalf("claimable_count = %v, want 2", got)
+	if got := status["mail_hint"]; got != defaultMailHint {
+		t.Fatalf("mailbox_status mail_hint = %v, want %q", got, defaultMailHint)
 	}
 
 	resolve := callTool(t, service.Server(), "agent_deck_resolve_session", map[string]any{
 		"session": "planner",
 	})
-	if got := resolve["reminders"]; got != nil {
-		t.Fatalf("agent_deck_resolve_session reminders = %v, want nil", got)
+	if got := resolve["mail_hint"]; got != defaultMailHint {
+		t.Fatalf("agent_deck_resolve_session mail_hint = %v, want %q", got, defaultMailHint)
 	}
 }
 
-func TestMailboxSendOmitsPassiveRemindersWhenStaleCheckFails(t *testing.T) {
+func TestMailboxSendOmitsMailHintWhenAvailabilityCheckFails(t *testing.T) {
 	mailboxService := &fakeMailboxService{t: t}
 	mailboxService.sendFunc = func(_ context.Context, params mailbox.SendParams) (mailbox.SendResult, error) {
 		return mailbox.SendResult{DeliveryID: "dlv_side_effect"}, nil
 	}
-	mailboxService.listStaleAddressesFunc = func(_ context.Context, params mailbox.StaleAddressesParams) ([]mailbox.StaleAddress, error) {
-		return nil, context.DeadlineExceeded
+	mailboxService.hasVisibleDeliveryFunc = func(_ context.Context, params mailbox.WaitParams) (bool, error) {
+		return false, context.DeadlineExceeded
 	}
 
 	service := newService(Options{
@@ -1056,12 +477,6 @@ func TestMailboxSendOmitsPassiveRemindersWhenStaleCheckFails(t *testing.T) {
 	service.state.boundAddresses = []string{"agent-deck/self"}
 	service.state.defaultSender = "agent-deck/self"
 	service.state.autoBindAttempted = true
-
-	subscription, err := buildReminderSubscription([]string{"agent-deck/worker"}, nil, "agent-deck/self", "10m", false)
-	if err != nil {
-		t.Fatalf("buildReminderSubscription() error = %v", err)
-	}
-	service.reminders.setSubscription(subscription)
 
 	output := callTool(t, service.Server(), "mailbox_send", map[string]any{
 		"to_address":   "agent-deck/self",
@@ -1078,15 +493,18 @@ func TestMailboxSendOmitsPassiveRemindersWhenStaleCheckFails(t *testing.T) {
 	if got := output["notify_status"]; got != "skipped_local" {
 		t.Fatalf("notify_status = %v, want skipped_local", got)
 	}
-	if got := output["reminders"]; got != nil {
-		t.Fatalf("reminders = %v, want nil when passive stale check fails", got)
+	if got := output["mail_hint"]; got != nil {
+		t.Fatalf("mail_hint = %v, want nil when availability check fails", got)
 	}
 }
 
-func TestMailboxBindAndReminderToolsDoNotExposePassiveReminderHints(t *testing.T) {
+func TestMailboxBindIncludesMailHint(t *testing.T) {
 	mailboxService := &fakeMailboxService{t: t}
-	mailboxService.listStaleAddressesFunc = func(_ context.Context, params mailbox.StaleAddressesParams) ([]mailbox.StaleAddress, error) {
-		return []mailbox.StaleAddress{}, nil
+	mailboxService.hasVisibleDeliveryFunc = func(_ context.Context, params mailbox.WaitParams) (bool, error) {
+		if len(params.Addresses) != 1 || params.Addresses[0] != "agent-deck/self" {
+			t.Fatalf("hasVisibleDelivery params = %+v, want bound self address", params)
+		}
+		return true, nil
 	}
 
 	service := newService(Options{
@@ -1101,22 +519,8 @@ func TestMailboxBindAndReminderToolsDoNotExposePassiveReminderHints(t *testing.T
 	bind := callTool(t, service.Server(), "mailbox_bind", map[string]any{
 		"addresses": []string{"agent-deck/self"},
 	})
-	if got := bind["reminders"]; got != nil {
-		t.Fatalf("mailbox_bind reminders = %v, want nil", got)
-	}
-
-	subscribe := callTool(t, service.Server(), "mailbox_reminder_subscribe", map[string]any{
-		"addresses":  []string{"agent-deck/self"},
-		"route":      "agent-deck/self",
-		"older_than": "10m",
-	})
-	if got := subscribe["reminders"]; got != nil {
-		t.Fatalf("mailbox_reminder_subscribe reminders = %v, want nil", got)
-	}
-
-	reminderStatus := callTool(t, service.Server(), "mailbox_reminder_status", nil)
-	if got := reminderStatus["reminders"]; got != nil {
-		t.Fatalf("mailbox_reminder_status reminders = %v, want nil", got)
+	if got := bind["mail_hint"]; got != defaultMailHint {
+		t.Fatalf("mailbox_bind mail_hint = %v, want %q", got, defaultMailHint)
 	}
 }
 

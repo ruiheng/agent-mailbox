@@ -54,6 +54,14 @@ func (o *Operations) Wait(ctx context.Context, params WaitParams) (ListedDeliver
 	return o.store.Wait(ctx, params)
 }
 
+func (o *Operations) HasVisibleDelivery(ctx context.Context, params WaitParams) (bool, error) {
+	addresses, err := normalizeAddresses(params.Address, params.Addresses, "--for")
+	if err != nil {
+		return false, err
+	}
+	return o.store.hasClaimableDelivery(ctx, addresses)
+}
+
 func (o *Operations) ReadMessages(ctx context.Context, messageIDs []string) ([]ReadMessage, error) {
 	return o.store.ReadMessages(ctx, messageIDs)
 }

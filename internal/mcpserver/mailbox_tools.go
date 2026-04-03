@@ -129,7 +129,7 @@ func (s *Service) mailboxBind(ctx context.Context, _ *mcp.CallToolRequest, input
 	}
 	out := boundStateMap(bound)
 	out["status"] = "bound"
-	return nil, out, nil
+	return s.toolResult(ctx, out)
 }
 
 func (s *Service) mailboxStatus(ctx context.Context, _ *mcp.CallToolRequest, _ mailboxStatusInput) (*mcp.CallToolResult, map[string]any, error) {
@@ -462,5 +462,5 @@ func (s *Service) mailboxFail(ctx context.Context, _ *mcp.CallToolRequest, input
 }
 
 func (s *Service) mailboxToolResult(ctx context.Context, result map[string]any) (*mcp.CallToolResult, map[string]any, error) {
-	return nil, s.withPassiveReminderPayloadBestEffort(ctx, result), nil
+	return s.toolResult(ctx, result)
 }

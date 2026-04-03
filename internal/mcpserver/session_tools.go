@@ -37,14 +37,14 @@ func (s *Service) agentDeckResolveSession(ctx context.Context, _ *mcp.CallToolRe
 		return nil, nil, err
 	}
 	if data == nil {
-		return nil, map[string]any{
+		return s.toolResult(ctx, map[string]any{
 			"status":      "not_found",
 			"session_ref": input.Session,
-		}, nil
+		})
 	}
 	out := sessionInfoMap(data, input.Session)
 	out["status"] = "found"
-	return nil, out, nil
+	return s.toolResult(ctx, out)
 }
 
 func (s *Service) agentDeckEnsureSession(ctx context.Context, _ *mcp.CallToolRequest, input agentDeckEnsureSessionInput) (*mcp.CallToolResult, map[string]any, error) {
@@ -52,5 +52,5 @@ func (s *Service) agentDeckEnsureSession(ctx context.Context, _ *mcp.CallToolReq
 	if err != nil {
 		return nil, nil, err
 	}
-	return nil, out, nil
+	return s.toolResult(ctx, out)
 }

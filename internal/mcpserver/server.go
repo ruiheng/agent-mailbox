@@ -3,7 +3,6 @@ package mcpserver
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -23,12 +22,10 @@ const (
 	ensureSessionShowTimeout    = 30 * time.Second
 	defaultMCPLeaseTTL          = 30 * time.Second
 	defaultLeaseRenewInterval   = 10 * time.Second
-	defaultReminderPollInterval = 30 * time.Second
-	defaultReminderConfirmDelay = 2 * time.Second
 	notificationDelivery        = "delivery_available"
-	notificationStaleUnread     = "stale_unread"
 	defaultListenerMessage      = ""
 	defaultNotifyMessage        = "Use the check-agent-mail skill now. Receive the pending message for your current agent-deck session and execute its requested action."
+	defaultMailHint             = "mailbox_recv"
 	mailboxRecoveryHint         = "If you forget the mailbox details or next action after ack, use `mailbox_read` on the latest `acked` delivery for this session. For older mail, use `mailbox_list` with `state: acked` and then `mailbox_read` by delivery id."
 	serverInstructions          = "Bootstrap this MCP process once per agent-managed session. If it is not bound yet, run `agent-deck session current --json`, take the current session id, and call `mailbox_bind`. Use `agent-deck/<id>` as the default sender. Pass `default_workdir` when you want later `agent_deck_ensure_session` calls to create sessions in the current project. `mailbox_wait` is not recommended for normal workflow; prefer `mailbox_recv`. Later reuse the bound addresses until MCP state is lost."
 	unsetValue                  = "<unset>"
@@ -48,10 +45,10 @@ type mailboxService interface {
 	Send(context.Context, mailbox.SendParams) (mailbox.SendResult, error)
 	List(context.Context, mailbox.ListParams) ([]mailbox.ListedDelivery, error)
 	ListGroupMessages(context.Context, mailbox.GroupListParams) ([]mailbox.GroupListedMessage, error)
-	ListStaleAddresses(context.Context, mailbox.StaleAddressesParams) ([]mailbox.StaleAddress, error)
 	ReceiveBatch(context.Context, mailbox.ReceiveBatchParams) (mailbox.ReceiveResult, error)
 	ReceiveBatchWithLeaseTTL(context.Context, mailbox.ReceiveBatchParams, time.Duration) (mailbox.ReceiveResult, error)
 	Wait(context.Context, mailbox.WaitParams) (mailbox.ListedDelivery, error)
+	HasVisibleDelivery(context.Context, mailbox.WaitParams) (bool, error)
 	ReadMessages(context.Context, []string) ([]mailbox.ReadMessage, error)
 	ReadLatestDeliveries(context.Context, []string, string, int) ([]mailbox.ReadDelivery, bool, error)
 	ReadDeliveries(context.Context, []string) ([]mailbox.ReadDelivery, error)
@@ -87,9 +84,6 @@ type Options struct {
 	MCPLeaseTTL               time.Duration
 	LeaseRenewInterval        time.Duration
 	DisableLeaseRenewLoop     bool
-	ReminderPollInterval      time.Duration
-	ReminderConfirmDelay      time.Duration
-	DisableActiveReminderLoop bool
 }
 
 type Service struct {
@@ -97,18 +91,13 @@ type Service struct {
 	commandRunner             Runner
 	sessions                  *sessionManager
 	notifications             *notificationManager
-	reminders                 *reminderManager
 	activeLeases              *activeLeaseManager
 	state                     *serverState
 	now                       func() time.Time
 	mcpLeaseTTL               time.Duration
 	leaseRenewInterval        time.Duration
 	disableLeaseRenewLoop     bool
-	reminderPollInterval      time.Duration
-	reminderConfirmDelay      time.Duration
-	disableActiveReminderLoop bool
 	leaseRenewLoopOnce        sync.Once
-	activeReminderLoopOnce    sync.Once
 }
 
 type runOptions struct {
@@ -151,9 +140,6 @@ func newService(opts Options) *Service {
 		mcpLeaseTTL:               opts.MCPLeaseTTL,
 		leaseRenewInterval:        opts.LeaseRenewInterval,
 		disableLeaseRenewLoop:     opts.DisableLeaseRenewLoop,
-		reminderPollInterval:      opts.ReminderPollInterval,
-		reminderConfirmDelay:      opts.ReminderConfirmDelay,
-		disableActiveReminderLoop: opts.DisableActiveReminderLoop,
 	}
 	if service.now == nil {
 		service.now = func() time.Time {
@@ -166,23 +152,8 @@ func newService(opts Options) *Service {
 	if service.leaseRenewInterval <= 0 {
 		service.leaseRenewInterval = defaultLeaseRenewInterval
 	}
-	if service.reminderPollInterval <= 0 {
-		service.reminderPollInterval = defaultReminderPollInterval
-	}
-	if service.reminderConfirmDelay <= 0 {
-		service.reminderConfirmDelay = defaultReminderConfirmDelay
-	}
 	service.notifications = newNotificationManager(service.commandRunner, service.sessions)
 	service.activeLeases = newActiveLeaseManager()
-	service.reminders = newReminderManager(reminderManagerDeps{
-		now:          service.now,
-		confirmDelay: service.reminderConfirmDelay,
-		listStaleAddresses: func(ctx context.Context, addresses []string, person string, policy reminderPolicy) ([]staleAddress, error) {
-			return service.listReminderStaleAddresses(ctx, addresses, person, policy)
-		},
-		probeRoute:  service.notifications.probeRoute,
-		notifyRoute: service.notifications.notifyRoute,
-	})
 	return service
 }
 
@@ -192,7 +163,6 @@ func (s *Service) Server() *mcp.Server {
 	})
 
 	s.registerMailboxTools(server)
-	s.registerReminderTools(server)
 	s.registerSessionTools(server)
 
 	return server
@@ -342,18 +312,6 @@ func agentDeckAddress(sessionID string) string {
 
 func codexAddress(sessionID string) string {
 	return "codex/" + sessionID
-}
-
-func structToMap(value any) (map[string]any, error) {
-	encoded, err := json.Marshal(value)
-	if err != nil {
-		return nil, err
-	}
-	var out map[string]any
-	if err := json.Unmarshal(encoded, &out); err != nil {
-		return nil, err
-	}
-	return out, nil
 }
 
 func boundStateMap(bound boundState) map[string]any {

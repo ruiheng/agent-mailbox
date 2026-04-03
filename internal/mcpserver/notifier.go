@@ -142,7 +142,7 @@ func (n agentDeckNotifier) Probe(ctx context.Context, route notificationRoute) n
 }
 
 func (n agentDeckNotifier) Notify(ctx context.Context, event notificationEvent) notificationOutcome {
-	if event.Kind != notificationDelivery && event.Kind != notificationStaleUnread {
+	if event.Kind != notificationDelivery {
 		return notificationOutcome{
 			Status: "unsupported",
 			Scheme: n.Name(),
