@@ -131,7 +131,7 @@ func (s *Service) tryWakeChannel(ctx context.Context, snapshot wakeSnapshot, run
 
 	switch channel {
 	case WakeHintMCPResourceUpdated:
-		if !s.overviewSubscriptions.hasSubscribers() {
+		if !s.overviewSubscriptions.hasLiveSubscribers(s.Server()) {
 			logWakeSuppressed(snapshot, runtime, now, channel, config.Category, mailboxOverviewURI, "unavailable:no_subscribers")
 			return false
 		}
@@ -141,6 +141,7 @@ func (s *Service) tryWakeChannel(ctx context.Context, snapshot wakeSnapshot, run
 		s.wakeSchedulerState.markDelivered(snapshot.ScopeID, channel, now, snapshot.PendingSince)
 		return true
 	case WakeChannelAgentDeck:
+		attemptedWakeableTarget := false
 		for _, target := range snapshotTargetsForChannel(snapshot, channel) {
 			route := notificationRoute{
 				Manager: "agent-deck",
@@ -151,6 +152,7 @@ func (s *Service) tryWakeChannel(ctx context.Context, snapshot wakeSnapshot, run
 				logWakeSuppressed(snapshot, runtime, now, channel, config.Category, target.Target, "unavailable:"+probe.Status)
 				continue
 			}
+			attemptedWakeableTarget = true
 			outcome := s.notifications.notifyRoute(ctx, notificationEvent{
 				Kind:  notificationFallbackWake,
 				Route: route,
@@ -158,8 +160,12 @@ func (s *Service) tryWakeChannel(ctx context.Context, snapshot wakeSnapshot, run
 			logWakeAttempt(snapshot, now, channel, config.Category, target.Target, outcome)
 			if notificationOutcomeDelivered(outcome) {
 				s.wakeSchedulerState.markDelivered(snapshot.ScopeID, channel, now, snapshot.PendingSince)
+				return true
 			}
-			return true
+		}
+		if attemptedWakeableTarget {
+			logWakeSuppressed(snapshot, runtime, now, channel, config.Category, "", "delivery_failed:all_targets")
+			return false
 		}
 		logWakeSuppressed(snapshot, runtime, now, channel, config.Category, "", "unavailable:no_wakeable_target")
 		return false

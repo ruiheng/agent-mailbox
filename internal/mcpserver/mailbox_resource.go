@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"log"
+	"slices"
 	"sync"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -87,7 +88,7 @@ func (s *Service) mailboxOverviewSnapshot(ctx context.Context) (map[string]any, 
 }
 
 func (s *Service) emitMailboxOverviewUpdatedBestEffort(ctx context.Context) {
-	if !s.overviewSubscriptions.hasSubscribers() {
+	if !s.overviewSubscriptions.hasLiveSubscribers(s.Server()) {
 		return
 	}
 	if err := s.Server().ResourceUpdated(ctx, &mcp.ResourceUpdatedNotificationParams{URI: mailboxOverviewURI}); err != nil {
@@ -107,8 +108,25 @@ func (s *resourceSubscriptionState) remove(session *mcp.ServerSession) {
 	delete(s.sessions, session)
 }
 
-func (s *resourceSubscriptionState) hasSubscribers() bool {
+func (s *resourceSubscriptionState) hasLiveSubscribers(server *mcp.Server) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if len(s.sessions) == 0 {
+		return false
+	}
+	activeSessions := slices.Collect(server.Sessions())
+	if len(activeSessions) == 0 {
+		s.sessions = map[*mcp.ServerSession]bool{}
+		return false
+	}
+	activeSet := make(map[*mcp.ServerSession]bool, len(activeSessions))
+	for _, session := range activeSessions {
+		activeSet[session] = true
+	}
+	for session := range s.sessions {
+		if !activeSet[session] {
+			delete(s.sessions, session)
+		}
+	}
 	return len(s.sessions) > 0
 }

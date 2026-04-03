@@ -687,7 +687,12 @@ func TestProcessWakeSchedulerUsesLocalHintThenAgentDeckWake(t *testing.T) {
 	service.state.autoBindAttempted = true
 	service.state.detectedAgentDeckSession = "worker"
 	service.state.detectedAgentSession = "self"
-	service.overviewSubscriptions.add(nil)
+	server := service.Server()
+	clientSession, cleanup := connectTestClientSession(t, server, nil)
+	defer cleanup()
+	if err := clientSession.Subscribe(context.Background(), &mcp.SubscribeParams{URI: mailboxOverviewURI}); err != nil {
+		t.Fatalf("Subscribe() error = %v", err)
+	}
 
 	if err := service.processWakeScheduler(context.Background()); err != nil {
 		t.Fatalf("processWakeScheduler(first) error = %v", err)
@@ -715,6 +720,146 @@ func TestProcessWakeSchedulerUsesLocalHintThenAgentDeckWake(t *testing.T) {
 	}
 	if got := calls[1].Args; len(got) != 6 || got[0] != "agent-deck" || got[2] != "send" {
 		t.Fatalf("second command = %v, want agent-deck send", got)
+	}
+}
+
+func TestProcessWakeSchedulerIgnoresDisconnectedOverviewSubscriber(t *testing.T) {
+	current := time.Date(2026, 4, 3, 6, 0, 0, 0, time.UTC)
+	mailboxService := &fakeMailboxService{t: t}
+	mailboxService.listFunc = func(_ context.Context, params mailbox.ListParams) ([]mailbox.ListedDelivery, error) {
+		switch params.Address {
+		case "agent-deck/worker":
+			return []mailbox.ListedDelivery{}, nil
+		case "codex/self":
+			return []mailbox.ListedDelivery{{
+				DeliveryID:       "dlv_pending",
+				RecipientAddress: "codex/self",
+				VisibleAt:        current.Add(-4 * time.Minute).Format(time.RFC3339Nano),
+				MessageCreatedAt: current.Add(-4 * time.Minute).Format(time.RFC3339Nano),
+				Subject:          "delegate",
+			}}, nil
+		default:
+			t.Fatalf("unexpected List address: %q", params.Address)
+			return nil, nil
+		}
+	}
+
+	commandRunner := &fakeRunner{t: t, handler: func(args []string, input string) (RunResult, error) {
+		switch {
+		case strings.Join(args, "\x00") == strings.Join([]string{"agent-deck", "session", "show", "worker", "--json"}, "\x00"):
+			return RunResult{ExitCode: 0, Stdout: `{"id":"worker","title":"coder-123","status":"waiting"}`}, nil
+		case len(args) == 6 && args[0] == "agent-deck" && args[1] == "session" && args[2] == "send":
+			return RunResult{ExitCode: 0}, nil
+		default:
+			t.Fatalf("unexpected command args: %v", args)
+			return RunResult{}, nil
+		}
+	}}
+
+	service := newService(Options{
+		MailboxServiceFactory: fakeMailboxServiceFactory{service: mailboxService},
+		CommandRunner:         commandRunner,
+		Now:                   func() time.Time { return current },
+		DisableWakeScheduler:  true,
+	})
+	service.state.boundAddresses = []string{"agent-deck/worker", "codex/self"}
+	service.state.defaultSender = "agent-deck/worker"
+	service.state.autoBindAttempted = true
+	service.state.detectedAgentDeckSession = "worker"
+	service.state.detectedAgentSession = "self"
+
+	server := service.Server()
+	clientSession, cleanup := connectTestClientSession(t, server, nil)
+	if err := clientSession.Subscribe(context.Background(), &mcp.SubscribeParams{URI: mailboxOverviewURI}); err != nil {
+		t.Fatalf("Subscribe() error = %v", err)
+	}
+	cleanup()
+
+	if err := service.processWakeScheduler(context.Background()); err != nil {
+		t.Fatalf("processWakeScheduler() error = %v", err)
+	}
+
+	calls := commandRunner.Calls()
+	if len(calls) != 2 {
+		t.Fatalf("command calls = %v, want probe + send after subscriber disconnect", calls)
+	}
+
+	runtime := service.wakeSchedulerState.runtimeForScope("local/agent-deck/worker", current.Add(-4*time.Minute).Format(time.RFC3339Nano))
+	if runtime.LastWakeByChannel[WakeHintMCPResourceUpdated] != "" {
+		t.Fatal("mcp_resource_updated remained deliverable after disconnect")
+	}
+	if runtime.LastWakeByChannel[WakeChannelAgentDeck] == "" {
+		t.Fatal("agent_deck wake was not recorded after disconnected subscriber cleanup")
+	}
+}
+
+func TestProcessWakeSchedulerExhaustsWakeableAgentDeckTargets(t *testing.T) {
+	current := time.Date(2026, 4, 3, 6, 0, 0, 0, time.UTC)
+	mailboxService := &fakeMailboxService{t: t}
+	mailboxService.listFunc = func(_ context.Context, params mailbox.ListParams) ([]mailbox.ListedDelivery, error) {
+		switch params.Address {
+		case "agent-deck/worker-a", "agent-deck/worker-b":
+			return []mailbox.ListedDelivery{}, nil
+		case "codex/self":
+			return []mailbox.ListedDelivery{{
+				DeliveryID:       "dlv_pending",
+				RecipientAddress: "codex/self",
+				VisibleAt:        current.Add(-4 * time.Minute).Format(time.RFC3339Nano),
+				MessageCreatedAt: current.Add(-4 * time.Minute).Format(time.RFC3339Nano),
+				Subject:          "delegate",
+			}}, nil
+		default:
+			t.Fatalf("unexpected List address: %q", params.Address)
+			return nil, nil
+		}
+	}
+
+	commandRunner := &fakeRunner{t: t, handler: func(args []string, input string) (RunResult, error) {
+		switch strings.Join(args, "\x00") {
+		case strings.Join([]string{"agent-deck", "session", "show", "worker-a", "--json"}, "\x00"):
+			return RunResult{ExitCode: 0, Stdout: `{"id":"worker-a","title":"coder-a","status":"waiting"}`}, nil
+		case strings.Join([]string{"agent-deck", "session", "show", "worker-b", "--json"}, "\x00"):
+			return RunResult{ExitCode: 0, Stdout: `{"id":"worker-b","title":"coder-b","status":"waiting"}`}, nil
+		case strings.Join([]string{"agent-deck", "session", "send", "--no-wait", "worker-a", defaultNotifyMessage}, "\x00"):
+			return RunResult{ExitCode: 1, Stderr: "first wake failed"}, nil
+		case strings.Join([]string{"agent-deck", "session", "send", "--no-wait", "worker-b", defaultNotifyMessage}, "\x00"):
+			return RunResult{ExitCode: 0}, nil
+		default:
+			t.Fatalf("unexpected command args: %v", args)
+			return RunResult{}, nil
+		}
+	}}
+
+	service := newService(Options{
+		MailboxServiceFactory: fakeMailboxServiceFactory{service: mailboxService},
+		CommandRunner:         commandRunner,
+		Now:                   func() time.Time { return current },
+		DisableWakeScheduler:  true,
+	})
+	service.state.boundAddresses = []string{"agent-deck/worker-a", "agent-deck/worker-b", "codex/self"}
+	service.state.defaultSender = "agent-deck/worker-a"
+	service.state.autoBindAttempted = true
+	service.state.detectedAgentDeckSession = "worker-a"
+	service.state.detectedAgentSession = "self"
+
+	if err := service.processWakeScheduler(context.Background()); err != nil {
+		t.Fatalf("processWakeScheduler() error = %v", err)
+	}
+
+	calls := commandRunner.Calls()
+	if len(calls) != 4 {
+		t.Fatalf("command calls = %v, want probe/send for both targets", calls)
+	}
+	if got := calls[2].Args[3]; got != "worker-b" {
+		t.Fatalf("third command target = %q, want worker-b probe", got)
+	}
+	if got := calls[3].Args[4]; got != "worker-b" {
+		t.Fatalf("fourth command target = %q, want worker-b send", got)
+	}
+
+	runtime := service.wakeSchedulerState.runtimeForScope("local/agent-deck/worker-a", current.Add(-4*time.Minute).Format(time.RFC3339Nano))
+	if runtime.LastWakeByChannel[WakeChannelAgentDeck] == "" {
+		t.Fatal("agent_deck wake was not recorded after second target succeeded")
 	}
 }
 
@@ -1449,6 +1594,9 @@ func connectTestClientSession(t *testing.T, server *mcp.Server, updateCh chan st
 	}
 	client := mcp.NewClient(&mcp.Implementation{Name: "test-client", Version: "v0.0.1"}, &mcp.ClientOptions{
 		ResourceUpdatedHandler: func(context.Context, *mcp.ResourceUpdatedNotificationRequest) {
+			if updateCh == nil {
+				return
+			}
 			select {
 			case updateCh <- struct{}{}:
 			default:
