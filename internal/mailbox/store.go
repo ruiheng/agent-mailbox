@@ -489,11 +489,11 @@ func (s *Store) List(ctx context.Context, params ListParams) ([]ListedDelivery, 
 		return nil, errors.New("recipient address is required")
 	}
 
-	recipients, err := s.resolveRecipients(ctx, []string{address})
+	scope, err := s.availability().resolvePersonal(ctx, s.readDB, []string{address})
 	if err != nil {
 		return nil, err
 	}
-	return s.listDeliveriesForRecipients(ctx, recipients, strings.TrimSpace(params.State))
+	return s.availability().listPersonalDeliveries(ctx, s.readDB, scope, strings.TrimSpace(params.State), formatTimestamp(s.now()))
 }
 
 func (s *Store) ReadDelivery(ctx context.Context, deliveryID string) (ReadDelivery, error) {
@@ -649,22 +649,17 @@ func (s *Store) ReadLatestDeliveries(ctx context.Context, addresses []string, st
 	}
 	state = strings.TrimSpace(state)
 
-	recipients, err := s.resolveRecipients(ctx, addresses)
+	scope, err := s.availability().resolvePersonal(ctx, s.readDB, addresses)
 	if err != nil {
 		return nil, false, err
 	}
-	if len(recipients) == 0 {
+	if scope.empty() {
 		return []ReadDelivery{}, false, nil
 	}
 
-	recipientEndpointIDs := make([]string, 0, len(recipients))
-	for _, recipient := range recipients {
-		recipientEndpointIDs = append(recipientEndpointIDs, recipient.EndpointID)
-	}
-
-	placeholders := strings.TrimSuffix(strings.Repeat("?,", len(recipientEndpointIDs)), ",")
-	args := make([]any, 0, len(recipientEndpointIDs)+2)
-	for _, recipientEndpointID := range recipientEndpointIDs {
+	placeholders := strings.TrimSuffix(strings.Repeat("?,", len(scope.recipientEndpointIDs)), ",")
+	args := make([]any, 0, len(scope.recipientEndpointIDs)+2)
+	for _, recipientEndpointID := range scope.recipientEndpointIDs {
 		args = append(args, recipientEndpointID)
 	}
 

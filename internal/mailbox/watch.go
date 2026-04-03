@@ -2,9 +2,7 @@ package mailbox
 
 import (
 	"context"
-	"database/sql"
 	"errors"
-	"fmt"
 	"strconv"
 	"strings"
 	"time"
@@ -101,13 +99,14 @@ func (s *Store) Watch(ctx context.Context, params WatchParams, emit func(ListedD
 	}
 
 	delay := initialPollDelay
+	availability := s.availability()
 	for {
-		recipients, err := s.resolveRecipients(ctx, addresses)
+		scope, err := availability.resolvePersonal(ctx, s.readDB, addresses)
 		if err != nil {
 			return err
 		}
 
-		deliveries, err := s.listDeliveriesForRecipients(ctx, recipients, state)
+		deliveries, err := availability.listPersonalDeliveries(ctx, s.readDB, scope, state, formatTimestamp(s.now()))
 		if err != nil {
 			return err
 		}
@@ -161,12 +160,12 @@ func (s *Store) Watch(ctx context.Context, params WatchParams, emit func(ListedD
 }
 
 func (s *Store) waitOnce(ctx context.Context, addresses []string) (ListedDelivery, error) {
-	recipients, err := s.resolveRecipients(ctx, addresses)
+	scope, err := s.availability().resolvePersonal(ctx, s.readDB, addresses)
 	if err != nil {
 		return ListedDelivery{}, err
 	}
 
-	deliveries, err := s.listDeliveriesForRecipients(ctx, recipients, "")
+	deliveries, err := s.availability().listPersonalDeliveries(ctx, s.readDB, scope, "", formatTimestamp(s.now()))
 	if err != nil {
 		return ListedDelivery{}, err
 	}
@@ -175,105 +174,6 @@ func (s *Store) waitOnce(ctx context.Context, addresses []string) (ListedDeliver
 	}
 
 	return deliveries[0], nil
-}
-
-func (s *Store) listDeliveriesForRecipients(ctx context.Context, recipients []resolvedRecipient, state string) ([]ListedDelivery, error) {
-	if len(recipients) == 0 {
-		return []ListedDelivery{}, nil
-	}
-
-	addressByEndpointID := make(map[string]string, len(recipients))
-	recipientEndpointIDs := make([]string, 0, len(recipients))
-	for _, recipient := range recipients {
-		addressByEndpointID[recipient.EndpointID] = recipient.Address
-		recipientEndpointIDs = append(recipientEndpointIDs, recipient.EndpointID)
-	}
-
-	placeholders := strings.TrimSuffix(strings.Repeat("?,", len(recipientEndpointIDs)), ",")
-	args := make([]any, 0, len(recipientEndpointIDs)+1)
-	for _, recipientEndpointID := range recipientEndpointIDs {
-		args = append(args, recipientEndpointID)
-	}
-
-	query := fmt.Sprintf(`
-SELECT
-  d.delivery_id,
-  d.message_id,
-  d.recipient_endpoint_id,
-  m.sender_endpoint_id,
-  d.state,
-  d.visible_at,
-  d.acked_at,
-  m.created_at,
-  m.subject,
-  m.content_type,
-  m.schema_version,
-  m.body_blob_ref,
-  m.body_size,
-  m.body_sha256
-FROM deliveries AS d
-JOIN messages AS m ON m.message_id = d.message_id
-WHERE d.recipient_endpoint_id IN (%s)
-`, placeholders)
-	if state == "" {
-		query += `
-  AND d.state = 'queued'
-  AND d.visible_at <= ?
-`
-		args = append(args, formatTimestamp(s.now()))
-	} else {
-		query += `
-  AND d.state = ?
-`
-		args = append(args, state)
-	}
-	query += `
-ORDER BY d.visible_at ASC, m.created_at ASC, d.delivery_id ASC
-`
-
-	rows, err := s.readDB.QueryContext(ctx, query, args...)
-	if err != nil {
-		return nil, fmt.Errorf("query deliveries: %w", err)
-	}
-	defer rows.Close()
-
-	deliveries := make([]ListedDelivery, 0)
-	for rows.Next() {
-		var delivery ListedDelivery
-		var ackedAt sql.NullString
-		var senderID sql.NullString
-		if err := rows.Scan(
-			&delivery.DeliveryID,
-			&delivery.MessageID,
-			&delivery.RecipientEndpointID,
-			&senderID,
-			&delivery.State,
-			&delivery.VisibleAt,
-			&ackedAt,
-			&delivery.MessageCreatedAt,
-			&delivery.Subject,
-			&delivery.ContentType,
-			&delivery.SchemaVersion,
-			&delivery.BodyBlobRef,
-			&delivery.BodySize,
-			&delivery.BodySHA256,
-		); err != nil {
-			return nil, fmt.Errorf("scan delivery row: %w", err)
-		}
-		delivery.RecipientAddress = addressByEndpointID[delivery.RecipientEndpointID]
-		if senderID.Valid {
-			delivery.SenderEndpointID = &senderID.String
-		}
-		if ackedAt.Valid {
-			delivery.AckedAt = &ackedAt.String
-		}
-		deliveries = append(deliveries, delivery)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate delivery rows: %w", err)
-	}
-
-	return deliveries, nil
 }
 
 func watchFingerprint(delivery ListedDelivery) string {

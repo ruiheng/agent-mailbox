@@ -140,23 +140,6 @@ type LeaseRenewResult struct {
 	LeaseExpiresAt string `json:"lease_expires_at"`
 }
 
-type claimCandidate struct {
-	DeliveryID          string
-	MessageID           string
-	RecipientEndpointID string
-	SenderEndpointID    sql.NullString
-	State               string
-	VisibleAt           string
-	AttemptCount        int
-	MessageCreatedAt    string
-	Subject             string
-	ContentType         string
-	SchemaVersion       string
-	BodyBlobRef         string
-	BodySize            int64
-	BodySHA256          string
-}
-
 type leasedDeliveryRecord struct {
 	DeliveryID          string
 	MessageID           string
@@ -178,11 +161,6 @@ type deliveryTransitionSpec struct {
 	PrimaryEventDetail   map[string]any
 	SecondaryEventType   string
 	SecondaryEventDetail map[string]any
-}
-
-type resolvedRecipient struct {
-	Address    string
-	EndpointID string
 }
 
 var legacyReceiveLeasePolicy = receiveLeasePolicy{LeaseTTL: defaultLeaseTimeout}
@@ -250,38 +228,6 @@ func (s *Store) receiveBatchWithLeasePolicy(ctx context.Context, addresses []str
 		Messages: messages,
 		HasMore:  hasMore,
 	}, nil
-}
-
-func (s *Store) resolveRecipients(ctx context.Context, addresses []string) ([]resolvedRecipient, error) {
-	recipients := make([]resolvedRecipient, 0, len(addresses))
-	seenEndpointIDs := make(map[string]struct{}, len(addresses))
-	for _, address := range addresses {
-		group, found, err := lookupGroupRecord(ctx, s.readDB, address)
-		if err != nil {
-			return nil, fmt.Errorf("resolve recipient address %q: %w", address, err)
-		}
-		if found {
-			return nil, fmt.Errorf("recipient address %q is reserved by group %q: %w", address, group.GroupID, ErrAddressReservedByGroup)
-		}
-
-		endpointID, found, err := s.lookupEndpointID(ctx, s.readDB, address)
-		if err != nil {
-			return nil, fmt.Errorf("resolve recipient address %q: %w", address, err)
-		}
-		if !found {
-			continue
-		}
-		// Multiple addresses may resolve to one endpoint. Claim against the union once.
-		if _, exists := seenEndpointIDs[endpointID]; exists {
-			continue
-		}
-		seenEndpointIDs[endpointID] = struct{}{}
-		recipients = append(recipients, resolvedRecipient{
-			Address:    address,
-			EndpointID: endpointID,
-		})
-	}
-	return recipients, nil
 }
 
 func (s *Store) Ack(ctx context.Context, deliveryID, leaseToken string) (DeliveryTransitionResult, error) {
@@ -446,22 +392,15 @@ func (s *Store) receiveOnceWithLeasePolicy(ctx context.Context, addresses []stri
 		return ReceivedMessage{}, err
 	}
 
-	recipients, err := s.resolveRecipients(ctx, addresses)
+	scope, err := s.availability().resolvePersonal(ctx, s.readDB, addresses)
 	if err != nil {
 		return ReceivedMessage{}, err
 	}
-	if len(recipients) == 0 {
+	if scope.empty() {
 		return ReceivedMessage{}, ErrNoMessage
 	}
 
-	addressByEndpointID := make(map[string]string, len(recipients))
-	recipientEndpointIDs := make([]string, 0, len(recipients))
-	for _, recipient := range recipients {
-		addressByEndpointID[recipient.EndpointID] = recipient.Address
-		recipientEndpointIDs = append(recipientEndpointIDs, recipient.EndpointID)
-	}
-
-	return s.claimNextDelivery(ctx, addressByEndpointID, recipientEndpointIDs, policy)
+	return s.claimNextDelivery(ctx, scope, policy)
 }
 
 func normalizeReceiveLeasePolicy(policy receiveLeasePolicy) (receiveLeasePolicy, error) {
@@ -471,16 +410,18 @@ func normalizeReceiveLeasePolicy(policy receiveLeasePolicy) (receiveLeasePolicy,
 	return policy, nil
 }
 
-func (s *Store) claimNextDelivery(ctx context.Context, addressByEndpointID map[string]string, recipientEndpointIDs []string, policy receiveLeasePolicy) (ReceivedMessage, error) {
+func (s *Store) claimNextDelivery(ctx context.Context, scope personalAvailabilityScope, policy receiveLeasePolicy) (ReceivedMessage, error) {
 	for attempt := 1; ; attempt++ {
 		nowText := formatTimestamp(s.now())
-		if _, err := loadClaimCandidate(ctx, s.readDB, recipientEndpointIDs, nowText); errors.Is(err, sql.ErrNoRows) {
+		candidate, err := s.availability().claimablePersonalDelivery(ctx, s.readDB, scope, nowText)
+		if errors.Is(err, sql.ErrNoRows) {
 			return ReceivedMessage{}, ErrNoMessage
-		} else if err != nil {
+		}
+		if err != nil {
 			return ReceivedMessage{}, fmt.Errorf("query claimable delivery: %w", err)
 		}
 
-		message, err := s.claimNextDeliveryOnce(ctx, addressByEndpointID, recipientEndpointIDs, nowText, policy)
+		message, err := s.claimNextDeliveryOnce(ctx, scope, candidate, nowText, policy)
 		if err == nil {
 			return message, nil
 		}
@@ -499,21 +440,11 @@ func (s *Store) claimNextDelivery(ctx context.Context, addressByEndpointID map[s
 	}
 }
 
-func (s *Store) claimNextDeliveryOnce(ctx context.Context, addressByEndpointID map[string]string, recipientEndpointIDs []string, nowText string, policy receiveLeasePolicy) (ReceivedMessage, error) {
+func (s *Store) claimNextDeliveryOnce(ctx context.Context, scope personalAvailabilityScope, candidate personalDeliveryRecord, nowText string, policy receiveLeasePolicy) (ReceivedMessage, error) {
 	for {
 		tx, err := s.claimDB.BeginTx(ctx, nil)
 		if err != nil {
 			return ReceivedMessage{}, fmt.Errorf("begin receive transaction: %w", err)
-		}
-
-		candidate, err := loadClaimCandidate(ctx, tx, recipientEndpointIDs, nowText)
-		if errors.Is(err, sql.ErrNoRows) {
-			_ = tx.Rollback()
-			return ReceivedMessage{}, ErrNoMessage
-		}
-		if err != nil {
-			_ = tx.Rollback()
-			return ReceivedMessage{}, fmt.Errorf("query claimable delivery: %w", err)
 		}
 
 		leaseToken, err := newPrefixedID("lease")
@@ -549,10 +480,18 @@ WHERE delivery_id = ?
 		}
 		if rowsAffected == 0 {
 			_ = tx.Rollback()
+			refreshedCandidate, err := s.availability().claimablePersonalDelivery(ctx, s.readDB, scope, nowText)
+			if errors.Is(err, sql.ErrNoRows) {
+				return ReceivedMessage{}, ErrNoMessage
+			}
+			if err != nil {
+				return ReceivedMessage{}, fmt.Errorf("query claimable delivery: %w", err)
+			}
+			candidate = refreshedCandidate
 			continue
 		}
 
-		address := addressByEndpointID[candidate.RecipientEndpointID]
+		address := scope.addressByEndpointID[candidate.RecipientEndpointID]
 		if err := insertDeliveryEvent(ctx, tx, "delivery_leased", candidate.RecipientEndpointID, candidate.MessageID, candidate.DeliveryID, map[string]any{
 			"previous_state":    candidate.State,
 			"recipient_address": address,
@@ -651,21 +590,16 @@ func (s *Store) recoverReceiveFailure(ctx context.Context, deliveryID, leaseToke
 }
 
 func (s *Store) hasClaimableDelivery(ctx context.Context, addresses []string) (bool, error) {
-	recipients, err := s.resolveRecipients(ctx, addresses)
+	scope, err := s.availability().resolvePersonal(ctx, s.readDB, addresses)
 	if err != nil {
 		return false, err
 	}
-	if len(recipients) == 0 {
+	if scope.empty() {
 		return false, nil
 	}
 
-	recipientEndpointIDs := make([]string, 0, len(recipients))
-	for _, recipient := range recipients {
-		recipientEndpointIDs = append(recipientEndpointIDs, recipient.EndpointID)
-	}
-
 	nowText := formatTimestamp(s.now())
-	if _, err := loadClaimCandidate(ctx, s.readDB, recipientEndpointIDs, nowText); errors.Is(err, sql.ErrNoRows) {
+	if _, err := s.availability().claimablePersonalDelivery(ctx, s.readDB, scope, nowText); errors.Is(err, sql.ErrNoRows) {
 		return false, nil
 	} else if err != nil {
 		return false, fmt.Errorf("query claimable delivery: %w", err)
@@ -788,65 +722,6 @@ func loadActiveLease(ctx context.Context, tx *sql.Tx, deliveryID, leaseToken str
 	}
 
 	return delivery, nil
-}
-
-func loadClaimCandidate(ctx context.Context, querier interface {
-	QueryRowContext(context.Context, string, ...any) *sql.Row
-}, recipientEndpointIDs []string, nowText string) (claimCandidate, error) {
-	if len(recipientEndpointIDs) == 0 {
-		return claimCandidate{}, sql.ErrNoRows
-	}
-
-	placeholders := strings.TrimSuffix(strings.Repeat("?,", len(recipientEndpointIDs)), ",")
-	args := make([]any, 0, len(recipientEndpointIDs)+2)
-	for _, recipientEndpointID := range recipientEndpointIDs {
-		args = append(args, recipientEndpointID)
-	}
-	args = append(args, nowText, nowText)
-
-	var candidate claimCandidate
-	err := querier.QueryRowContext(ctx, fmt.Sprintf(`
-SELECT
-  d.delivery_id,
-  d.message_id,
-  d.recipient_endpoint_id,
-  m.sender_endpoint_id,
-  d.state,
-  d.visible_at,
-  d.attempt_count,
-  m.created_at,
-  m.subject,
-  m.content_type,
-  m.schema_version,
-  m.body_blob_ref,
-  m.body_size,
-  m.body_sha256
-FROM deliveries AS d
-JOIN messages AS m ON m.message_id = d.message_id
-WHERE d.recipient_endpoint_id IN (%s)
-  AND %s
-ORDER BY d.visible_at ASC, m.created_at ASC, d.delivery_id ASC
-LIMIT 1
-`, placeholders, claimableDeliveryFilter), args...).Scan(
-		&candidate.DeliveryID,
-		&candidate.MessageID,
-		&candidate.RecipientEndpointID,
-		&candidate.SenderEndpointID,
-		&candidate.State,
-		&candidate.VisibleAt,
-		&candidate.AttemptCount,
-		&candidate.MessageCreatedAt,
-		&candidate.Subject,
-		&candidate.ContentType,
-		&candidate.SchemaVersion,
-		&candidate.BodyBlobRef,
-		&candidate.BodySize,
-		&candidate.BodySHA256,
-	)
-	if err != nil {
-		return claimCandidate{}, err
-	}
-	return candidate, nil
 }
 
 func isSQLiteBusy(err error) bool {

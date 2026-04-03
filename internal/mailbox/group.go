@@ -54,29 +54,6 @@ type AddressInspection struct {
 	GroupID    *string `json:"group_id,omitempty"`
 }
 
-type groupViewerState struct {
-	Group            GroupRecord
-	Person           string
-	PersonID         string
-	VisibilityCutoff *string
-}
-
-type groupMessageRecord struct {
-	MessageID        string
-	SenderEndpointID sql.NullString
-	MessageCreatedAt string
-	Subject          string
-	ContentType      string
-	SchemaVersion    string
-	BodyBlobRef      string
-	BodySize         int64
-	BodySHA256       string
-	FirstReadAt      sql.NullString
-	ViewerEligible   int
-	ReadCount        int
-	EligibleCount    int
-}
-
 func (s *Store) CreateGroup(ctx context.Context, address string) (GroupRecord, error) {
 	address = strings.TrimSpace(address)
 	if address == "" {
@@ -369,18 +346,18 @@ func (s *Store) InspectAddress(ctx context.Context, address string) (AddressInsp
 }
 
 func (s *Store) ListGroupMessages(ctx context.Context, params GroupListParams) ([]GroupListedMessage, error) {
-	viewer, err := s.resolveGroupViewer(ctx, s.readDB, params.Address, params.Person)
+	scope, err := s.availability().resolveGroup(ctx, s.readDB, params.Address, params.Person)
 	if err != nil {
 		return nil, err
 	}
-	records, err := queryGroupMessageRecords(ctx, s.readDB, viewer, false, 0)
+	records, err := s.availability().listGroupMessages(ctx, s.readDB, scope, false, 0)
 	if err != nil {
 		return nil, err
 	}
 
 	messages := make([]GroupListedMessage, 0, len(records))
 	for _, record := range records {
-		messages = append(messages, buildGroupListedMessage(viewer, record))
+		messages = append(messages, buildGroupListedMessage(scope.viewer, record))
 	}
 	return messages, nil
 }
@@ -444,18 +421,18 @@ func (s *Store) WaitGroupMessage(ctx context.Context, params GroupWaitParams) (G
 }
 
 func (s *Store) waitGroupMessageOnce(ctx context.Context, params GroupWaitParams) (GroupListedMessage, error) {
-	viewer, err := s.resolveGroupViewer(ctx, s.readDB, params.Address, params.Person)
+	scope, err := s.availability().resolveGroup(ctx, s.readDB, params.Address, params.Person)
 	if err != nil {
 		return GroupListedMessage{}, err
 	}
-	records, err := queryGroupMessageRecords(ctx, s.readDB, viewer, true, 1)
+	records, err := s.availability().listGroupMessages(ctx, s.readDB, scope, true, 1)
 	if err != nil {
 		return GroupListedMessage{}, err
 	}
 	if len(records) == 0 {
 		return GroupListedMessage{}, ErrNoMessage
 	}
-	return buildGroupListedMessage(viewer, records[0]), nil
+	return buildGroupListedMessage(scope.viewer, records[0]), nil
 }
 
 func (s *Store) ReceiveGroupMessage(ctx context.Context, params GroupReceiveParams) (GroupReceivedMessage, error) {
@@ -480,23 +457,24 @@ func (s *Store) ReceiveGroupMessage(ctx context.Context, params GroupReceivePara
 }
 
 func (s *Store) receiveGroupMessageOnce(ctx context.Context, params GroupReceiveParams) (GroupReceivedMessage, error) {
+	availability := s.availability()
 	for {
 		tx, err := s.writeDB.BeginTx(ctx, nil)
 		if err != nil {
 			return GroupReceivedMessage{}, fmt.Errorf("begin group receive transaction: %w", err)
 		}
 
-		viewer, err := s.resolveGroupViewer(ctx, tx, params.Address, params.Person)
+		scope, err := availability.resolveGroup(ctx, tx, params.Address, params.Person)
 		if err != nil {
 			_ = tx.Rollback()
 			return GroupReceivedMessage{}, err
 		}
-		if viewer.PersonID == "" {
+		if scope.viewer.PersonID == "" {
 			_ = tx.Rollback()
 			return GroupReceivedMessage{}, ErrNoMessage
 		}
 
-		records, err := queryGroupMessageRecords(ctx, tx, viewer, true, 1)
+		records, err := availability.listGroupMessages(ctx, tx, scope, true, 1)
 		if err != nil {
 			_ = tx.Rollback()
 			return GroupReceivedMessage{}, err
@@ -517,10 +495,10 @@ func (s *Store) receiveGroupMessageOnce(ctx context.Context, params GroupReceive
 		result, err := tx.ExecContext(ctx, `
 INSERT OR IGNORE INTO group_reads (message_id, person_id, first_read_at)
 VALUES (?, ?, ?)
-`, record.MessageID, viewer.PersonID, firstReadAt)
+`, record.MessageID, scope.viewer.PersonID, firstReadAt)
 		if err != nil {
 			_ = tx.Rollback()
-			return GroupReceivedMessage{}, fmt.Errorf("mark group message read %q for %q: %w", record.MessageID, viewer.Person, err)
+			return GroupReceivedMessage{}, fmt.Errorf("mark group message read %q for %q: %w", record.MessageID, scope.viewer.Person, err)
 		}
 		rowsAffected, err := result.RowsAffected()
 		if err != nil {
@@ -541,150 +519,8 @@ VALUES (?, ?, ?)
 		if record.ViewerEligible != 0 {
 			record.ReadCount++
 		}
-		return buildGroupReceivedMessage(viewer, record, string(body)), nil
+		return buildGroupReceivedMessage(scope.viewer, record, string(body)), nil
 	}
-}
-
-func (s *Store) resolveGroupViewer(ctx context.Context, querier interface {
-	QueryRowContext(context.Context, string, ...any) *sql.Row
-}, groupAddress, person string) (groupViewerState, error) {
-	groupAddress = strings.TrimSpace(groupAddress)
-	if groupAddress == "" {
-		return groupViewerState{}, errors.New("group address is required")
-	}
-	person = strings.TrimSpace(person)
-	if person == "" {
-		return groupViewerState{}, errors.New("person is required")
-	}
-
-	group, found, err := lookupGroupRecord(ctx, querier, groupAddress)
-	if err != nil {
-		return groupViewerState{}, fmt.Errorf("load group %q: %w", groupAddress, err)
-	}
-	if !found {
-		return groupViewerState{}, fmt.Errorf("group %q: %w", groupAddress, ErrGroupNotFound)
-	}
-
-	membership, found, err := lookupLatestGroupMembershipByPerson(ctx, querier, group.GroupID, person)
-	if err != nil {
-		return groupViewerState{}, fmt.Errorf("load group membership for %q in %q: %w", person, groupAddress, err)
-	}
-	if !found {
-		return groupViewerState{
-			Group:  group,
-			Person: person,
-		}, nil
-	}
-
-	viewer := groupViewerState{
-		Group:    group,
-		Person:   membership.Person,
-		PersonID: membership.PersonID,
-	}
-	if !membership.Active {
-		viewer.VisibilityCutoff = membership.LeftAt
-	}
-	return viewer, nil
-}
-
-func queryGroupMessageRecords(ctx context.Context, querier interface {
-	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
-}, viewer groupViewerState, unreadOnly bool, limit int) ([]groupMessageRecord, error) {
-	if viewer.PersonID == "" {
-		return []groupMessageRecord{}, nil
-	}
-
-	args := []any{viewer.PersonID, viewer.PersonID, viewer.Group.GroupID}
-	query := `
-SELECT
-  gm.message_id,
-  m.sender_endpoint_id,
-  gm.created_at,
-  m.subject,
-  m.content_type,
-  m.schema_version,
-  m.body_blob_ref,
-  m.body_size,
-  m.body_sha256,
-  gr.first_read_at,
-  CASE
-    WHEN EXISTS (
-      SELECT 1
-      FROM group_message_eligibility AS ge_viewer
-      WHERE ge_viewer.message_id = gm.message_id
-        AND ge_viewer.person_id = ?
-    ) THEN 1
-    ELSE 0
-  END AS viewer_eligible,
-  (
-    SELECT COUNT(*)
-    FROM group_message_eligibility AS ge
-    JOIN group_reads AS gr_eligible
-      ON gr_eligible.message_id = ge.message_id
-     AND gr_eligible.person_id = ge.person_id
-    WHERE ge.message_id = gm.message_id
-  ) AS read_count,
-  gm.eligible_count
-FROM group_messages AS gm
-JOIN messages AS m ON m.message_id = gm.message_id
-LEFT JOIN group_reads AS gr
-  ON gr.message_id = gm.message_id
- AND gr.person_id = ?
-WHERE gm.group_id = ?
-`
-	if viewer.VisibilityCutoff != nil {
-		query += `
-  AND gm.created_at <= ?
-`
-		args = append(args, *viewer.VisibilityCutoff)
-	}
-	if unreadOnly {
-		query += `
-  AND gr.first_read_at IS NULL
-`
-	}
-	query += `
-ORDER BY gm.created_at ASC, gm.message_id ASC
-`
-	if limit > 0 {
-		query += `
-LIMIT ?
-`
-		args = append(args, limit)
-	}
-
-	rows, err := querier.QueryContext(ctx, query, args...)
-	if err != nil {
-		return nil, fmt.Errorf("query group messages for %q in %q: %w", viewer.Person, viewer.Group.Address, err)
-	}
-	defer rows.Close()
-
-	records := make([]groupMessageRecord, 0)
-	for rows.Next() {
-		var record groupMessageRecord
-		if err := rows.Scan(
-			&record.MessageID,
-			&record.SenderEndpointID,
-			&record.MessageCreatedAt,
-			&record.Subject,
-			&record.ContentType,
-			&record.SchemaVersion,
-			&record.BodyBlobRef,
-			&record.BodySize,
-			&record.BodySHA256,
-			&record.FirstReadAt,
-			&record.ViewerEligible,
-			&record.ReadCount,
-			&record.EligibleCount,
-		); err != nil {
-			return nil, fmt.Errorf("scan group message row: %w", err)
-		}
-		records = append(records, record)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate group messages: %w", err)
-	}
-	return records, nil
 }
 
 func buildGroupListedMessage(viewer groupViewerState, record groupMessageRecord) GroupListedMessage {
