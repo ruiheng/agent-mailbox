@@ -395,7 +395,8 @@ for channel in direct_notify_priority:
     stop
 ```
 
-This path should keep `notify_message` semantics for immediate sender intent.
+This path should keep a simple immediate sender-intent toggle through
+`disable_notify_message`.
 
 It should not wait for fallback delays and should not consult scheduler runtime
 state.

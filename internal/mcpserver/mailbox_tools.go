@@ -20,15 +20,13 @@ type mailboxBindInput struct {
 type mailboxStatusInput struct{}
 
 type mailboxSendInput struct {
-	ToAddress     string `json:"to_address"`
-	FromAddress   string `json:"from_address,omitempty"`
-	Subject       string `json:"subject"`
-	Body          string `json:"body"`
-	ContentType   string `json:"content_type,omitempty"`
-	SchemaVersion string `json:"schema_version,omitempty"`
-	// Empty string disables only the immediate send-time wakeup for this send.
-	// It does not opt the delivery out of later stale-unread recovery wakeups.
-	NotifyMessage *string `json:"notify_message,omitempty"`
+	ToAddress            string `json:"to_address"`
+	FromAddress          string `json:"from_address,omitempty"`
+	Subject              string `json:"subject"`
+	Body                 string `json:"body"`
+	ContentType          string `json:"content_type,omitempty"`
+	SchemaVersion        string `json:"schema_version,omitempty"`
+	DisableNotifyMessage *bool  `json:"disable_notify_message,omitempty"`
 }
 
 type mailboxWaitInput struct {
@@ -88,7 +86,7 @@ func (s *Service) registerMailboxTools(server *mcp.Server) {
 	}, s.mailboxStatus)
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "mailbox_send",
-		Description: "Send one mailbox message and automatically push-notify a non-local target when the address scheme supports it. Pass an empty notify_message to disable notify for that send; non-empty custom wake text is ignored.",
+		Description: "Send one mailbox message and automatically push-notify a non-local target when the address scheme supports it. Set disable_notify_message=true to skip notify for that send.",
 	}, s.mailboxSend)
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "mailbox_wait",

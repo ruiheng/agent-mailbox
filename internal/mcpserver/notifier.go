@@ -11,11 +11,11 @@ type notificationRoute struct {
 }
 
 type notificationEvent struct {
-	Kind            string
-	Route           notificationRoute
-	Subject         string
-	Body            string
-	MessageOverride *string
+	Kind                 string
+	Route                notificationRoute
+	Subject              string
+	Body                 string
+	DisableNotifyMessage *bool
 }
 
 type notificationOutcome struct {
@@ -80,13 +80,12 @@ func (m *notificationManager) notifyDirectWakeScope(ctx context.Context, scope w
 	if len(targets) == 0 {
 		return outcome
 	}
-	if input.NotifyMessage != nil && strings.TrimSpace(*input.NotifyMessage) == "" {
+	if wakeNotifyDisabled(input.DisableNotifyMessage) {
 		return notificationOutcome{
 			Status: "skipped_disabled",
 			Scheme: "agent-deck",
 		}
 	}
-
 	for _, target := range targets {
 		route := notificationRoute{
 			Manager: "agent-deck",
@@ -102,11 +101,11 @@ func (m *notificationManager) notifyDirectWakeScope(ctx context.Context, scope w
 		}
 
 		outcome = m.notifyRoute(ctx, notificationEvent{
-			Kind:            notificationDelivery,
-			Route:           route,
-			Subject:         input.Subject,
-			Body:            input.Body,
-			MessageOverride: input.NotifyMessage,
+			Kind:                 notificationDelivery,
+			Route:                route,
+			Subject:              input.Subject,
+			Body:                 input.Body,
+			DisableNotifyMessage: input.DisableNotifyMessage,
 		})
 		if notificationOutcomeDelivered(outcome) {
 			return outcome
@@ -186,14 +185,13 @@ func (n agentDeckNotifier) Notify(ctx context.Context, event notificationEvent) 
 			Scheme: n.Name(),
 		}
 	}
-	if event.MessageOverride != nil && strings.TrimSpace(*event.MessageOverride) == "" {
+	if wakeNotifyDisabled(event.DisableNotifyMessage) {
 		return notificationOutcome{
 			Status: "skipped_disabled",
 			Scheme: n.Name(),
 		}
 	}
-
-	notifyMessage := resolveNotifyMessage(event.MessageOverride, defaultNotifyMessage)
+	notifyMessage := resolveWakeNotifyMessage(event.DisableNotifyMessage, defaultNotifyMessage)
 	if notifyMessage == "" {
 		return notificationOutcome{
 			Status: "skipped_disabled",
@@ -222,8 +220,12 @@ func notificationOutcomeDelivered(outcome notificationOutcome) bool {
 	return strings.TrimSpace(outcome.Status) == "sent"
 }
 
-func resolveNotifyMessage(message *string, defaultMessage string) string {
-	if message != nil && strings.TrimSpace(*message) == "" {
+func wakeNotifyDisabled(disableNotifyMessage *bool) bool {
+	return disableNotifyMessage != nil && *disableNotifyMessage
+}
+
+func resolveWakeNotifyMessage(disableNotifyMessage *bool, defaultMessage string) string {
+	if wakeNotifyDisabled(disableNotifyMessage) {
 		return ""
 	}
 	return defaultMessage

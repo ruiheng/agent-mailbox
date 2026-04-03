@@ -184,19 +184,19 @@ func (r *fakeRunner) Calls() []runnerCall {
 	return append([]runnerCall(nil), r.calls...)
 }
 
-func TestResolveNotifyMessageUsesFixedWakeText(t *testing.T) {
-	if got := resolveNotifyMessage(nil, defaultNotifyMessage); got != defaultNotifyMessage {
-		t.Fatalf("resolveNotifyMessage(nil) = %q, want %q", got, defaultNotifyMessage)
+func TestResolveWakeNotifyMessageUsesFixedWakeText(t *testing.T) {
+	if got := resolveWakeNotifyMessage(nil, defaultNotifyMessage); got != defaultNotifyMessage {
+		t.Fatalf("resolveWakeNotifyMessage(nil) = %q, want %q", got, defaultNotifyMessage)
 	}
 
-	custom := "Check the delegated task immediately."
-	if got := resolveNotifyMessage(&custom, defaultNotifyMessage); got != defaultNotifyMessage {
-		t.Fatalf("resolveNotifyMessage(custom) = %q, want fixed default", got)
+	disabled := true
+	if got := resolveWakeNotifyMessage(&disabled, defaultNotifyMessage); got != "" {
+		t.Fatalf("resolveWakeNotifyMessage(true) = %q, want empty", got)
 	}
 
-	disabled := ""
-	if got := resolveNotifyMessage(&disabled, defaultNotifyMessage); got != "" {
-		t.Fatalf("resolveNotifyMessage(empty) = %q, want empty", got)
+	enabled := false
+	if got := resolveWakeNotifyMessage(&enabled, defaultNotifyMessage); got != defaultNotifyMessage {
+		t.Fatalf("resolveWakeNotifyMessage(false) = %q, want %q", got, defaultNotifyMessage)
 	}
 }
 
@@ -276,10 +276,10 @@ func TestMailboxSendAllowsAgentDeckNotifyDisable(t *testing.T) {
 	service.state.autoBindAttempted = true
 
 	output := callTool(t, service.Server(), "mailbox_send", map[string]any{
-		"to_address":     "agent-deck/target",
-		"subject":        "delegate",
-		"body":           "body",
-		"notify_message": "",
+		"to_address":             "agent-deck/target",
+		"subject":                "delegate",
+		"body":                   "body",
+		"disable_notify_message": true,
 	})
 
 	if got := output["delivery_id"]; got != "dlv_disabled" {
@@ -296,9 +296,7 @@ func TestMailboxSendAllowsAgentDeckNotifyDisable(t *testing.T) {
 	}
 }
 
-func TestMailboxSendIgnoresCustomNotifyMessage(t *testing.T) {
-	const customNotify = "Check the delegated task immediately."
-
+func TestMailboxSendUsesFixedWakeTextWhenDisableFlagUnset(t *testing.T) {
 	mailboxService := &fakeMailboxService{t: t}
 	mailboxService.sendFunc = func(_ context.Context, params mailbox.SendParams) (mailbox.SendResult, error) {
 		return mailbox.SendResult{DeliveryID: "dlv_custom"}, nil
@@ -331,10 +329,10 @@ func TestMailboxSendIgnoresCustomNotifyMessage(t *testing.T) {
 	service.state.autoBindAttempted = true
 
 	output := callTool(t, service.Server(), "mailbox_send", map[string]any{
-		"to_address":     "agent-deck/target",
-		"subject":        "delegate",
-		"body":           "body",
-		"notify_message": customNotify,
+		"to_address":             "agent-deck/target",
+		"subject":                "delegate",
+		"body":                   "body",
+		"disable_notify_message": false,
 	})
 
 	if got := output["delivery_id"]; got != "dlv_custom" {

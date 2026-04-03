@@ -126,6 +126,10 @@ The Go MCP entrypoint keeps the existing tool names:
 - `agent_deck_resolve_session`
 - `agent_deck_ensure_session`
 
+`mailbox_send` always uses the fixed wakeup text for supported remote notify
+paths. Set `disable_notify_message = true` to skip only that immediate send-time
+notify.
+
 ## Quick Start
 
 Use `--state-dir` for demos and tests so mailbox state stays isolated:
