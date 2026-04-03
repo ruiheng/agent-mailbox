@@ -554,3 +554,18 @@ func reminderCurrentSummary(staleEntries []staleAddress) reminderCurrentState {
 	}
 	return summary
 }
+
+func notificationOutcomeDelivered(outcome notificationOutcome) bool {
+	return strings.TrimSpace(outcome.Status) == "sent"
+}
+
+func inReminderCooldown(lastNotifiedAt string, now time.Time, cooldown time.Duration) bool {
+	if cooldown <= 0 || strings.TrimSpace(lastNotifiedAt) == "" {
+		return false
+	}
+	notifiedAt, err := time.Parse(time.RFC3339, lastNotifiedAt)
+	if err != nil {
+		return false
+	}
+	return now.Sub(notifiedAt) < cooldown
+}
