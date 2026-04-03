@@ -20,12 +20,12 @@ type mailboxBindInput struct {
 type mailboxStatusInput struct{}
 
 type mailboxSendInput struct {
-	ToAddress     string  `json:"to_address"`
-	FromAddress   string  `json:"from_address,omitempty"`
-	Subject       string  `json:"subject"`
-	Body          string  `json:"body"`
-	ContentType   string  `json:"content_type,omitempty"`
-	SchemaVersion string  `json:"schema_version,omitempty"`
+	ToAddress     string `json:"to_address"`
+	FromAddress   string `json:"from_address,omitempty"`
+	Subject       string `json:"subject"`
+	Body          string `json:"body"`
+	ContentType   string `json:"content_type,omitempty"`
+	SchemaVersion string `json:"schema_version,omitempty"`
 	// Empty string disables only the immediate send-time wakeup for this send.
 	// It does not opt the delivery out of later stale-unread recovery wakeups.
 	NotifyMessage *string `json:"notify_message,omitempty"`
@@ -131,7 +131,7 @@ func (s *Service) mailboxBind(ctx context.Context, _ *mcp.CallToolRequest, input
 	}
 	out := boundStateMap(bound)
 	out["status"] = "bound"
-	return s.toolResult(ctx, out)
+	return s.mailboxMutationToolResult(ctx, out)
 }
 
 func (s *Service) mailboxStatus(ctx context.Context, _ *mcp.CallToolRequest, _ mailboxStatusInput) (*mcp.CallToolResult, map[string]any, error) {
@@ -176,7 +176,7 @@ func (s *Service) mailboxSend(ctx context.Context, _ *mcp.CallToolRequest, input
 		notifyError = notify.Err.Error()
 	}
 
-	return s.mailboxToolResult(ctx, map[string]any{
+	return s.mailboxMutationToolResult(ctx, map[string]any{
 		"status":        "sent",
 		"from_address":  fromAddress,
 		"to_address":    input.ToAddress,
@@ -252,7 +252,7 @@ func (s *Service) mailboxRecv(ctx context.Context, _ *mcp.CallToolRequest, input
 	}
 	s.activeLeases.trackReceive(delivery)
 	s.startLeaseRenewLoop()
-	return s.mailboxToolResult(ctx, map[string]any{
+	return s.mailboxMutationToolResult(ctx, map[string]any{
 		"status":    "received",
 		"addresses": addresses,
 		"delivery":  mailbox.CompactReceiveResult(delivery),
@@ -414,7 +414,7 @@ func (s *Service) mailboxAck(ctx context.Context, _ *mcp.CallToolRequest, input 
 		return nil, nil, err
 	}
 	s.activeLeases.remove(input.DeliveryID)
-	return s.mailboxToolResult(ctx, map[string]any{"status": "acked", "delivery_id": input.DeliveryID})
+	return s.mailboxMutationToolResult(ctx, map[string]any{"status": "acked", "delivery_id": input.DeliveryID})
 }
 
 func (s *Service) mailboxRelease(ctx context.Context, _ *mcp.CallToolRequest, input mailboxAckInput) (*mcp.CallToolResult, map[string]any, error) {
@@ -428,7 +428,7 @@ func (s *Service) mailboxRelease(ctx context.Context, _ *mcp.CallToolRequest, in
 		return nil, nil, err
 	}
 	s.activeLeases.remove(input.DeliveryID)
-	return s.mailboxToolResult(ctx, map[string]any{"status": "released", "delivery_id": input.DeliveryID})
+	return s.mailboxMutationToolResult(ctx, map[string]any{"status": "released", "delivery_id": input.DeliveryID})
 }
 
 func (s *Service) mailboxDefer(ctx context.Context, _ *mcp.CallToolRequest, input mailboxDeferInput) (*mcp.CallToolResult, map[string]any, error) {
@@ -446,7 +446,7 @@ func (s *Service) mailboxDefer(ctx context.Context, _ *mcp.CallToolRequest, inpu
 		return nil, nil, err
 	}
 	s.activeLeases.remove(input.DeliveryID)
-	return s.mailboxToolResult(ctx, map[string]any{"status": "deferred", "delivery_id": input.DeliveryID, "until": input.Until})
+	return s.mailboxMutationToolResult(ctx, map[string]any{"status": "deferred", "delivery_id": input.DeliveryID, "until": input.Until})
 }
 
 func (s *Service) mailboxFail(ctx context.Context, _ *mcp.CallToolRequest, input mailboxFailInput) (*mcp.CallToolResult, map[string]any, error) {
@@ -460,9 +460,14 @@ func (s *Service) mailboxFail(ctx context.Context, _ *mcp.CallToolRequest, input
 		return nil, nil, err
 	}
 	s.activeLeases.remove(input.DeliveryID)
-	return s.mailboxToolResult(ctx, map[string]any{"status": "failed", "delivery_id": input.DeliveryID, "reason": input.Reason})
+	return s.mailboxMutationToolResult(ctx, map[string]any{"status": "failed", "delivery_id": input.DeliveryID, "reason": input.Reason})
 }
 
 func (s *Service) mailboxToolResult(ctx context.Context, result map[string]any) (*mcp.CallToolResult, map[string]any, error) {
+	return s.toolResult(ctx, result)
+}
+
+func (s *Service) mailboxMutationToolResult(ctx context.Context, result map[string]any) (*mcp.CallToolResult, map[string]any, error) {
+	s.emitMailboxOverviewUpdatedBestEffort(ctx)
 	return s.toolResult(ctx, result)
 }

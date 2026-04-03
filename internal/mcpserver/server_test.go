@@ -44,7 +44,7 @@ func (f *fakeMailboxService) Send(ctx context.Context, params mailbox.SendParams
 
 func (f *fakeMailboxService) List(ctx context.Context, params mailbox.ListParams) ([]mailbox.ListedDelivery, error) {
 	if f.listFunc == nil {
-		f.t.Fatalf("unexpected List call: %+v", params)
+		return []mailbox.ListedDelivery{}, nil
 	}
 	return f.listFunc(ctx, params)
 }
@@ -214,6 +214,8 @@ func TestMailboxSendNotifiesWorkerTarget(t *testing.T) {
 
 	commandRunner := &fakeRunner{t: t, handler: func(args []string, input string) (RunResult, error) {
 		switch {
+		case strings.Join(args, "\x00") == strings.Join([]string{"agent-deck", "session", "show", "target", "--json"}, "\x00"):
+			return RunResult{ExitCode: 0, Stdout: `{"id":"target","title":"coder-123","status":"waiting"}`}, nil
 		case len(args) == 6 && args[0] == "agent-deck" && args[1] == "session" && args[2] == "send":
 			if args[4] != "target" {
 				t.Fatalf("notify target = %q, want target", args[4])
@@ -304,6 +306,8 @@ func TestMailboxSendIgnoresCustomNotifyMessage(t *testing.T) {
 
 	commandRunner := &fakeRunner{t: t, handler: func(args []string, input string) (RunResult, error) {
 		switch {
+		case strings.Join(args, "\x00") == strings.Join([]string{"agent-deck", "session", "show", "target", "--json"}, "\x00"):
+			return RunResult{ExitCode: 0, Stdout: `{"id":"target","title":"coder-123","status":"waiting"}`}, nil
 		case len(args) == 6 && args[0] == "agent-deck" && args[1] == "session" && args[2] == "send":
 			if args[4] != "target" {
 				t.Fatalf("notify target = %q, want target", args[4])
@@ -389,6 +393,8 @@ func TestMailboxSendReturnsReceiptWhenNotifyFails(t *testing.T) {
 	}
 	commandRunner := &fakeRunner{t: t, handler: func(args []string, input string) (RunResult, error) {
 		switch {
+		case strings.Join(args, "\x00") == strings.Join([]string{"agent-deck", "session", "show", "target", "--json"}, "\x00"):
+			return RunResult{ExitCode: 0, Stdout: `{"id":"target","title":"coder-123","status":"waiting"}`}, nil
 		case len(args) == 6 && args[0] == "agent-deck" && args[1] == "session" && args[2] == "send":
 			return RunResult{ExitCode: 1, Stderr: "wakeup failed"}, nil
 		default:
@@ -532,22 +538,127 @@ func TestMailboxBindIncludesMailHint(t *testing.T) {
 	}
 }
 
-func TestMailboxBindStartsUnreadPushLoopForStaleUnreadMail(t *testing.T) {
-	notified := make(chan struct{}, 1)
+func TestServiceServerReturnsStableInstance(t *testing.T) {
+	service := newService(Options{
+		MailboxServiceFactory: fakeMailboxServiceFactory{service: &fakeMailboxService{t: t}},
+		CommandRunner: &fakeRunner{t: t, handler: func(args []string, input string) (RunResult, error) {
+			t.Fatalf("unexpected command call: %v", args)
+			return RunResult{}, nil
+		}},
+	})
 
+	first := service.Server()
+	second := service.Server()
+	if first != second {
+		t.Fatal("Service.Server() returned different server instances")
+	}
+}
+
+func TestMailboxOverviewResourceCapabilitiesAndNotifications(t *testing.T) {
+	updateCh := make(chan struct{}, 1)
 	mailboxService := &fakeMailboxService{t: t}
-	mailboxService.listStaleAddressesFunc = func(_ context.Context, params mailbox.StaleAddressesParams) ([]mailbox.StaleAddress, error) {
-		if params.OlderThan != defaultUnreadPushOlderThan {
-			t.Fatalf("olderThan = %s, want %s", params.OlderThan, defaultUnreadPushOlderThan)
+	mailboxService.listFunc = func(_ context.Context, params mailbox.ListParams) ([]mailbox.ListedDelivery, error) {
+		if params.Address != "agent-deck/self" {
+			t.Fatalf("list address = %q, want agent-deck/self", params.Address)
 		}
-		if len(params.Addresses) != 1 || params.Addresses[0] != "agent-deck/worker" {
-			t.Fatalf("addresses = %v, want [agent-deck/worker]", params.Addresses)
-		}
-		return []mailbox.StaleAddress{{
-			Address:          "agent-deck/worker",
-			OldestEligibleAt: "2026-04-03T00:40:00Z",
-			ClaimableCount:   1,
+		return []mailbox.ListedDelivery{{
+			DeliveryID:       "dlv_visible",
+			RecipientAddress: "agent-deck/self",
+			VisibleAt:        "2026-04-03T00:40:00Z",
+			MessageCreatedAt: "2026-04-03T00:40:00Z",
+			Subject:          "delegate",
 		}}, nil
+	}
+
+	service := newService(Options{
+		MailboxServiceFactory: fakeMailboxServiceFactory{service: mailboxService},
+		CommandRunner: &fakeRunner{t: t, handler: func(args []string, input string) (RunResult, error) {
+			t.Fatalf("unexpected command call: %v", args)
+			return RunResult{}, nil
+		}},
+	})
+
+	clientSession, cleanup := connectTestClientSession(t, service.Server(), updateCh)
+	defer cleanup()
+
+	caps := clientSession.InitializeResult().Capabilities
+	if caps == nil || caps.Resources == nil {
+		t.Fatal("resources capability missing")
+	}
+	if !caps.Resources.ListChanged {
+		t.Fatal("resources.listChanged = false, want true")
+	}
+	if !caps.Resources.Subscribe {
+		t.Fatal("resources.subscribe = false, want true")
+	}
+
+	if err := clientSession.Subscribe(context.Background(), &mcp.SubscribeParams{URI: mailboxOverviewURI}); err != nil {
+		t.Fatalf("Subscribe() error = %v", err)
+	}
+
+	callTool(t, service.Server(), "mailbox_bind", map[string]any{
+		"addresses": []string{"agent-deck/self"},
+	})
+
+	select {
+	case <-updateCh:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for mailbox overview update")
+	}
+
+	resources, err := clientSession.ListResources(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("ListResources() error = %v", err)
+	}
+	if len(resources.Resources) != 1 || resources.Resources[0].URI != mailboxOverviewURI {
+		t.Fatalf("resources = %#v, want mailbox overview resource", resources.Resources)
+	}
+
+	read, err := clientSession.ReadResource(context.Background(), &mcp.ReadResourceParams{URI: mailboxOverviewURI})
+	if err != nil {
+		t.Fatalf("ReadResource() error = %v", err)
+	}
+	if len(read.Contents) != 1 {
+		t.Fatalf("len(ReadResource().Contents) = %d, want 1", len(read.Contents))
+	}
+
+	var overview map[string]any
+	if err := json.Unmarshal([]byte(read.Contents[0].Text), &overview); err != nil {
+		t.Fatalf("unmarshal overview: %v", err)
+	}
+	if got := overview["default_sender"]; got != "agent-deck/self" {
+		t.Fatalf("default_sender = %v, want agent-deck/self", got)
+	}
+	if got := overview["has_visible_delivery"]; got != true {
+		t.Fatalf("has_visible_delivery = %v, want true", got)
+	}
+	if got := overview["queued_visible_count"]; got != float64(1) {
+		t.Fatalf("queued_visible_count = %v, want 1", got)
+	}
+	if got := overview["oldest_eligible_at"]; got != "2026-04-03T00:40:00Z" {
+		t.Fatalf("oldest_eligible_at = %v, want oldest visible timestamp", got)
+	}
+}
+
+func TestProcessWakeSchedulerUsesLocalHintThenAgentDeckWake(t *testing.T) {
+	current := time.Date(2026, 4, 3, 6, 0, 0, 0, time.UTC)
+	mailboxService := &fakeMailboxService{t: t}
+	mailboxService.listFunc = func(_ context.Context, params mailbox.ListParams) ([]mailbox.ListedDelivery, error) {
+		switch params.Address {
+		case "agent-deck/worker":
+			return []mailbox.ListedDelivery{}, nil
+		case "codex/self":
+			return []mailbox.ListedDelivery{{
+				DeliveryID:       "dlv_pending",
+				RecipientAddress: "codex/self",
+				VisibleAt:        current.Add(-4 * time.Minute).Format(time.RFC3339Nano),
+				MessageCreatedAt: current.Add(-4 * time.Minute).Format(time.RFC3339Nano),
+				Subject:          "delegate",
+			}}, nil
+		default:
+			t.Fatalf("unexpected List address: %q", params.Address)
+			return nil, nil
+		}
 	}
 
 	commandRunner := &fakeRunner{t: t, handler: func(args []string, input string) (RunResult, error) {
@@ -555,9 +666,8 @@ func TestMailboxBindStartsUnreadPushLoopForStaleUnreadMail(t *testing.T) {
 		case strings.Join(args, "\x00") == strings.Join([]string{"agent-deck", "session", "show", "worker", "--json"}, "\x00"):
 			return RunResult{ExitCode: 0, Stdout: `{"id":"worker","title":"coder-123","status":"waiting"}`}, nil
 		case len(args) == 6 && args[0] == "agent-deck" && args[1] == "session" && args[2] == "send":
-			select {
-			case notified <- struct{}{}:
-			default:
+			if args[4] != "worker" {
+				t.Fatalf("notify target = %q, want worker", args[4])
 			}
 			return RunResult{ExitCode: 0}, nil
 		default:
@@ -567,21 +677,44 @@ func TestMailboxBindStartsUnreadPushLoopForStaleUnreadMail(t *testing.T) {
 	}}
 
 	service := newService(Options{
-		MailboxServiceFactory:  fakeMailboxServiceFactory{service: mailboxService},
-		CommandRunner:          commandRunner,
-		UnreadPushPollInterval: 10 * time.Millisecond,
-		UnreadPushCooldown:     5 * time.Minute,
+		MailboxServiceFactory: fakeMailboxServiceFactory{service: mailboxService},
+		CommandRunner:         commandRunner,
+		Now:                   func() time.Time { return current },
+		DisableWakeScheduler:  true,
 	})
+	service.state.boundAddresses = []string{"agent-deck/worker", "codex/self"}
+	service.state.defaultSender = "agent-deck/worker"
 	service.state.autoBindAttempted = true
+	service.state.detectedAgentDeckSession = "worker"
+	service.state.detectedAgentSession = "self"
+	service.overviewSubscriptions.add(nil)
 
-	callTool(t, service.Server(), "mailbox_bind", map[string]any{
-		"addresses": []string{"agent-deck/worker"},
-	})
+	if err := service.processWakeScheduler(context.Background()); err != nil {
+		t.Fatalf("processWakeScheduler(first) error = %v", err)
+	}
+	if len(commandRunner.Calls()) != 0 {
+		t.Fatalf("command calls after local hint = %v, want none", commandRunner.Calls())
+	}
 
-	select {
-	case <-notified:
-	case <-time.After(500 * time.Millisecond):
-		t.Fatal("timed out waiting for unread push notification")
+	runtime := service.wakeSchedulerState.runtimeForScope("local/agent-deck/worker", current.Add(-4*time.Minute).Format(time.RFC3339Nano))
+	if runtime.LastWakeByChannel[WakeHintMCPResourceUpdated] == "" {
+		t.Fatal("mcp_resource_updated was not recorded")
+	}
+	if runtime.LastWakeByChannel[WakeChannelAgentDeck] != "" {
+		t.Fatal("agent_deck wake recorded too early")
+	}
+
+	current = current.Add(defaultWakeInterChannelGap)
+	if err := service.processWakeScheduler(context.Background()); err != nil {
+		t.Fatalf("processWakeScheduler(second) error = %v", err)
+	}
+
+	calls := commandRunner.Calls()
+	if len(calls) != 2 {
+		t.Fatalf("command calls = %v, want probe + send", calls)
+	}
+	if got := calls[1].Args; len(got) != 6 || got[0] != "agent-deck" || got[2] != "send" {
+		t.Fatalf("second command = %v, want agent-deck send", got)
 	}
 }
 
@@ -1302,4 +1435,34 @@ func callToolExpectError(t *testing.T, server *mcp.Server, name string, args map
 		t.Fatalf("call tool %s unexpectedly succeeded", name)
 	}
 	return nil
+}
+
+func connectTestClientSession(t *testing.T, server *mcp.Server, updateCh chan struct{}) (*mcp.ClientSession, func()) {
+	t.Helper()
+
+	ctx := context.Background()
+	clientTransport, serverTransport := mcp.NewInMemoryTransports()
+
+	serverSession, err := server.Connect(ctx, serverTransport, nil)
+	if err != nil {
+		t.Fatalf("server connect: %v", err)
+	}
+	client := mcp.NewClient(&mcp.Implementation{Name: "test-client", Version: "v0.0.1"}, &mcp.ClientOptions{
+		ResourceUpdatedHandler: func(context.Context, *mcp.ResourceUpdatedNotificationRequest) {
+			select {
+			case updateCh <- struct{}{}:
+			default:
+			}
+		},
+	})
+	clientSession, err := client.Connect(ctx, clientTransport, nil)
+	if err != nil {
+		t.Fatalf("client connect: %v", err)
+	}
+
+	cleanup := func() {
+		_ = clientSession.Close()
+		_ = serverSession.Wait()
+	}
+	return clientSession, cleanup
 }

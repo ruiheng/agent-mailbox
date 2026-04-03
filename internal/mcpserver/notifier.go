@@ -63,20 +63,56 @@ func (m *notificationManager) notifyMailboxSend(ctx context.Context, input mailb
 		return notificationOutcome{Status: "skipped_local"}
 	}
 
-	route, err := notificationRouteForAddress(input.ToAddress)
+	scope, scheme, err := directWakeScopeForAddress(input.ToAddress)
 	if err != nil {
 		return notificationOutcome{Status: "failed", Err: err}
 	}
+	if scope == nil {
+		return notificationOutcome{Status: "unsupported", Scheme: scheme}
+	}
 
-	// Send-time notify_message controls only this immediate wakeup attempt.
-	// Stale-unread recovery notifications are evaluated later by unread_push.go.
-	return m.notifyRoute(ctx, notificationEvent{
-		Kind:            notificationDelivery,
-		Route:           route,
-		Subject:         input.Subject,
-		Body:            input.Body,
-		MessageOverride: input.NotifyMessage,
-	})
+	return m.notifyDirectWakeScope(ctx, *scope, input)
+}
+
+func (m *notificationManager) notifyDirectWakeScope(ctx context.Context, scope wakeScope, input mailboxSendInput) notificationOutcome {
+	outcome := notificationOutcome{Status: "unsupported"}
+	targets := scope.targetsForChannel(WakeChannelAgentDeck)
+	if len(targets) == 0 {
+		return outcome
+	}
+	if input.NotifyMessage != nil && strings.TrimSpace(*input.NotifyMessage) == "" {
+		return notificationOutcome{
+			Status: "skipped_disabled",
+			Scheme: "agent-deck",
+		}
+	}
+
+	for _, target := range targets {
+		route := notificationRoute{
+			Manager: "agent-deck",
+			Target:  target.Target,
+		}
+		probe := m.probeRoute(ctx, route)
+		if !probe.Wakeable {
+			outcome = notificationOutcome{
+				Status: probe.Status,
+				Scheme: probe.Scheme,
+			}
+			continue
+		}
+
+		outcome = m.notifyRoute(ctx, notificationEvent{
+			Kind:            notificationDelivery,
+			Route:           route,
+			Subject:         input.Subject,
+			Body:            input.Body,
+			MessageOverride: input.NotifyMessage,
+		})
+		if notificationOutcomeDelivered(outcome) {
+			return outcome
+		}
+	}
+	return outcome
 }
 
 func (m *notificationManager) notifyRoute(ctx context.Context, event notificationEvent) notificationOutcome {
@@ -144,7 +180,7 @@ func (n agentDeckNotifier) Probe(ctx context.Context, route notificationRoute) n
 }
 
 func (n agentDeckNotifier) Notify(ctx context.Context, event notificationEvent) notificationOutcome {
-	if event.Kind != notificationDelivery && event.Kind != notificationStaleUnread {
+	if event.Kind != notificationDelivery && event.Kind != notificationFallbackWake {
 		return notificationOutcome{
 			Status: "unsupported",
 			Scheme: n.Name(),
@@ -180,6 +216,10 @@ func (n agentDeckNotifier) Notify(ctx context.Context, event notificationEvent) 
 		Status: "sent",
 		Scheme: n.Name(),
 	}
+}
+
+func notificationOutcomeDelivered(outcome notificationOutcome) bool {
+	return strings.TrimSpace(outcome.Status) == "sent"
 }
 
 func resolveNotifyMessage(message *string, defaultMessage string) string {

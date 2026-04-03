@@ -16,23 +16,27 @@ import (
 )
 
 const (
-	serverName                  = "agent_mailbox"
-	serverVersion               = "0.4.0"
-	syncCmdTimeout              = 30 * time.Second
-	ensureSessionShowTimeout    = 30 * time.Second
-	defaultMCPLeaseTTL          = 30 * time.Second
-	defaultLeaseRenewInterval   = 10 * time.Second
-	notificationDelivery        = "delivery_available"
-	notificationStaleUnread     = "stale_unread"
-	defaultUnreadPushOlderThan  = 10 * time.Minute
-	defaultUnreadPushPollInterval = 30 * time.Second
-	defaultUnreadPushCooldown   = 5 * time.Minute
-	defaultListenerMessage      = ""
-	defaultNotifyMessage        = "Use the check-agent-mail skill now. Receive the pending message for your current agent-deck session and execute its requested action."
-	defaultMailHint             = "mailbox_recv"
-	mailboxRecoveryHint         = "If you forget the mailbox details or next action after ack, use `mailbox_read` on the latest `acked` delivery for this session. For older mail, use `mailbox_list` with `state: acked` and then `mailbox_read` by delivery id."
-	serverInstructions          = "Bootstrap this MCP process once per agent-managed session. If it is not bound yet, run `agent-deck session current --json`, take the current session id, and call `mailbox_bind`. Use `agent-deck/<id>` as the default sender. Pass `default_workdir` when you want later `agent_deck_ensure_session` calls to create sessions in the current project. `mailbox_wait` is not recommended for normal workflow; prefer `mailbox_recv`. Later reuse the bound addresses until MCP state is lost."
-	unsetValue                  = "<unset>"
+	serverName                   = "agent_mailbox"
+	serverVersion                = "0.4.0"
+	syncCmdTimeout               = 30 * time.Second
+	ensureSessionShowTimeout     = 30 * time.Second
+	defaultMCPLeaseTTL           = 30 * time.Second
+	defaultLeaseRenewInterval    = 10 * time.Second
+	notificationDelivery         = "delivery_available"
+	notificationFallbackWake     = "fallback_wake"
+	mailboxOverviewURI           = "mailbox://bound/overview"
+	defaultWakePollInterval      = 30 * time.Second
+	defaultWakeInterChannelGap   = 1 * time.Minute
+	defaultMCPHintInitialDelay   = 1 * time.Minute
+	defaultMCPHintCooldown       = 2 * time.Minute
+	defaultAgentDeckInitialDelay = 3 * time.Minute
+	defaultAgentDeckCooldown     = 5 * time.Minute
+	defaultListenerMessage       = ""
+	defaultNotifyMessage         = "Use the check-agent-mail skill now. Receive the pending message for your current agent-deck session and execute its requested action."
+	defaultMailHint              = "mailbox_recv"
+	mailboxRecoveryHint          = "If you forget the mailbox details or next action after ack, use `mailbox_read` on the latest `acked` delivery for this session. For older mail, use `mailbox_list` with `state: acked` and then `mailbox_read` by delivery id."
+	serverInstructions           = "Bootstrap this MCP process once per agent-managed session. If it is not bound yet, run `agent-deck session current --json`, take the current session id, and call `mailbox_bind`. Use `agent-deck/<id>` as the default sender. Pass `default_workdir` when you want later `agent_deck_ensure_session` calls to create sessions in the current project. `mailbox_wait` is not recommended for normal workflow; prefer `mailbox_recv`. Later reuse the bound addresses until MCP state is lost."
+	unsetValue                   = "<unset>"
 )
 
 type Runner interface {
@@ -82,37 +86,36 @@ func (f runtimeMailboxServiceFactory) Open(ctx context.Context) (mailboxService,
 }
 
 type Options struct {
-	MailboxServiceFactory     mailboxServiceFactory
-	CommandRunner             Runner
-	StateDir                  string
-	Now                       func() time.Time
-	MCPLeaseTTL               time.Duration
-	LeaseRenewInterval        time.Duration
-	DisableLeaseRenewLoop     bool
-	UnreadPushOlderThan       time.Duration
-	UnreadPushPollInterval    time.Duration
-	UnreadPushCooldown        time.Duration
-	DisableUnreadPushLoop     bool
+	MailboxServiceFactory mailboxServiceFactory
+	CommandRunner         Runner
+	StateDir              string
+	Now                   func() time.Time
+	MCPLeaseTTL           time.Duration
+	LeaseRenewInterval    time.Duration
+	DisableLeaseRenewLoop bool
+	WakePollInterval      time.Duration
+	DisableWakeScheduler  bool
 }
 
 type Service struct {
-	mailboxServices           mailboxServiceFactory
-	commandRunner             Runner
-	sessions                  *sessionManager
-	notifications             *notificationManager
-	activeLeases              *activeLeaseManager
-	state                     *serverState
-	now                       func() time.Time
-	mcpLeaseTTL               time.Duration
-	leaseRenewInterval        time.Duration
-	disableLeaseRenewLoop     bool
-	unreadPushOlderThan       time.Duration
-	unreadPushPollInterval    time.Duration
-	unreadPushCooldown        time.Duration
-	disableUnreadPushLoop     bool
-	unreadPushState           *unreadPushState
-	leaseRenewLoopOnce        sync.Once
-	unreadPushLoopOnce        sync.Once
+	mailboxServices       mailboxServiceFactory
+	commandRunner         Runner
+	sessions              *sessionManager
+	notifications         *notificationManager
+	activeLeases          *activeLeaseManager
+	state                 *serverState
+	now                   func() time.Time
+	mcpLeaseTTL           time.Duration
+	leaseRenewInterval    time.Duration
+	disableLeaseRenewLoop bool
+	wakePollInterval      time.Duration
+	disableWakeScheduler  bool
+	wakeSchedulerState    *wakeSchedulerState
+	overviewSubscriptions *resourceSubscriptionState
+	leaseRenewLoopOnce    sync.Once
+	wakeSchedulerLoopOnce sync.Once
+	serverMu              sync.Mutex
+	server                *mcp.Server
 }
 
 type runOptions struct {
@@ -147,18 +150,16 @@ func newService(opts Options) *Service {
 	state := &serverState{}
 	sessions := newSessionManager(opts.CommandRunner, state)
 	service := &Service{
-		mailboxServices:           opts.MailboxServiceFactory,
-		commandRunner:             opts.CommandRunner,
-		sessions:                  sessions,
-		state:                     state,
-		now:                       opts.Now,
-		mcpLeaseTTL:               opts.MCPLeaseTTL,
-		leaseRenewInterval:        opts.LeaseRenewInterval,
-		disableLeaseRenewLoop:     opts.DisableLeaseRenewLoop,
-		unreadPushOlderThan:       opts.UnreadPushOlderThan,
-		unreadPushPollInterval:    opts.UnreadPushPollInterval,
-		unreadPushCooldown:        opts.UnreadPushCooldown,
-		disableUnreadPushLoop:     opts.DisableUnreadPushLoop,
+		mailboxServices:       opts.MailboxServiceFactory,
+		commandRunner:         opts.CommandRunner,
+		sessions:              sessions,
+		state:                 state,
+		now:                   opts.Now,
+		mcpLeaseTTL:           opts.MCPLeaseTTL,
+		leaseRenewInterval:    opts.LeaseRenewInterval,
+		disableLeaseRenewLoop: opts.DisableLeaseRenewLoop,
+		wakePollInterval:      opts.WakePollInterval,
+		disableWakeScheduler:  opts.DisableWakeScheduler,
 	}
 	if service.now == nil {
 		service.now = func() time.Time {
@@ -171,29 +172,33 @@ func newService(opts Options) *Service {
 	if service.leaseRenewInterval <= 0 {
 		service.leaseRenewInterval = defaultLeaseRenewInterval
 	}
-	if service.unreadPushOlderThan <= 0 {
-		service.unreadPushOlderThan = defaultUnreadPushOlderThan
-	}
-	if service.unreadPushPollInterval <= 0 {
-		service.unreadPushPollInterval = defaultUnreadPushPollInterval
-	}
-	if service.unreadPushCooldown <= 0 {
-		service.unreadPushCooldown = defaultUnreadPushCooldown
+	if service.wakePollInterval <= 0 {
+		service.wakePollInterval = defaultWakePollInterval
 	}
 	service.notifications = newNotificationManager(service.commandRunner, service.sessions)
 	service.activeLeases = newActiveLeaseManager()
-	service.unreadPushState = newUnreadPushState()
+	service.wakeSchedulerState = newWakeSchedulerState()
+	service.overviewSubscriptions = newResourceSubscriptionState()
 	return service
 }
 
 func (s *Service) Server() *mcp.Server {
+	s.serverMu.Lock()
+	defer s.serverMu.Unlock()
+	if s.server != nil {
+		return s.server
+	}
+
 	server := mcp.NewServer(&mcp.Implementation{Name: serverName, Version: serverVersion}, &mcp.ServerOptions{
-		Instructions: serverInstructions,
+		Instructions:       serverInstructions,
+		SubscribeHandler:   s.subscribeResource,
+		UnsubscribeHandler: s.unsubscribeResource,
 	})
 
 	s.registerMailboxTools(server)
 	s.registerSessionTools(server)
-
+	s.registerMailboxOverviewResource(server)
+	s.server = server
 	return server
 }
 
