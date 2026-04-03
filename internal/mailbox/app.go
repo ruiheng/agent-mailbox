@@ -224,9 +224,9 @@ func (a *App) prepareListCommand(args []string) (preparedCommand, error) {
 				return err
 			}
 			if format != outputFormatText {
-				summaries := make([]groupListedMessageSummary, 0, len(messages))
+				summaries := make([]GroupListedMessageCompact, 0, len(messages))
 				for _, message := range messages {
-					summaries = append(summaries, summarizeGroupListedMessage(message))
+					summaries = append(summaries, CompactGroupListedMessage(message))
 				}
 				return a.writeStructuredOutput(format, summaries)
 			}

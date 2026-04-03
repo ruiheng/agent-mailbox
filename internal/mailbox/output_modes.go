@@ -3,14 +3,14 @@ package mailbox
 func (a *App) writeSendOutput(format outputFormat, full bool, result SendResult) error {
 	if format != outputFormatText {
 		if full {
-			return a.writeStructuredOutput(format, fullSendResult(result))
+			return a.writeStructuredOutput(format, FullSendResult(result))
 		}
-		return a.writeStructuredOutput(format, summarizeSendResult(result))
+		return a.writeStructuredOutput(format, CompactSendResult(result))
 	}
 	if full {
-		return a.writeSendResultFullText(fullSendResult(result))
+		return a.writeSendResultFullText(FullSendResult(result))
 	}
-	return a.writeSendResultText(summarizeSendResult(result))
+	return a.writeSendResultText(CompactSendResult(result))
 }
 
 func (a *App) writeReceiveOutput(format outputFormat, full bool, message ReceivedMessage) error {
@@ -18,12 +18,12 @@ func (a *App) writeReceiveOutput(format outputFormat, full bool, message Receive
 		if full {
 			return a.writeStructuredOutput(format, message)
 		}
-		return a.writeStructuredOutput(format, summarizeReceivedMessage(message))
+		return a.writeStructuredOutput(format, CompactReceivedMessage(message))
 	}
 	if full {
 		return a.writeReceivedMessageFullText(message)
 	}
-	return a.writeReceivedMessageText(summarizeReceivedMessage(message))
+	return a.writeReceivedMessageText(CompactReceivedMessage(message))
 }
 
 func (a *App) writeGroupReceiveOutput(format outputFormat, full bool, message GroupReceivedMessage) error {
@@ -31,12 +31,12 @@ func (a *App) writeGroupReceiveOutput(format outputFormat, full bool, message Gr
 		if full {
 			return a.writeStructuredOutput(format, message)
 		}
-		return a.writeStructuredOutput(format, summarizeGroupReceivedMessage(message))
+		return a.writeStructuredOutput(format, CompactGroupReceivedMessage(message))
 	}
 	if full {
 		return a.writeGroupReceivedMessageFullText(message)
 	}
-	return a.writeGroupReceivedMessageText(summarizeGroupReceivedMessage(message))
+	return a.writeGroupReceivedMessageText(CompactGroupReceivedMessage(message))
 }
 
 func (a *App) writeReceiveBatchOutput(format outputFormat, full bool, result ReceiveResult) error {
@@ -44,12 +44,12 @@ func (a *App) writeReceiveBatchOutput(format outputFormat, full bool, result Rec
 		if full {
 			return a.writeStructuredOutput(format, result)
 		}
-		return a.writeStructuredOutput(format, summarizeReceiveResult(result))
+		return a.writeStructuredOutput(format, CompactReceiveResult(result))
 	}
 	if full {
 		return a.writeReceiveResultFullText(result)
 	}
-	return a.writeReceiveResultText(summarizeReceiveResult(result))
+	return a.writeReceiveResultText(CompactReceiveResult(result))
 }
 
 func (a *App) writeWaitOutput(format outputFormat, full bool, delivery ListedDelivery) error {
@@ -57,12 +57,12 @@ func (a *App) writeWaitOutput(format outputFormat, full bool, delivery ListedDel
 		if full {
 			return a.writeStructuredOutput(format, delivery)
 		}
-		return a.writeStructuredOutput(format, summarizeListedDelivery(delivery))
+		return a.writeStructuredOutput(format, CompactListedDelivery(delivery))
 	}
 	if full {
 		return a.writeListedDeliveryText(delivery)
 	}
-	return a.writeWaitedDeliveryText(summarizeListedDelivery(delivery))
+	return a.writeWaitedDeliveryText(CompactListedDelivery(delivery))
 }
 
 func (a *App) writeGroupWaitOutput(format outputFormat, full bool, message GroupListedMessage) error {
@@ -70,10 +70,10 @@ func (a *App) writeGroupWaitOutput(format outputFormat, full bool, message Group
 		if full {
 			return a.writeStructuredOutput(format, message)
 		}
-		return a.writeStructuredOutput(format, summarizeGroupListedMessage(message))
+		return a.writeStructuredOutput(format, CompactGroupListedMessage(message))
 	}
 	if full {
 		return a.writeGroupListedMessageText(message)
 	}
-	return a.writeGroupWaitedMessageText(summarizeGroupListedMessage(message))
+	return a.writeGroupWaitedMessageText(CompactGroupListedMessage(message))
 }

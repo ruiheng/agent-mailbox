@@ -64,7 +64,7 @@ func (a *App) writeStructuredOutput(format outputFormat, value any) error {
 	}
 }
 
-func (a *App) writeSendResultText(result sendResultSummary) error {
+func (a *App) writeSendResultText(result SendResultCompact) error {
 	if result.Mode == SendModeGroup {
 		eligibleCount := 0
 		if result.EligibleCount != nil {
@@ -83,7 +83,7 @@ func (a *App) writeSendResultText(result sendResultSummary) error {
 	return err
 }
 
-func (a *App) writeSendResultFullText(result sendResultFull) error {
+func (a *App) writeSendResultFullText(result SendResultFull) error {
 	if result.Mode == SendModeGroup {
 		eligibleCount := 0
 		if result.EligibleCount != nil {
@@ -108,7 +108,7 @@ func (a *App) writeSendResultFullText(result sendResultFull) error {
 	return err
 }
 
-func (a *App) writeReceivedMessageText(message receivedMessageSummary) error {
+func (a *App) writeReceivedMessageText(message ReceivedMessageCompact) error {
 	if _, err := fmt.Fprintf(
 		a.stdout,
 		"delivery_id=%s recipient_address=%s lease_token=%s content_type=%s subject=%q\n",
@@ -155,7 +155,7 @@ func (a *App) writeReceivedMessageFullText(message ReceivedMessage) error {
 	return nil
 }
 
-func (a *App) writeGroupReceivedMessageText(message groupReceivedMessageSummary) error {
+func (a *App) writeGroupReceivedMessageText(message GroupReceivedMessageCompact) error {
 	if _, err := fmt.Fprintf(
 		a.stdout,
 		"message_id=%s group=%s person=%s first_read_at=%s content_type=%s subject=%q read_count=%d eligible_count=%d\n",
@@ -207,7 +207,7 @@ func (a *App) writeGroupReceivedMessageFullText(message GroupReceivedMessage) er
 	return nil
 }
 
-func (a *App) writeReceiveResultText(result receiveResultSummary) error {
+func (a *App) writeReceiveResultText(result ReceiveResultCompact) error {
 	for index, message := range result.Messages {
 		if index > 0 {
 			if _, err := io.WriteString(a.stdout, "---\n"); err != nil {
@@ -389,7 +389,7 @@ func (a *App) writeListedDeliveryText(delivery ListedDelivery) error {
 	return err
 }
 
-func (a *App) writeWaitedDeliveryText(delivery listedDeliverySummary) error {
+func (a *App) writeWaitedDeliveryText(delivery ListedDeliveryCompact) error {
 	_, err := fmt.Fprintf(
 		a.stdout,
 		"delivery_id=%s recipient_address=%s content_type=%s subject=%q\n",
@@ -417,7 +417,7 @@ func (a *App) writeGroupListedMessageText(message GroupListedMessage) error {
 	return err
 }
 
-func (a *App) writeGroupWaitedMessageText(message groupListedMessageSummary) error {
+func (a *App) writeGroupWaitedMessageText(message GroupListedMessageCompact) error {
 	_, err := fmt.Fprintf(
 		a.stdout,
 		"message_id=%s group=%s person=%s read=%t read_count=%d eligible_count=%d content_type=%s subject=%q\n",

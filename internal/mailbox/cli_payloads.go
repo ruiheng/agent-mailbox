@@ -1,6 +1,6 @@
 package mailbox
 
-type sendResultSummary struct {
+type SendResultCompact struct {
 	Mode             string `json:"mode,omitempty"`
 	DeliveryID       string `json:"delivery_id,omitempty"`
 	MessageID        string `json:"message_id,omitempty"`
@@ -10,7 +10,7 @@ type sendResultSummary struct {
 	MessageCreatedAt string `json:"message_created_at,omitempty"`
 }
 
-type sendResultFull struct {
+type SendResultFull struct {
 	Mode             string `json:"mode,omitempty"`
 	MessageID        string `json:"message_id,omitempty"`
 	DeliveryID       string `json:"delivery_id,omitempty"`
@@ -21,7 +21,7 @@ type sendResultFull struct {
 	MessageCreatedAt string `json:"message_created_at,omitempty"`
 }
 
-type receivedMessageSummary struct {
+type ReceivedMessageCompact struct {
 	DeliveryID       string `json:"delivery_id"`
 	RecipientAddress string `json:"recipient_address"`
 	LeaseToken       string `json:"lease_token"`
@@ -30,8 +30,8 @@ type receivedMessageSummary struct {
 	Body             string `json:"body"`
 }
 
-type receiveResultSummary struct {
-	Messages []receivedMessageSummary `json:"messages"`
+type ReceiveResultCompact struct {
+	Messages []ReceivedMessageCompact `json:"messages"`
 	HasMore  bool                     `json:"has_more"`
 }
 
@@ -45,14 +45,14 @@ type readDeliveryResult struct {
 	HasMore bool           `json:"has_more"`
 }
 
-type listedDeliverySummary struct {
+type ListedDeliveryCompact struct {
 	DeliveryID       string `json:"delivery_id"`
 	RecipientAddress string `json:"recipient_address"`
 	Subject          string `json:"subject"`
 	ContentType      string `json:"content_type,omitempty"`
 }
 
-type groupListedMessageSummary struct {
+type GroupListedMessageCompact struct {
 	MessageID        string  `json:"message_id"`
 	GroupID          string  `json:"group_id"`
 	GroupAddress     string  `json:"group_address"`
@@ -66,7 +66,7 @@ type groupListedMessageSummary struct {
 	EligibleCount    int     `json:"eligible_count"`
 }
 
-type groupReceivedMessageSummary struct {
+type GroupReceivedMessageCompact struct {
 	MessageID        string `json:"message_id"`
 	GroupID          string `json:"group_id"`
 	GroupAddress     string `json:"group_address"`
@@ -80,10 +80,10 @@ type groupReceivedMessageSummary struct {
 	FirstReadAt      string `json:"first_read_at"`
 }
 
-func summarizeSendResult(result SendResult) sendResultSummary {
+func CompactSendResult(result SendResult) SendResultCompact {
 	if result.Mode == SendModeGroup {
 		eligibleCount := result.EligibleCount
-		return sendResultSummary{
+		return SendResultCompact{
 			Mode:             SendModeGroup,
 			MessageID:        result.MessageID,
 			GroupID:          result.GroupID,
@@ -92,15 +92,15 @@ func summarizeSendResult(result SendResult) sendResultSummary {
 			MessageCreatedAt: result.MessageCreatedAt,
 		}
 	}
-	return sendResultSummary{
+	return SendResultCompact{
 		DeliveryID: result.DeliveryID,
 	}
 }
 
-func fullSendResult(result SendResult) sendResultFull {
+func FullSendResult(result SendResult) SendResultFull {
 	if result.Mode == SendModeGroup {
 		eligibleCount := result.EligibleCount
-		return sendResultFull{
+		return SendResultFull{
 			Mode:             SendModeGroup,
 			MessageID:        result.MessageID,
 			GroupID:          result.GroupID,
@@ -109,15 +109,15 @@ func fullSendResult(result SendResult) sendResultFull {
 			MessageCreatedAt: result.MessageCreatedAt,
 		}
 	}
-	return sendResultFull{
+	return SendResultFull{
 		MessageID:  result.MessageID,
 		DeliveryID: result.DeliveryID,
 		BlobID:     result.BodyBlobRef,
 	}
 }
 
-func summarizeReceivedMessage(message ReceivedMessage) receivedMessageSummary {
-	return receivedMessageSummary{
+func CompactReceivedMessage(message ReceivedMessage) ReceivedMessageCompact {
+	return ReceivedMessageCompact{
 		DeliveryID:       message.DeliveryID,
 		RecipientAddress: message.RecipientAddress,
 		LeaseToken:       message.LeaseToken,
@@ -127,19 +127,19 @@ func summarizeReceivedMessage(message ReceivedMessage) receivedMessageSummary {
 	}
 }
 
-func summarizeReceiveResult(result ReceiveResult) receiveResultSummary {
-	messages := make([]receivedMessageSummary, 0, len(result.Messages))
+func CompactReceiveResult(result ReceiveResult) ReceiveResultCompact {
+	messages := make([]ReceivedMessageCompact, 0, len(result.Messages))
 	for _, message := range result.Messages {
-		messages = append(messages, summarizeReceivedMessage(message))
+		messages = append(messages, CompactReceivedMessage(message))
 	}
-	return receiveResultSummary{
+	return ReceiveResultCompact{
 		Messages: messages,
 		HasMore:  result.HasMore,
 	}
 }
 
-func summarizeListedDelivery(delivery ListedDelivery) listedDeliverySummary {
-	return listedDeliverySummary{
+func CompactListedDelivery(delivery ListedDelivery) ListedDeliveryCompact {
+	return ListedDeliveryCompact{
 		DeliveryID:       delivery.DeliveryID,
 		RecipientAddress: delivery.RecipientAddress,
 		Subject:          delivery.Subject,
@@ -147,8 +147,8 @@ func summarizeListedDelivery(delivery ListedDelivery) listedDeliverySummary {
 	}
 }
 
-func summarizeGroupListedMessage(message GroupListedMessage) groupListedMessageSummary {
-	return groupListedMessageSummary{
+func CompactGroupListedMessage(message GroupListedMessage) GroupListedMessageCompact {
+	return GroupListedMessageCompact{
 		MessageID:        message.MessageID,
 		GroupID:          message.GroupID,
 		GroupAddress:     message.GroupAddress,
@@ -163,8 +163,8 @@ func summarizeGroupListedMessage(message GroupListedMessage) groupListedMessageS
 	}
 }
 
-func summarizeGroupReceivedMessage(message GroupReceivedMessage) groupReceivedMessageSummary {
-	return groupReceivedMessageSummary{
+func CompactGroupReceivedMessage(message GroupReceivedMessage) GroupReceivedMessageCompact {
+	return GroupReceivedMessageCompact{
 		MessageID:        message.MessageID,
 		GroupID:          message.GroupID,
 		GroupAddress:     message.GroupAddress,
