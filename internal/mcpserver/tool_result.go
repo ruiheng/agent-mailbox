@@ -8,7 +8,9 @@ import (
 )
 
 func (s *Service) toolResult(ctx context.Context, result map[string]any) (*mcp.CallToolResult, map[string]any, error) {
-	return nil, s.withMailHintBestEffort(ctx, result), nil
+	withHint := s.withMailHintBestEffort(ctx, result)
+	s.startUnreadPushLoop()
+	return nil, withHint, nil
 }
 
 func (s *Service) withMailHintBestEffort(ctx context.Context, result map[string]any) map[string]any {

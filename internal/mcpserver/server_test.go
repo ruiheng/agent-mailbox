@@ -20,6 +20,7 @@ type fakeMailboxService struct {
 	sendFunc                func(context.Context, mailbox.SendParams) (mailbox.SendResult, error)
 	listFunc                func(context.Context, mailbox.ListParams) ([]mailbox.ListedDelivery, error)
 	listGroupMessagesFunc   func(context.Context, mailbox.GroupListParams) ([]mailbox.GroupListedMessage, error)
+	listStaleAddressesFunc  func(context.Context, mailbox.StaleAddressesParams) ([]mailbox.StaleAddress, error)
 	receiveBatchFunc        func(context.Context, mailbox.ReceiveBatchParams) (mailbox.ReceiveResult, error)
 	receiveBatchWithTTLFunc func(context.Context, mailbox.ReceiveBatchParams, time.Duration) (mailbox.ReceiveResult, error)
 	waitFunc                func(context.Context, mailbox.WaitParams) (mailbox.ListedDelivery, error)
@@ -53,6 +54,13 @@ func (f *fakeMailboxService) ListGroupMessages(ctx context.Context, params mailb
 		f.t.Fatalf("unexpected ListGroupMessages call: %+v", params)
 	}
 	return f.listGroupMessagesFunc(ctx, params)
+}
+
+func (f *fakeMailboxService) ListStaleAddresses(ctx context.Context, params mailbox.StaleAddressesParams) ([]mailbox.StaleAddress, error) {
+	if f.listStaleAddressesFunc == nil {
+		return nil, nil
+	}
+	return f.listStaleAddressesFunc(ctx, params)
 }
 
 func (f *fakeMailboxService) ReceiveBatch(ctx context.Context, params mailbox.ReceiveBatchParams) (mailbox.ReceiveResult, error) {
@@ -521,6 +529,59 @@ func TestMailboxBindIncludesMailHint(t *testing.T) {
 	})
 	if got := bind["mail_hint"]; got != defaultMailHint {
 		t.Fatalf("mailbox_bind mail_hint = %v, want %q", got, defaultMailHint)
+	}
+}
+
+func TestMailboxBindStartsUnreadPushLoopForStaleUnreadMail(t *testing.T) {
+	notified := make(chan struct{}, 1)
+
+	mailboxService := &fakeMailboxService{t: t}
+	mailboxService.listStaleAddressesFunc = func(_ context.Context, params mailbox.StaleAddressesParams) ([]mailbox.StaleAddress, error) {
+		if params.OlderThan != defaultUnreadPushOlderThan {
+			t.Fatalf("olderThan = %s, want %s", params.OlderThan, defaultUnreadPushOlderThan)
+		}
+		if len(params.Addresses) != 1 || params.Addresses[0] != "agent-deck/worker" {
+			t.Fatalf("addresses = %v, want [agent-deck/worker]", params.Addresses)
+		}
+		return []mailbox.StaleAddress{{
+			Address:          "agent-deck/worker",
+			OldestEligibleAt: "2026-04-03T00:40:00Z",
+			ClaimableCount:   1,
+		}}, nil
+	}
+
+	commandRunner := &fakeRunner{t: t, handler: func(args []string, input string) (RunResult, error) {
+		switch {
+		case strings.Join(args, "\x00") == strings.Join([]string{"agent-deck", "session", "show", "worker", "--json"}, "\x00"):
+			return RunResult{ExitCode: 0, Stdout: `{"id":"worker","title":"coder-123","status":"waiting"}`}, nil
+		case len(args) == 6 && args[0] == "agent-deck" && args[1] == "session" && args[2] == "send":
+			select {
+			case notified <- struct{}{}:
+			default:
+			}
+			return RunResult{ExitCode: 0}, nil
+		default:
+			t.Fatalf("unexpected command args: %v", args)
+			return RunResult{}, nil
+		}
+	}}
+
+	service := newService(Options{
+		MailboxServiceFactory:  fakeMailboxServiceFactory{service: mailboxService},
+		CommandRunner:          commandRunner,
+		UnreadPushPollInterval: 10 * time.Millisecond,
+		UnreadPushCooldown:     5 * time.Minute,
+	})
+	service.state.autoBindAttempted = true
+
+	callTool(t, service.Server(), "mailbox_bind", map[string]any{
+		"addresses": []string{"agent-deck/worker"},
+	})
+
+	select {
+	case <-notified:
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("timed out waiting for unread push notification")
 	}
 }
 

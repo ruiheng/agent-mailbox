@@ -68,6 +68,8 @@ func (m *notificationManager) notifyMailboxSend(ctx context.Context, input mailb
 		return notificationOutcome{Status: "failed", Err: err}
 	}
 
+	// Send-time notify_message controls only this immediate wakeup attempt.
+	// Stale-unread recovery notifications are evaluated later by unread_push.go.
 	return m.notifyRoute(ctx, notificationEvent{
 		Kind:            notificationDelivery,
 		Route:           route,
@@ -142,7 +144,7 @@ func (n agentDeckNotifier) Probe(ctx context.Context, route notificationRoute) n
 }
 
 func (n agentDeckNotifier) Notify(ctx context.Context, event notificationEvent) notificationOutcome {
-	if event.Kind != notificationDelivery {
+	if event.Kind != notificationDelivery && event.Kind != notificationStaleUnread {
 		return notificationOutcome{
 			Status: "unsupported",
 			Scheme: n.Name(),

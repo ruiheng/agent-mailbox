@@ -23,6 +23,10 @@ const (
 	defaultMCPLeaseTTL          = 30 * time.Second
 	defaultLeaseRenewInterval   = 10 * time.Second
 	notificationDelivery        = "delivery_available"
+	notificationStaleUnread     = "stale_unread"
+	defaultUnreadPushOlderThan  = 10 * time.Minute
+	defaultUnreadPushPollInterval = 30 * time.Second
+	defaultUnreadPushCooldown   = 5 * time.Minute
 	defaultListenerMessage      = ""
 	defaultNotifyMessage        = "Use the check-agent-mail skill now. Receive the pending message for your current agent-deck session and execute its requested action."
 	defaultMailHint             = "mailbox_recv"
@@ -45,6 +49,7 @@ type mailboxService interface {
 	Send(context.Context, mailbox.SendParams) (mailbox.SendResult, error)
 	List(context.Context, mailbox.ListParams) ([]mailbox.ListedDelivery, error)
 	ListGroupMessages(context.Context, mailbox.GroupListParams) ([]mailbox.GroupListedMessage, error)
+	ListStaleAddresses(context.Context, mailbox.StaleAddressesParams) ([]mailbox.StaleAddress, error)
 	ReceiveBatch(context.Context, mailbox.ReceiveBatchParams) (mailbox.ReceiveResult, error)
 	ReceiveBatchWithLeaseTTL(context.Context, mailbox.ReceiveBatchParams, time.Duration) (mailbox.ReceiveResult, error)
 	Wait(context.Context, mailbox.WaitParams) (mailbox.ListedDelivery, error)
@@ -84,6 +89,10 @@ type Options struct {
 	MCPLeaseTTL               time.Duration
 	LeaseRenewInterval        time.Duration
 	DisableLeaseRenewLoop     bool
+	UnreadPushOlderThan       time.Duration
+	UnreadPushPollInterval    time.Duration
+	UnreadPushCooldown        time.Duration
+	DisableUnreadPushLoop     bool
 }
 
 type Service struct {
@@ -97,7 +106,13 @@ type Service struct {
 	mcpLeaseTTL               time.Duration
 	leaseRenewInterval        time.Duration
 	disableLeaseRenewLoop     bool
+	unreadPushOlderThan       time.Duration
+	unreadPushPollInterval    time.Duration
+	unreadPushCooldown        time.Duration
+	disableUnreadPushLoop     bool
+	unreadPushState           *unreadPushState
 	leaseRenewLoopOnce        sync.Once
+	unreadPushLoopOnce        sync.Once
 }
 
 type runOptions struct {
@@ -140,6 +155,10 @@ func newService(opts Options) *Service {
 		mcpLeaseTTL:               opts.MCPLeaseTTL,
 		leaseRenewInterval:        opts.LeaseRenewInterval,
 		disableLeaseRenewLoop:     opts.DisableLeaseRenewLoop,
+		unreadPushOlderThan:       opts.UnreadPushOlderThan,
+		unreadPushPollInterval:    opts.UnreadPushPollInterval,
+		unreadPushCooldown:        opts.UnreadPushCooldown,
+		disableUnreadPushLoop:     opts.DisableUnreadPushLoop,
 	}
 	if service.now == nil {
 		service.now = func() time.Time {
@@ -152,8 +171,18 @@ func newService(opts Options) *Service {
 	if service.leaseRenewInterval <= 0 {
 		service.leaseRenewInterval = defaultLeaseRenewInterval
 	}
+	if service.unreadPushOlderThan <= 0 {
+		service.unreadPushOlderThan = defaultUnreadPushOlderThan
+	}
+	if service.unreadPushPollInterval <= 0 {
+		service.unreadPushPollInterval = defaultUnreadPushPollInterval
+	}
+	if service.unreadPushCooldown <= 0 {
+		service.unreadPushCooldown = defaultUnreadPushCooldown
+	}
 	service.notifications = newNotificationManager(service.commandRunner, service.sessions)
 	service.activeLeases = newActiveLeaseManager()
+	service.unreadPushState = newUnreadPushState()
 	return service
 }
 

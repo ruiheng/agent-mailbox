@@ -26,6 +26,8 @@ type mailboxSendInput struct {
 	Body          string  `json:"body"`
 	ContentType   string  `json:"content_type,omitempty"`
 	SchemaVersion string  `json:"schema_version,omitempty"`
+	// Empty string disables only the immediate send-time wakeup for this send.
+	// It does not opt the delivery out of later stale-unread recovery wakeups.
 	NotifyMessage *string `json:"notify_message,omitempty"`
 }
 

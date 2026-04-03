@@ -344,7 +344,7 @@ func (m *sessionManager) resolveSessionShow(ctx context.Context, identifier stri
 }
 
 func (m *sessionManager) resolveSessionShowBestEffort(ctx context.Context, identifier string) (*sessionData, error) {
-	result, err := runProbe(ctx, m.runner, []string{"agent-deck", "session", "show", identifier, "--json"}, runOptions{}, false)
+	result, err := runProbe(ctx, m.runner, []string{"agent-deck", "session", "show", identifier, "--json"}, runOptions{timeout: syncCmdTimeout}, false)
 	if err != nil {
 		return nil, err
 	}
