@@ -167,7 +167,7 @@ older_than=""
 confirm_delay_seconds=2
 profile=""
 state_dir=""
-readonly fixed_wake_message="Use the check-agent-mail skill now. Receive the pending message for your current agent-deck session and execute its requested action."
+readonly fixed_wake_message="Use the check-agent-mail skill now. Receive the pending message and execute its requested action."
 list_all=0
 
 while [[ $# -gt 0 ]]; do
