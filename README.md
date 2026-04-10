@@ -128,7 +128,15 @@ The Go MCP entrypoint keeps the existing tool names:
 
 `mailbox_send` always uses the fixed wakeup text for supported remote notify
 paths. Set `disable_notify_message = true` to skip only that immediate send-time
-notify.
+notify. Delegate dispatch bodies with `Action: execute_delegate_task` also
+acquire `.agent-artifacts/active-task.lock` under the bound `default_workdir`,
+and they must include `- Integration branch:` before send.
+
+`agent_deck_ensure_session` also supports explicit group placement through
+`group_path` or `group_parent_session_id` plus `child_group_name`, and can
+launch detached sessions with `no_parent_link = true`. It now requires an
+explicit `workdir` and verifies existing sessions already belong to that
+workspace.
 
 ## Quick Start
 

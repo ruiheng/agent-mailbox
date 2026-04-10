@@ -11,13 +11,17 @@ type agentDeckResolveSessionInput struct {
 }
 
 type agentDeckEnsureSessionInput struct {
-	SessionID       string `json:"session_id,omitempty"`
-	SessionRef      string `json:"session_ref,omitempty"`
-	EnsureTitle     string `json:"ensure_title,omitempty"`
-	EnsureCmd       string `json:"ensure_cmd,omitempty"`
-	ParentSessionID string `json:"parent_session_id,omitempty"`
-	Workdir         string `json:"workdir,omitempty"`
-	ListenerMessage string `json:"listener_message,omitempty"`
+	SessionID            string `json:"session_id,omitempty"`
+	SessionRef           string `json:"session_ref,omitempty"`
+	EnsureTitle          string `json:"ensure_title,omitempty"`
+	EnsureCmd            string `json:"ensure_cmd,omitempty"`
+	ParentSessionID      string `json:"parent_session_id,omitempty"`
+	GroupPath            string `json:"group_path,omitempty"`
+	GroupParentSessionID string `json:"group_parent_session_id,omitempty"`
+	ChildGroupName       string `json:"child_group_name,omitempty"`
+	NoParentLink         bool   `json:"no_parent_link,omitempty"`
+	Workdir              string `json:"workdir,omitempty"`
+	ListenerMessage      string `json:"listener_message,omitempty"`
 }
 
 func (s *Service) registerSessionTools(server *mcp.Server) {
@@ -27,7 +31,7 @@ func (s *Service) registerSessionTools(server *mcp.Server) {
 	}, s.agentDeckResolveSession)
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "agent_deck_ensure_session",
-		Description: "Resolve or create an agent-deck session. If the target exists but is not active, start it; if it is already active, return notify_needed=true.",
+		Description: "Resolve or create an agent-deck session in an explicit workdir. If the target exists but is not active, start it; if it is already active, return notify_needed=true. Existing sessions must already match the requested workdir. Can also ensure explicit group placement without relying on direct parent-child session wiring. Leave listener_message empty in normal workflow; use it only for rare bootstrap/control cases before mailbox pickup.",
 	}, s.agentDeckEnsureSession)
 }
 

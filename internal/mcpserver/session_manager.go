@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
@@ -56,6 +57,7 @@ type sessionData struct {
 	ID      string `json:"id"`
 	Title   string `json:"title"`
 	Status  string `json:"status"`
+	Group   string `json:"group"`
 	Path    string `json:"path"`
 	Success *bool  `json:"success,omitempty"`
 }
@@ -70,6 +72,19 @@ type psRow struct {
 type sessionManager struct {
 	runner Runner
 	state  *serverState
+}
+
+type sessionShowProbeStatus string
+
+const (
+	sessionShowProbeFound    sessionShowProbeStatus = "found"
+	sessionShowProbeNotFound sessionShowProbeStatus = "not_found"
+	sessionShowProbeUnknown  sessionShowProbeStatus = "unknown"
+)
+
+type sessionShowProbeResult struct {
+	Status sessionShowProbeStatus
+	Data   *sessionData
 }
 
 func newSessionManager(runner Runner, state *serverState) *sessionManager {
@@ -344,31 +359,53 @@ func (m *sessionManager) resolveSessionShow(ctx context.Context, identifier stri
 }
 
 func (m *sessionManager) resolveSessionShowBestEffort(ctx context.Context, identifier string) (*sessionData, error) {
-	result, err := runProbe(ctx, m.runner, []string{"agent-deck", "session", "show", identifier, "--json"}, runOptions{timeout: syncCmdTimeout}, false)
+	probe, err := m.probeSessionShowBestEffort(ctx, identifier)
 	if err != nil {
 		return nil, err
 	}
-	if result == nil || result.ExitCode != 0 {
+	if probe.Status != sessionShowProbeFound {
 		return nil, nil
+	}
+	return probe.Data, nil
+}
+
+func (m *sessionManager) probeSessionShowBestEffort(ctx context.Context, identifier string) (sessionShowProbeResult, error) {
+	result, err := runProbe(ctx, m.runner, []string{"agent-deck", "session", "show", identifier, "--json"}, runOptions{timeout: syncCmdTimeout}, false)
+	if err != nil {
+		return sessionShowProbeResult{}, err
+	}
+	if result == nil {
+		return sessionShowProbeResult{Status: sessionShowProbeUnknown}, nil
+	}
+	if result.ExitCode != 0 {
+		detail := strings.ToLower(strings.TrimSpace(result.Stderr + "\n" + result.Stdout))
+		if strings.Contains(detail, "not found") {
+			return sessionShowProbeResult{Status: sessionShowProbeNotFound}, nil
+		}
+		return sessionShowProbeResult{Status: sessionShowProbeUnknown}, nil
 	}
 	data, err := parseSessionData(result.Stdout, "agent-deck session show")
 	if err != nil {
-		return nil, err
+		return sessionShowProbeResult{}, err
 	}
 	if data.Success != nil && !*data.Success {
-		return nil, nil
+		return sessionShowProbeResult{Status: sessionShowProbeNotFound}, nil
 	}
-	return data, nil
+	return sessionShowProbeResult{Status: sessionShowProbeFound, Data: data}, nil
 }
 
 func (m *sessionManager) ensureSession(ctx context.Context, input agentDeckEnsureSessionInput) (map[string]any, error) {
-	bound, err := m.boundState(ctx)
-	if err != nil {
-		return nil, err
-	}
-
 	identifier := firstNonEmpty(input.SessionID, input.SessionRef)
-	workdir := firstNonEmpty(input.Workdir, bound.DefaultWorkdir)
+	workdir := strings.TrimSpace(input.Workdir)
+	if workdir == "" {
+		return nil, errors.New("workdir is required when ensuring or creating a target session")
+	}
+	canonicalWorkdir, err := canonicalizeExistingPath(workdir)
+	if err != nil {
+		return nil, fmt.Errorf("workdir does not exist: %s", workdir)
+	}
+	workdir = canonicalWorkdir
+
 	var data *sessionData
 	if identifier != "" {
 		data, err = m.resolveSessionShow(ctx, identifier, ensureSessionShowTimeout)
@@ -381,7 +418,34 @@ func (m *sessionManager) ensureSession(ctx context.Context, input agentDeckEnsur
 	startedSession := false
 	notifyNeeded := false
 	listenerStatus := "not_needed"
+	noParentLink := input.NoParentLink
+	targetGroupPath := strings.TrimSpace(input.GroupPath)
 
+	if noParentLink && strings.TrimSpace(input.ParentSessionID) != "" {
+		return nil, errors.New("no_parent_link cannot be combined with parent_session_id")
+	}
+	if targetGroupPath == "" && strings.TrimSpace(input.GroupParentSessionID) != "" {
+		parentData, err := m.resolveSessionShow(ctx, input.GroupParentSessionID, ensureSessionShowTimeout)
+		if err != nil {
+			return nil, err
+		}
+		if parentData == nil {
+			return nil, fmt.Errorf("group_parent_session_id not found: %s", input.GroupParentSessionID)
+		}
+		parentGroup := strings.TrimSpace(parentData.Group)
+		childGroupName := firstNonEmpty(input.ChildGroupName, input.EnsureTitle, input.SessionRef, input.SessionID)
+		if parentGroup == "" {
+			targetGroupPath = sanitizeGroupSegment(childGroupName)
+			if targetGroupPath == "" {
+				return nil, errors.New("child group name resolves to an empty segment")
+			}
+		} else {
+			targetGroupPath, err = buildChildGroupPath(parentGroup, childGroupName)
+			if err != nil {
+				return nil, err
+			}
+		}
+	}
 	if data == nil {
 		if input.EnsureTitle == "" {
 			return nil, errors.New("target session missing: provide session_id, session_ref, or ensure_title")
@@ -389,28 +453,25 @@ func (m *sessionManager) ensureSession(ctx context.Context, input agentDeckEnsur
 		if input.EnsureCmd == "" {
 			return nil, errors.New("ensure_cmd is required when creating a target session")
 		}
-		if input.ParentSessionID == "" {
+		if input.ParentSessionID == "" && !noParentLink {
 			return nil, errors.New("parent_session_id is required when creating a target session")
 		}
-		if workdir == "" {
-			return nil, errors.New("workdir is required when creating a target session")
-		}
-		info, statErr := os.Stat(workdir)
-		if statErr != nil || !info.IsDir() {
-			return nil, fmt.Errorf("workdir does not exist: %s", workdir)
+		if targetGroupPath != "" {
+			if err := m.ensureGroupPath(ctx, targetGroupPath); err != nil {
+				return nil, err
+			}
 		}
 
 		listenerMessage := strings.TrimSpace(input.ListenerMessage)
-		launchArgs := []string{
-			"agent-deck", "launch", "--json",
-			"--title", input.EnsureTitle,
-			"--parent", input.ParentSessionID,
-			"--cmd", input.EnsureCmd,
-		}
-		if listenerMessage != "" {
-			launchArgs = append(launchArgs, "--message", listenerMessage)
-		}
-		launchArgs = append(launchArgs, workdir)
+		launchArgs := buildEnsureSessionLaunchArgs(ensureSessionLaunchInput{
+			EnsureTitle:     input.EnsureTitle,
+			EnsureCmd:       input.EnsureCmd,
+			Workdir:         workdir,
+			ParentSessionID: input.ParentSessionID,
+			NoParentLink:    noParentLink,
+			ListenerMessage: listenerMessage,
+			GroupPath:       targetGroupPath,
+		})
 		launchResult, err := runCommand(ctx, m.runner, launchArgs, runOptions{})
 		if err != nil {
 			return nil, err
@@ -424,6 +485,33 @@ func (m *sessionManager) ensureSession(ctx context.Context, input agentDeckEnsur
 		listenerStatus = "started_waiting"
 	} else {
 		listenerMessage := strings.TrimSpace(input.ListenerMessage)
+		existingPath := strings.TrimSpace(data.Path)
+		if existingPath == "" {
+			return nil, errors.New("existing session path unavailable: cannot verify workdir match")
+		}
+		canonicalExistingPath, err := canonicalizeExistingPath(existingPath)
+		if err != nil {
+			return nil, fmt.Errorf("canonicalize existing session path %q: %w", existingPath, err)
+		}
+		if canonicalExistingPath != workdir {
+			return nil, fmt.Errorf("session path mismatch: existing='%s' expected='%s'", data.Path, input.Workdir)
+		}
+		existingGroup := strings.TrimSpace(data.Group)
+		if targetGroupPath != "" && existingGroup != targetGroupPath {
+			if err := m.ensureGroupPath(ctx, targetGroupPath); err != nil {
+				return nil, err
+			}
+			if _, err := runCommand(ctx, m.runner, []string{"agent-deck", "group", "move", data.ID, targetGroupPath}, runOptions{}); err != nil {
+				return nil, err
+			}
+			refreshed, err := m.resolveSessionShow(ctx, data.ID, ensureSessionShowTimeout)
+			if err != nil {
+				return nil, err
+			}
+			if refreshed != nil {
+				data = refreshed
+			}
+		}
 		if activeSessionStatuses[strings.TrimSpace(data.Status)] {
 			notifyNeeded = true
 			listenerStatus = "not_needed_existing_session"
@@ -444,7 +532,11 @@ func (m *sessionManager) ensureSession(ctx context.Context, input agentDeckEnsur
 				data = refreshed
 			}
 			startedSession = true
-			listenerStatus = "started_waiting"
+			if listenerMessage != "" {
+				listenerStatus = "started_waiting"
+			} else {
+				listenerStatus = "started"
+			}
 		}
 	}
 
@@ -455,6 +547,81 @@ func (m *sessionManager) ensureSession(ctx context.Context, input agentDeckEnsur
 	out["notify_needed"] = notifyNeeded
 	out["listener_status"] = listenerStatus
 	return out, nil
+}
+
+func (m *sessionManager) listGroupPaths(ctx context.Context) (map[string]bool, error) {
+	result, err := runCommand(ctx, m.runner, []string{"agent-deck", "group", "list", "--json"}, runOptions{})
+	if err != nil {
+		return nil, err
+	}
+	var payload struct {
+		Groups []struct {
+			Path string `json:"path"`
+		} `json:"groups"`
+	}
+	if err := json.Unmarshal([]byte(result.Stdout), &payload); err != nil {
+		return nil, fmt.Errorf("agent-deck group list returned invalid JSON: %w", err)
+	}
+	paths := map[string]bool{}
+	for _, group := range payload.Groups {
+		if trimmed := strings.TrimSpace(group.Path); trimmed != "" {
+			paths[trimmed] = true
+		}
+	}
+	return paths, nil
+}
+
+func (m *sessionManager) ensureGroupPath(ctx context.Context, groupPath string) error {
+	trimmed := strings.TrimSpace(groupPath)
+	if trimmed == "" {
+		return nil
+	}
+	existing, err := m.listGroupPaths(ctx)
+	if err != nil {
+		return err
+	}
+	current := ""
+	for _, rawSegment := range strings.Split(trimmed, "/") {
+		segment := strings.TrimSpace(rawSegment)
+		if segment == "" {
+			return fmt.Errorf("invalid group path: %s", groupPath)
+		}
+		next := segment
+		if current != "" {
+			next = current + "/" + segment
+		}
+		if !existing[next] {
+			createArgs := []string{"agent-deck", "group", "create", segment}
+			if current != "" {
+				createArgs = append(createArgs, "--parent", current)
+			}
+			if _, err := runCommand(ctx, m.runner, createArgs, runOptions{}); err != nil {
+				return err
+			}
+			existing[next] = true
+		}
+		current = next
+	}
+	return nil
+}
+
+func canonicalizeExistingPath(path string) (string, error) {
+	absolutePath, err := filepath.Abs(strings.TrimSpace(path))
+	if err != nil {
+		return "", err
+	}
+	resolvedPath, err := filepath.EvalSymlinks(absolutePath)
+	if err != nil {
+		return "", err
+	}
+	info, err := os.Stat(resolvedPath)
+	if err != nil {
+		return "", err
+	}
+	if !info.IsDir() {
+		return "", fmt.Errorf("not a directory")
+	}
+	return resolvedPath, nil
 }
 
 func parseSessionData(text, context string) (*sessionData, error) {
@@ -471,6 +638,8 @@ func sessionInfoMap(data *sessionData, sessionRef string) map[string]any {
 		"session_ref":    firstNonEmpty(sessionRef, data.Title, data.ID),
 		"title":          nilIfEmpty(data.Title),
 		"session_status": nilIfEmpty(data.Status),
+		"group":          nilIfEmpty(data.Group),
+		"path":           nilIfEmpty(data.Path),
 		"addresses":      []string{agentDeckAddress(data.ID)},
 	}
 }
