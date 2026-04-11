@@ -54,12 +54,13 @@ type boundState struct {
 }
 
 type sessionData struct {
-	ID      string `json:"id"`
-	Title   string `json:"title"`
-	Status  string `json:"status"`
-	Group   string `json:"group"`
-	Path    string `json:"path"`
-	Success *bool  `json:"success,omitempty"`
+	ID              string `json:"id"`
+	Title           string `json:"title"`
+	Status          string `json:"status"`
+	Group           string `json:"group"`
+	Path            string `json:"path"`
+	ParentSessionID string `json:"parent_session_id,omitempty"`
+	Success         *bool  `json:"success,omitempty"`
 }
 
 type psRow struct {
@@ -453,8 +454,27 @@ func (m *sessionManager) ensureSession(ctx context.Context, input agentDeckEnsur
 		if input.EnsureCmd == "" {
 			return nil, errors.New("ensure_cmd is required when creating a target session")
 		}
-		if input.ParentSessionID == "" && !noParentLink {
-			return nil, errors.New("parent_session_id is required when creating a target session")
+		if strings.TrimSpace(input.ParentSessionID) == "" && targetGroupPath == "" && !noParentLink {
+			return nil, errors.New("creating a target session requires either group_path/group_parent_session_id or parent_session_id")
+		}
+		if strings.TrimSpace(input.ParentSessionID) != "" {
+			parentData, err := m.resolveSessionShow(ctx, input.ParentSessionID, ensureSessionShowTimeout)
+			if err != nil {
+				return nil, err
+			}
+			if parentData == nil {
+				return nil, fmt.Errorf("parent_session_id not found: %s", input.ParentSessionID)
+			}
+			if targetGroupPath == "" && strings.TrimSpace(parentData.ParentSessionID) != "" {
+				parentGroup := strings.TrimSpace(parentData.Group)
+				if parentGroup != "" {
+					childGroupName := firstNonEmpty(parentData.Title, input.ParentSessionID, parentData.ID)
+					targetGroupPath, err = buildChildGroupPath(parentGroup, childGroupName)
+					if err != nil {
+						return nil, err
+					}
+				}
+			}
 		}
 		if targetGroupPath != "" {
 			if err := m.ensureGroupPath(ctx, targetGroupPath); err != nil {

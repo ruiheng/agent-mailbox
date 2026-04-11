@@ -1492,6 +1492,8 @@ func TestAcquireActiveTaskLockRemovesDirectoryWhenLockFileWriteFails(t *testing.
 func TestAgentDeckEnsureSessionCreatesTargetWithoutDefaultListenerMessage(t *testing.T) {
 	commandRunner := &fakeRunner{t: t, handler: func(args []string, input string) (RunResult, error) {
 		switch {
+		case strings.Join(args, "\x00") == strings.Join([]string{"agent-deck", "session", "show", "planner-1", "--json"}, "\x00"):
+			return RunResult{ExitCode: 0, Stdout: `{"id":"planner-1","title":"planner","status":"waiting","path":"/tmp"}`}, nil
 		case strings.Join(args, "\x00") == strings.Join([]string{"agent-deck", "launch", "--json", "--title", "coder-ref", "--cmd", "codex --model gpt-5.4 --ask-for-approval on-request", "--parent", "planner-1", "/tmp"}, "\x00"):
 			return RunResult{ExitCode: 0, Stdout: `{"id":"session-2","title":"coder-ref","status":"waiting"}`}, nil
 		default:
@@ -1518,6 +1520,110 @@ func TestAgentDeckEnsureSessionCreatesTargetWithoutDefaultListenerMessage(t *tes
 	}
 	if got := output["listener_status"]; got != "started_waiting" {
 		t.Fatalf("listener_status = %v, want started_waiting", got)
+	}
+}
+
+func TestAgentDeckEnsureSessionAllowsDetachedCreateWithoutGroup(t *testing.T) {
+	commandRunner := &fakeRunner{t: t, handler: func(args []string, input string) (RunResult, error) {
+		switch {
+		case strings.Join(args, "\x00") == strings.Join([]string{"agent-deck", "launch", "--json", "--title", "coder-ref", "--cmd", "codex --model gpt-5.4 --ask-for-approval on-request", "--no-parent", "/tmp"}, "\x00"):
+			return RunResult{ExitCode: 0, Stdout: `{"id":"session-2","title":"coder-ref","status":"waiting","path":"/tmp"}`}, nil
+		default:
+			t.Fatalf("unexpected command args: %v", args)
+			return RunResult{}, nil
+		}
+	}}
+
+	service := newService(Options{
+		MailboxServiceFactory: fakeMailboxServiceFactory{service: &fakeMailboxService{t: t}},
+		CommandRunner:         commandRunner,
+	})
+	service.state.autoBindAttempted = true
+
+	output := callTool(t, service.Server(), "agent_deck_ensure_session", map[string]any{
+		"ensure_title":   "coder-ref",
+		"ensure_cmd":     "codex --model gpt-5.4 --ask-for-approval on-request",
+		"no_parent_link": true,
+		"workdir":        "/tmp",
+	})
+	if got := output["created_target"]; got != true {
+		t.Fatalf("created_target = %v, want true", got)
+	}
+	if got := output["started_session"]; got != true {
+		t.Fatalf("started_session = %v, want true", got)
+	}
+	if got := output["path"]; got != "/tmp" {
+		t.Fatalf("path = %v, want /tmp", got)
+	}
+}
+
+func TestAgentDeckEnsureSessionDerivesChildGroupFromChildParentSession(t *testing.T) {
+	commandRunner := &fakeRunner{t: t, handler: func(args []string, input string) (RunResult, error) {
+		switch {
+		case strings.Join(args, "\x00") == strings.Join([]string{"agent-deck", "session", "show", "child-planner", "--json"}, "\x00"):
+			return RunResult{ExitCode: 0, Stdout: `{"id":"child-planner","title":"planner-child","status":"waiting","path":"/tmp","group":"planning/active","parent_session_id":"root-planner"}`}, nil
+		case strings.Join(args, "\x00") == strings.Join([]string{"agent-deck", "group", "list", "--json"}, "\x00"):
+			return RunResult{ExitCode: 0, Stdout: `{"groups":[{"path":"planning"},{"path":"planning/active"}]}`}, nil
+		case strings.Join(args, "\x00") == strings.Join([]string{"agent-deck", "group", "create", "planner-child", "--parent", "planning/active"}, "\x00"):
+			return RunResult{ExitCode: 0}, nil
+		case strings.Join(args, "\x00") == strings.Join([]string{"agent-deck", "launch", "--json", "--title", "coder-ref", "--cmd", "codex --model gpt-5.4 --ask-for-approval on-request", "--group", "planning/active/planner-child", "--parent", "child-planner", "/tmp"}, "\x00"):
+			return RunResult{ExitCode: 0, Stdout: `{"id":"session-2","title":"coder-ref","status":"waiting","group":"planning/active/planner-child","path":"/tmp"}`}, nil
+		default:
+			t.Fatalf("unexpected command args: %v", args)
+			return RunResult{}, nil
+		}
+	}}
+
+	service := newService(Options{
+		MailboxServiceFactory: fakeMailboxServiceFactory{service: &fakeMailboxService{t: t}},
+		CommandRunner:         commandRunner,
+	})
+	service.state.autoBindAttempted = true
+
+	output := callTool(t, service.Server(), "agent_deck_ensure_session", map[string]any{
+		"ensure_title":      "coder-ref",
+		"ensure_cmd":        "codex --model gpt-5.4 --ask-for-approval on-request",
+		"parent_session_id": "child-planner",
+		"workdir":           "/tmp",
+	})
+	if got := output["created_target"]; got != true {
+		t.Fatalf("created_target = %v, want true", got)
+	}
+	if got := output["group"]; got != "planning/active/planner-child" {
+		t.Fatalf("group = %v, want planning/active/planner-child", got)
+	}
+}
+
+func TestAgentDeckEnsureSessionFallsBackToParentOnlyWhenChildParentHasNoGroup(t *testing.T) {
+	commandRunner := &fakeRunner{t: t, handler: func(args []string, input string) (RunResult, error) {
+		switch {
+		case strings.Join(args, "\x00") == strings.Join([]string{"agent-deck", "session", "show", "child-planner", "--json"}, "\x00"):
+			return RunResult{ExitCode: 0, Stdout: `{"id":"child-planner","title":"planner-child","status":"waiting","path":"/tmp","group":"","parent_session_id":"root-planner"}`}, nil
+		case strings.Join(args, "\x00") == strings.Join([]string{"agent-deck", "launch", "--json", "--title", "coder-ref", "--cmd", "codex --model gpt-5.4 --ask-for-approval on-request", "--parent", "child-planner", "/tmp"}, "\x00"):
+			return RunResult{ExitCode: 0, Stdout: `{"id":"session-2","title":"coder-ref","status":"waiting","path":"/tmp"}`}, nil
+		default:
+			t.Fatalf("unexpected command args: %v", args)
+			return RunResult{}, nil
+		}
+	}}
+
+	service := newService(Options{
+		MailboxServiceFactory: fakeMailboxServiceFactory{service: &fakeMailboxService{t: t}},
+		CommandRunner:         commandRunner,
+	})
+	service.state.autoBindAttempted = true
+
+	output := callTool(t, service.Server(), "agent_deck_ensure_session", map[string]any{
+		"ensure_title":      "coder-ref",
+		"ensure_cmd":        "codex --model gpt-5.4 --ask-for-approval on-request",
+		"parent_session_id": "child-planner",
+		"workdir":           "/tmp",
+	})
+	if got := output["created_target"]; got != true {
+		t.Fatalf("created_target = %v, want true", got)
+	}
+	if got := output["group"]; got != nil {
+		t.Fatalf("group = %v, want nil", got)
 	}
 }
 
