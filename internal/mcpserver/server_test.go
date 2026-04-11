@@ -407,6 +407,66 @@ func TestMailboxSendAcquiresWorkspaceLockForDelegateDispatch(t *testing.T) {
 	}
 }
 
+func TestMailboxSendNormalizesMarkdownScalarsInDelegateLockMetadata(t *testing.T) {
+	workdir := t.TempDir()
+	mailboxService := &fakeMailboxService{t: t}
+	mailboxService.sendFunc = func(_ context.Context, params mailbox.SendParams) (mailbox.SendResult, error) {
+		return mailbox.SendResult{DeliveryID: "dlv_locked"}, nil
+	}
+
+	service := newService(Options{
+		MailboxServiceFactory: fakeMailboxServiceFactory{service: mailboxService},
+		CommandRunner: &fakeRunner{t: t, handler: func(args []string, input string) (RunResult, error) {
+			switch {
+			case strings.Join(args, "\x00") == strings.Join([]string{"agent-deck", "session", "show", "planner-1", "--json"}, "\x00"):
+				return RunResult{ExitCode: 0, Stdout: fmt.Sprintf(`{"id":"planner-1","title":"planner","status":"waiting","path":%q}`, workdir)}, nil
+			default:
+				t.Fatalf("unexpected command call: %v", args)
+				return RunResult{}, nil
+			}
+		}},
+	})
+	service.state.boundAddresses = []string{"agent-deck/planner-1"}
+	service.state.defaultSender = "agent-deck/planner-1"
+	service.state.defaultWorkdir = workdir
+	service.state.autoBindAttempted = true
+
+	output := callTool(t, service.Server(), "mailbox_send", map[string]any{
+		"to_address": "agent-deck/planner-1",
+		"subject":    "delegate",
+		"body": strings.Join([]string{
+			"Task: task-123",
+			"Action: execute_delegate_task",
+			"",
+			"- Task branch: `task/task-123`",
+			"- Integration branch: `main`",
+			"- Coder session ref: `coder-1`",
+		}, "\n"),
+	})
+
+	lockDir, ok := output["workspace_lock_dir"].(string)
+	if !ok || lockDir == "" {
+		t.Fatalf("workspace_lock_dir = %v, want non-empty string", output["workspace_lock_dir"])
+	}
+	raw, err := os.ReadFile(filepath.Join(lockDir, "lock.json"))
+	if err != nil {
+		t.Fatalf("ReadFile(lock.json) error = %v", err)
+	}
+	var metadata map[string]any
+	if err := json.Unmarshal(raw, &metadata); err != nil {
+		t.Fatalf("Unmarshal(lock.json) error = %v", err)
+	}
+	if got := metadata["task_branch"]; got != "task/task-123" {
+		t.Fatalf("lock task_branch = %v, want task/task-123", got)
+	}
+	if got := metadata["integration_branch"]; got != "main" {
+		t.Fatalf("lock integration_branch = %v, want main", got)
+	}
+	if got := metadata["coder_session_ref"]; got != "coder-1" {
+		t.Fatalf("lock coder_session_ref = %v, want coder-1", got)
+	}
+}
+
 func TestMailboxSendAcquiresWorkspaceLockForDelegateDispatchWithoutBoundDefaultWorkdir(t *testing.T) {
 	targetWorkdir := t.TempDir()
 	mailboxService := &fakeMailboxService{t: t}

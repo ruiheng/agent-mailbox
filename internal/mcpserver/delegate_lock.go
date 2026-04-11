@@ -52,6 +52,21 @@ func matchTrimmed(text string, pattern *regexp.Regexp) string {
 	return strings.TrimSpace(match[1])
 }
 
+func cleanMarkdownScalar(value string) string {
+	trimmed := strings.TrimSpace(value)
+	if len(trimmed) >= 2 && strings.HasPrefix(trimmed, "`") && strings.HasSuffix(trimmed, "`") {
+		inner := strings.TrimSpace(strings.TrimSuffix(strings.TrimPrefix(trimmed, "`"), "`"))
+		if !strings.Contains(inner, "`") {
+			return inner
+		}
+	}
+	return trimmed
+}
+
+func matchMarkdownScalar(text string, pattern *regexp.Regexp) string {
+	return cleanMarkdownScalar(matchTrimmed(text, pattern))
+}
+
 func parseWorkflowEnvelope(body string) workflowEnvelope {
 	headerBlock := strings.ReplaceAll(body, "\r\n", "\n")
 	if idx := strings.Index(headerBlock, "\n\n"); idx >= 0 {
@@ -65,9 +80,9 @@ func parseWorkflowEnvelope(body string) workflowEnvelope {
 
 func parseDelegateLockMetadata(body string, defaults delegateLockMetadata) delegateLockMetadata {
 	metadata := defaults
-	metadata.TaskBranch = matchTrimmed(body, taskBranchPattern)
-	metadata.IntegrationBranch = matchTrimmed(body, integrationBranchPattern)
-	metadata.CoderSessionRef = matchTrimmed(body, coderSessionRefPattern)
+	metadata.TaskBranch = matchMarkdownScalar(body, taskBranchPattern)
+	metadata.IntegrationBranch = matchMarkdownScalar(body, integrationBranchPattern)
+	metadata.CoderSessionRef = matchMarkdownScalar(body, coderSessionRefPattern)
 	metadata.CreatedAt = time.Now().UTC().Format(time.RFC3339Nano)
 	return metadata
 }
