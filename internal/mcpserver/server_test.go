@@ -7,11 +7,13 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/google/jsonschema-go/jsonschema"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/ruiheng/agent-mailbox/internal/mailbox"
 )
@@ -36,6 +38,16 @@ type fakeMailboxService struct {
 	releaseFunc             func(context.Context, string, string) (mailbox.DeliveryTransitionResult, error)
 	deferFunc               func(context.Context, string, string, time.Time) (mailbox.DeliveryTransitionResult, error)
 	failFunc                func(context.Context, string, string, string) (mailbox.DeliveryTransitionResult, error)
+}
+
+func TestAgentDeckEnsureSessionSchemaRequiresWorkdir(t *testing.T) {
+	schema, err := jsonschema.For[agentDeckEnsureSessionInput](nil)
+	if err != nil {
+		t.Fatalf("jsonschema.For() error = %v", err)
+	}
+	if !slices.Contains(schema.Required, "workdir") {
+		t.Fatalf("required fields = %v, want workdir", schema.Required)
+	}
 }
 
 func (f *fakeMailboxService) Send(ctx context.Context, params mailbox.SendParams) (mailbox.SendResult, error) {
@@ -1424,8 +1436,8 @@ func TestAgentDeckEnsureSessionRequiresExplicitWorkdir(t *testing.T) {
 	err := callToolExpectError(t, service.Server(), "agent_deck_ensure_session", map[string]any{
 		"session_ref": "coder-ref",
 	})
-	if err == nil || !strings.Contains(err.Error(), "workdir is required") {
-		t.Fatalf("agent_deck_ensure_session error = %v, want workdir is required", err)
+	if err == nil || !strings.Contains(err.Error(), "workdir") {
+		t.Fatalf("agent_deck_ensure_session error = %v, want workdir validation", err)
 	}
 }
 

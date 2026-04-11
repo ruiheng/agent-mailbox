@@ -20,7 +20,7 @@ type agentDeckEnsureSessionInput struct {
 	GroupParentSessionID string `json:"group_parent_session_id,omitempty"`
 	ChildGroupName       string `json:"child_group_name,omitempty"`
 	NoParentLink         bool   `json:"no_parent_link,omitempty"`
-	Workdir              string `json:"workdir,omitempty"`
+	Workdir              string `json:"workdir"`
 	ListenerMessage      string `json:"listener_message,omitempty"`
 }
 
