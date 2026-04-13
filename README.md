@@ -115,6 +115,7 @@ The Go MCP entrypoint keeps the existing tool names:
 - `mailbox_bind`
 - `mailbox_status`
 - `mailbox_send`
+- `mailbox_forward`
 - `mailbox_wait`
 - `mailbox_recv`
 - `mailbox_list`
@@ -131,6 +132,10 @@ paths. Set `disable_notify_message = true` to skip only that immediate send-time
 notify. Delegate dispatch bodies with `Action: execute_delegate_task` also
 acquire `.agent-artifacts/active-task.lock` under the bound `default_workdir`,
 and they must include `- Integration branch:` before send.
+
+`mailbox_forward` forwards exactly one stored message selected by `message_id`
+or `delivery_id` to a new recipient through the normal `mailbox_send` path. It
+reuses the original body, `content_type`, and `schema_version`.
 
 `agent_deck_ensure_session` also supports explicit group placement through
 `group_path` or `group_parent_session_id` plus `child_group_name`, and can

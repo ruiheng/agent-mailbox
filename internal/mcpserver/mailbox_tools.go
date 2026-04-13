@@ -29,6 +29,15 @@ type mailboxSendInput struct {
 	DisableNotifyMessage *bool  `json:"disable_notify_message,omitempty"`
 }
 
+type mailboxForwardInput struct {
+	MessageID            string `json:"message_id,omitempty"`
+	DeliveryID           string `json:"delivery_id,omitempty"`
+	ToAddress            string `json:"to_address"`
+	FromAddress          string `json:"from_address,omitempty"`
+	Subject              string `json:"subject,omitempty"`
+	DisableNotifyMessage *bool  `json:"disable_notify_message,omitempty"`
+}
+
 type mailboxWaitInput struct {
 	Addresses []string `json:"addresses,omitempty"`
 	Timeout   string   `json:"timeout,omitempty"`
@@ -89,6 +98,10 @@ func (s *Service) registerMailboxTools(server *mcp.Server) {
 		Description: "Send one mailbox message and automatically push-notify a non-local target when the address scheme supports it. Set disable_notify_message=true to skip notify for that send. Delegate dispatch (`Action: execute_delegate_task`) also enforces a single active task lock for the current workspace.",
 	}, s.mailboxSend)
 	mcp.AddTool(server, &mcp.Tool{
+		Name:        "mailbox_forward",
+		Description: "Forward one stored mailbox message to a new recipient. Provide exactly one of message_id or delivery_id. The forward reuses the original body, content_type, and schema_version, and sends through the normal mailbox_send path.",
+	}, s.mailboxForward)
+	mcp.AddTool(server, &mcp.Tool{
 		Name:        "mailbox_wait",
 		Description: "Observe whether mail is available without claiming it. Not recommended for normal workflow; prefer mailbox_recv. Use this only for manual diagnostics or observation. Agent-managed session inbox addresses typically look like agent-deck/<session-id> or codex/<session-id>. Optional timeout is a duration string such as 30s, 5m, 120ms, or 1m30s.",
 	}, s.mailboxWait)
@@ -144,10 +157,10 @@ func (s *Service) mailboxStatus(ctx context.Context, _ *mcp.CallToolRequest, _ m
 	})
 }
 
-func (s *Service) mailboxSend(ctx context.Context, _ *mcp.CallToolRequest, input mailboxSendInput) (*mcp.CallToolResult, map[string]any, error) {
+func (s *Service) sendMailboxMessage(ctx context.Context, input mailboxSendInput) (map[string]any, error) {
 	fromAddress, err := s.sessions.senderAddress(ctx, input.FromAddress)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 
 	envelope := parseWorkflowEnvelope(input.Body)
@@ -155,26 +168,26 @@ func (s *Service) mailboxSend(ctx context.Context, _ *mcp.CallToolRequest, input
 	workspaceLockDir := ""
 	if envelope.Action == "execute_delegate_task" {
 		if envelope.TaskID == "" {
-			return nil, nil, errors.New("delegate dispatch requires a Task header before mailbox_send")
+			return nil, errors.New("delegate dispatch requires a Task header before mailbox_send")
 		}
 		lockWorkdir := ""
 		toParsed, err := parseAddress(input.ToAddress)
 		if err == nil && toParsed.Scheme == "agent-deck" {
 			probe, probeErr := s.sessions.probeSessionShowBestEffort(ctx, toParsed.ID)
 			if probeErr != nil {
-				return nil, nil, probeErr
+				return nil, probeErr
 			}
 			switch probe.Status {
 			case sessionShowProbeNotFound:
-				return nil, nil, fmt.Errorf("delegate dispatch target agent-deck session not found: %s", toParsed.ID)
+				return nil, fmt.Errorf("delegate dispatch target agent-deck session not found: %s", toParsed.ID)
 			case sessionShowProbeFound:
 				targetPath := strings.TrimSpace(probe.Data.Path)
 				if targetPath == "" {
-					return nil, nil, fmt.Errorf("delegate dispatch target session path unavailable: %s", toParsed.ID)
+					return nil, fmt.Errorf("delegate dispatch target session path unavailable: %s", toParsed.ID)
 				}
 				canonicalTargetPath, err := canonicalizeExistingPath(targetPath)
 				if err != nil {
-					return nil, nil, fmt.Errorf("canonicalize delegate target session path %q: %w", targetPath, err)
+					return nil, fmt.Errorf("canonicalize delegate target session path %q: %w", targetPath, err)
 				}
 				lockWorkdir = canonicalTargetPath
 			case sessionShowProbeUnknown:
@@ -182,23 +195,23 @@ func (s *Service) mailboxSend(ctx context.Context, _ *mcp.CallToolRequest, input
 				// workspace. If the target workspace cannot be resolved, sending the
 				// message anyway would bypass the lock guarantee, so we fail closed.
 				if !s.sessions.isLocalAddress(ctx, input.ToAddress) {
-					return nil, nil, fmt.Errorf("delegate dispatch requires a resolvable target workspace so active-task.lock can be enforced: %s", toParsed.ID)
+					return nil, fmt.Errorf("delegate dispatch requires a resolvable target workspace so active-task.lock can be enforced: %s", toParsed.ID)
 				}
 			}
 		}
 		if lockWorkdir == "" {
 			bound, err := s.sessions.boundState(ctx)
 			if err != nil {
-				return nil, nil, err
+				return nil, err
 			}
 			lockWorkdir = strings.TrimSpace(bound.DefaultWorkdir)
 			if lockWorkdir == "" {
-				return nil, nil, errors.New("delegate dispatch requires a resolvable workspace so active-task.lock can be enforced")
+				return nil, errors.New("delegate dispatch requires a resolvable workspace so active-task.lock can be enforced")
 			}
 		}
 		fromParsed, err := parseAddress(fromAddress)
 		if err != nil {
-			return nil, nil, err
+			return nil, err
 		}
 		plannerSessionID := ""
 		if fromParsed.Scheme == "agent-deck" {
@@ -213,11 +226,11 @@ func (s *Service) mailboxSend(ctx context.Context, _ *mcp.CallToolRequest, input
 			Subject:          input.Subject,
 		})
 		if err := validateDelegateLockMetadata(lockMetadata); err != nil {
-			return nil, nil, err
+			return nil, err
 		}
 		workspaceLockDir, err = acquireActiveTaskLock(lockWorkdir, lockMetadata)
 		if err != nil {
-			return nil, nil, err
+			return nil, err
 		}
 		workspaceLockStatus = "acquired"
 	}
@@ -236,7 +249,7 @@ func (s *Service) mailboxSend(ctx context.Context, _ *mcp.CallToolRequest, input
 		if workspaceLockStatus == "acquired" {
 			_ = releaseActiveTaskLock(workspaceLockDir)
 		}
-		return nil, nil, err
+		return nil, err
 	}
 
 	notify := s.notifications.notifyMailboxSend(ctx, input)
@@ -249,7 +262,7 @@ func (s *Service) mailboxSend(ctx context.Context, _ *mcp.CallToolRequest, input
 		notifyError = notify.Err.Error()
 	}
 
-	return s.mailboxMutationToolResult(ctx, map[string]any{
+	return map[string]any{
 		"status":                "sent",
 		"from_address":          fromAddress,
 		"to_address":            input.ToAddress,
@@ -260,7 +273,98 @@ func (s *Service) mailboxSend(ctx context.Context, _ *mcp.CallToolRequest, input
 		"notify_error":          notifyError,
 		"workspace_lock_status": workspaceLockStatus,
 		"workspace_lock_dir":    nilIfEmpty(workspaceLockDir),
-	})
+	}, nil
+}
+
+func (s *Service) mailboxSend(ctx context.Context, _ *mcp.CallToolRequest, input mailboxSendInput) (*mcp.CallToolResult, map[string]any, error) {
+	out, err := s.sendMailboxMessage(ctx, input)
+	if err != nil {
+		return nil, nil, err
+	}
+	return s.mailboxMutationToolResult(ctx, out)
+}
+
+func forwardSubject(original, override string) string {
+	if trimmed := strings.TrimSpace(override); trimmed != "" {
+		return trimmed
+	}
+	base := strings.TrimSpace(original)
+	if base == "" {
+		return "Fwd"
+	}
+	if strings.HasPrefix(strings.ToLower(base), "fwd:") {
+		return base
+	}
+	return "Fwd: " + base
+}
+
+func (s *Service) mailboxForward(ctx context.Context, _ *mcp.CallToolRequest, input mailboxForwardInput) (*mcp.CallToolResult, map[string]any, error) {
+	hasMessageID := strings.TrimSpace(input.MessageID) != ""
+	hasDeliveryID := strings.TrimSpace(input.DeliveryID) != ""
+	if hasMessageID == hasDeliveryID {
+		return nil, nil, errors.New("mailbox_forward requires exactly one of message_id or delivery_id")
+	}
+
+	var sendInput mailboxSendInput
+	var sourceMessageID string
+	var sourceDeliveryID string
+
+	switch {
+	case hasMessageID:
+		messageID := strings.TrimSpace(input.MessageID)
+		messages, err := withMailboxService(ctx, s.mailboxServices, func(service mailboxService) ([]mailbox.ReadMessage, error) {
+			return service.ReadMessages(ctx, []string{messageID})
+		})
+		if err != nil {
+			return nil, nil, err
+		}
+		if len(messages) != 1 {
+			return nil, nil, fmt.Errorf("mailbox_forward source message not found: %s", messageID)
+		}
+		source := messages[0]
+		sendInput = mailboxSendInput{
+			ToAddress:            input.ToAddress,
+			FromAddress:          input.FromAddress,
+			Subject:              forwardSubject(source.Subject, input.Subject),
+			Body:                 source.Body,
+			ContentType:          source.ContentType,
+			SchemaVersion:        source.SchemaVersion,
+			DisableNotifyMessage: input.DisableNotifyMessage,
+		}
+		sourceMessageID = source.MessageID
+	case hasDeliveryID:
+		deliveryID := strings.TrimSpace(input.DeliveryID)
+		deliveries, err := withMailboxService(ctx, s.mailboxServices, func(service mailboxService) ([]mailbox.ReadDelivery, error) {
+			return service.ReadDeliveries(ctx, []string{deliveryID})
+		})
+		if err != nil {
+			return nil, nil, err
+		}
+		if len(deliveries) != 1 {
+			return nil, nil, fmt.Errorf("mailbox_forward source delivery not found: %s", deliveryID)
+		}
+		source := deliveries[0]
+		sendInput = mailboxSendInput{
+			ToAddress:            input.ToAddress,
+			FromAddress:          input.FromAddress,
+			Subject:              forwardSubject(source.Subject, input.Subject),
+			Body:                 source.Body,
+			ContentType:          source.ContentType,
+			SchemaVersion:        source.SchemaVersion,
+			DisableNotifyMessage: input.DisableNotifyMessage,
+		}
+		sourceMessageID = source.MessageID
+		sourceDeliveryID = source.DeliveryID
+	}
+
+	out, err := s.sendMailboxMessage(ctx, sendInput)
+	if err != nil {
+		return nil, nil, err
+	}
+	out["status"] = "forwarded"
+	out["source_message_id"] = sourceMessageID
+	out["source_delivery_id"] = nilIfEmpty(sourceDeliveryID)
+	return s.mailboxMutationToolResult(ctx, out)
 }
 
 func (s *Service) mailboxWait(ctx context.Context, _ *mcp.CallToolRequest, input mailboxWaitInput) (*mcp.CallToolResult, map[string]any, error) {

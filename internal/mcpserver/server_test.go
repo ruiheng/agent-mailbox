@@ -353,6 +353,130 @@ func TestMailboxSendUsesExplicitFromAddressWithoutBoundState(t *testing.T) {
 	}
 }
 
+func TestMailboxForwardByMessageIDPreservesPayloadAndPrefixesSubject(t *testing.T) {
+	mailboxService := &fakeMailboxService{t: t}
+	mailboxService.readMessagesFunc = func(_ context.Context, messageIDs []string) ([]mailbox.ReadMessage, error) {
+		if diff := slices.Compare(messageIDs, []string{"msg_1"}); diff != 0 {
+			t.Fatalf("ReadMessages ids = %v, want [msg_1]", messageIDs)
+		}
+		return []mailbox.ReadMessage{{
+			MessageID:     "msg_1",
+			Subject:       "Original subject",
+			ContentType:   "text/markdown",
+			SchemaVersion: "v2",
+			Body:          "forward me",
+		}}, nil
+	}
+	mailboxService.sendFunc = func(_ context.Context, params mailbox.SendParams) (mailbox.SendResult, error) {
+		if params.ToAddress != "workflow/target" {
+			t.Fatalf("send to_address = %q, want workflow/target", params.ToAddress)
+		}
+		if params.FromAddress != "agent/sender" {
+			t.Fatalf("send from_address = %q, want agent/sender", params.FromAddress)
+		}
+		if params.Subject != "Fwd: Original subject" {
+			t.Fatalf("send subject = %q, want forwarded subject", params.Subject)
+		}
+		if params.ContentType != "text/markdown" {
+			t.Fatalf("send content_type = %q, want text/markdown", params.ContentType)
+		}
+		if params.SchemaVersion != "v2" {
+			t.Fatalf("send schema_version = %q, want v2", params.SchemaVersion)
+		}
+		if string(params.Body) != "forward me" {
+			t.Fatalf("send body = %q, want forward me", string(params.Body))
+		}
+		return mailbox.SendResult{DeliveryID: "dlv_forwarded"}, nil
+	}
+
+	service := newService(Options{
+		MailboxServiceFactory: fakeMailboxServiceFactory{service: mailboxService},
+		CommandRunner: &fakeRunner{t: t, handler: func(args []string, input string) (RunResult, error) {
+			return RunResult{}, errors.New("auto-bind should not run for explicit sender")
+		}},
+	})
+
+	output := callTool(t, service.Server(), "mailbox_forward", map[string]any{
+		"message_id":   "msg_1",
+		"to_address":   "workflow/target",
+		"from_address": "agent/sender",
+	})
+
+	if got := output["status"]; got != "forwarded" {
+		t.Fatalf("status = %v, want forwarded", got)
+	}
+	if got := output["delivery_id"]; got != "dlv_forwarded" {
+		t.Fatalf("delivery_id = %v, want dlv_forwarded", got)
+	}
+	if got := output["source_message_id"]; got != "msg_1" {
+		t.Fatalf("source_message_id = %v, want msg_1", got)
+	}
+}
+
+func TestMailboxForwardByDeliveryIDAllowsSubjectOverride(t *testing.T) {
+	mailboxService := &fakeMailboxService{t: t}
+	mailboxService.readDeliveriesFunc = func(_ context.Context, deliveryIDs []string) ([]mailbox.ReadDelivery, error) {
+		if diff := slices.Compare(deliveryIDs, []string{"dlv_1"}); diff != 0 {
+			t.Fatalf("ReadDeliveries ids = %v, want [dlv_1]", deliveryIDs)
+		}
+		return []mailbox.ReadDelivery{{
+			DeliveryID:    "dlv_1",
+			MessageID:     "msg_1",
+			Subject:       "Original subject",
+			ContentType:   "text/plain",
+			SchemaVersion: "v1",
+			Body:          "forward me",
+		}}, nil
+	}
+	mailboxService.sendFunc = func(_ context.Context, params mailbox.SendParams) (mailbox.SendResult, error) {
+		if params.Subject != "Custom forward subject" {
+			t.Fatalf("send subject = %q, want Custom forward subject", params.Subject)
+		}
+		return mailbox.SendResult{DeliveryID: "dlv_forwarded"}, nil
+	}
+
+	service := newService(Options{
+		MailboxServiceFactory: fakeMailboxServiceFactory{service: mailboxService},
+		CommandRunner: &fakeRunner{t: t, handler: func(args []string, input string) (RunResult, error) {
+			return RunResult{}, errors.New("auto-bind should not run for explicit sender")
+		}},
+	})
+
+	output := callTool(t, service.Server(), "mailbox_forward", map[string]any{
+		"delivery_id":  "dlv_1",
+		"to_address":   "workflow/target",
+		"from_address": "agent/sender",
+		"subject":      "Custom forward subject",
+	})
+
+	if got := output["status"]; got != "forwarded" {
+		t.Fatalf("status = %v, want forwarded", got)
+	}
+	if got := output["source_delivery_id"]; got != "dlv_1" {
+		t.Fatalf("source_delivery_id = %v, want dlv_1", got)
+	}
+}
+
+func TestMailboxForwardRequiresExactlyOneSourceID(t *testing.T) {
+	service := newService(Options{
+		MailboxServiceFactory: fakeMailboxServiceFactory{service: &fakeMailboxService{t: t}},
+		CommandRunner: &fakeRunner{t: t, handler: func(args []string, input string) (RunResult, error) {
+			t.Fatalf("unexpected command call: %v", args)
+			return RunResult{}, nil
+		}},
+	})
+	service.state.autoBindAttempted = true
+
+	err := callToolExpectError(t, service.Server(), "mailbox_forward", map[string]any{
+		"message_id":  "msg_1",
+		"delivery_id": "dlv_1",
+		"to_address":  "workflow/target",
+	})
+	if err == nil || !strings.Contains(err.Error(), "requires exactly one of message_id or delivery_id") {
+		t.Fatalf("mailbox_forward error = %v, want source id validation", err)
+	}
+}
+
 func TestMailboxSendAcquiresWorkspaceLockForDelegateDispatch(t *testing.T) {
 	plannerWorkdir := t.TempDir()
 	targetWorkdir := t.TempDir()
