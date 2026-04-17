@@ -447,14 +447,15 @@ func (m *sessionManager) ensureSession(ctx context.Context, input agentDeckEnsur
 			}
 		}
 	}
-		if data == nil {
-			launchParentSessionID := strings.TrimSpace(input.ParentSessionID)
-			launchNoParentLink := noParentLink
-			if input.EnsureTitle == "" {
-				return nil, errors.New("target session missing: provide session_id, session_ref, or ensure_title")
-			}
-			if input.EnsureCmd == "" {
-				return nil, errors.New("ensure_cmd is required when creating a target session")
+	if data == nil {
+		launchParentSessionID := strings.TrimSpace(input.ParentSessionID)
+		launchNoParentLink := noParentLink
+		derivedGroupFromChildParent := false
+		if input.EnsureTitle == "" {
+			return nil, errors.New("target session missing: provide session_id, session_ref, or ensure_title")
+		}
+		if input.EnsureCmd == "" {
+			return nil, errors.New("ensure_cmd is required when creating a target session")
 		}
 		if strings.TrimSpace(input.ParentSessionID) == "" && targetGroupPath == "" && !noParentLink {
 			return nil, errors.New("creating a target session requires either group_path/group_parent_session_id or parent_session_id")
@@ -464,40 +465,41 @@ func (m *sessionManager) ensureSession(ctx context.Context, input agentDeckEnsur
 			if err != nil {
 				return nil, err
 			}
-				if parentData == nil {
-					return nil, fmt.Errorf("parent_session_id not found: %s", input.ParentSessionID)
-				}
-				if targetGroupPath == "" && strings.TrimSpace(parentData.ParentSessionID) != "" {
-					parentGroup := strings.TrimSpace(parentData.Group)
+			if parentData == nil {
+				return nil, fmt.Errorf("parent_session_id not found: %s", input.ParentSessionID)
+			}
+			if targetGroupPath == "" && strings.TrimSpace(parentData.ParentSessionID) != "" {
+				parentGroup := strings.TrimSpace(parentData.Group)
 				if parentGroup != "" {
 					childGroupName := firstNonEmpty(parentData.Title, input.ParentSessionID, parentData.ID)
 					targetGroupPath, err = buildChildGroupPath(parentGroup, childGroupName)
-						if err != nil {
-							return nil, err
-						}
+					if err != nil {
+						return nil, err
 					}
-				}
-				if strings.TrimSpace(parentData.ParentSessionID) != "" && targetGroupPath != "" {
-					launchParentSessionID = ""
-					launchNoParentLink = true
+					derivedGroupFromChildParent = true
 				}
 			}
-			if targetGroupPath != "" {
-				if err := m.ensureGroupPath(ctx, targetGroupPath); err != nil {
-					return nil, err
-				}
+			if derivedGroupFromChildParent {
+				launchParentSessionID = ""
+				launchNoParentLink = true
+			}
+		}
+		if targetGroupPath != "" {
+			if err := m.ensureGroupPath(ctx, targetGroupPath); err != nil {
+				return nil, err
+			}
 		}
 
 		listenerMessage := strings.TrimSpace(input.ListenerMessage)
-			launchArgs := buildEnsureSessionLaunchArgs(ensureSessionLaunchInput{
-				EnsureTitle:     input.EnsureTitle,
-				EnsureCmd:       input.EnsureCmd,
-				Workdir:         workdir,
-				ParentSessionID: launchParentSessionID,
-				NoParentLink:    launchNoParentLink,
-				ListenerMessage: listenerMessage,
-				GroupPath:       targetGroupPath,
-			})
+		launchArgs := buildEnsureSessionLaunchArgs(ensureSessionLaunchInput{
+			EnsureTitle:     input.EnsureTitle,
+			EnsureCmd:       input.EnsureCmd,
+			Workdir:         workdir,
+			ParentSessionID: launchParentSessionID,
+			NoParentLink:    launchNoParentLink,
+			ListenerMessage: listenerMessage,
+			GroupPath:       targetGroupPath,
+		})
 		launchResult, err := runCommand(ctx, m.runner, launchArgs, runOptions{})
 		if err != nil {
 			return nil, err

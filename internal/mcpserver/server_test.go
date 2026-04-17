@@ -1751,6 +1751,42 @@ func TestAgentDeckEnsureSessionFallsBackToParentOnlyWhenChildParentHasNoGroup(t 
 	}
 }
 
+func TestAgentDeckEnsureSessionPreservesExplicitParentForExplicitGroupPath(t *testing.T) {
+	commandRunner := &fakeRunner{t: t, handler: func(args []string, input string) (RunResult, error) {
+		switch {
+		case strings.Join(args, "\x00") == strings.Join([]string{"agent-deck", "session", "show", "child-planner", "--json"}, "\x00"):
+			return RunResult{ExitCode: 0, Stdout: `{"id":"child-planner","title":"planner-child","status":"waiting","path":"/tmp","group":"planning/active","parent_session_id":"root-planner"}`}, nil
+		case strings.Join(args, "\x00") == strings.Join([]string{"agent-deck", "group", "list", "--json"}, "\x00"):
+			return RunResult{ExitCode: 0, Stdout: `{"groups":[{"path":"planning"},{"path":"planning/active"},{"path":"reviews"},{"path":"reviews/ready"}]}`}, nil
+		case strings.Join(args, "\x00") == strings.Join([]string{"agent-deck", "launch", "--json", "--title", "coder-ref", "--cmd", "codex --model gpt-5.4 --ask-for-approval on-request", "--group", "reviews/ready", "--parent", "child-planner", "/tmp"}, "\x00"):
+			return RunResult{ExitCode: 0, Stdout: `{"id":"session-2","title":"coder-ref","status":"waiting","group":"reviews/ready","path":"/tmp","parent_session_id":"child-planner"}`}, nil
+		default:
+			t.Fatalf("unexpected command args: %v", args)
+			return RunResult{}, nil
+		}
+	}}
+
+	service := newService(Options{
+		MailboxServiceFactory: fakeMailboxServiceFactory{service: &fakeMailboxService{t: t}},
+		CommandRunner:         commandRunner,
+	})
+	service.state.autoBindAttempted = true
+
+	output := callTool(t, service.Server(), "agent_deck_ensure_session", map[string]any{
+		"ensure_title":      "coder-ref",
+		"ensure_cmd":        "codex --model gpt-5.4 --ask-for-approval on-request",
+		"parent_session_id": "child-planner",
+		"group_path":        "reviews/ready",
+		"workdir":           "/tmp",
+	})
+	if got := output["created_target"]; got != true {
+		t.Fatalf("created_target = %v, want true", got)
+	}
+	if got := output["group"]; got != "reviews/ready" {
+		t.Fatalf("group = %v, want reviews/ready", got)
+	}
+}
+
 func TestAgentDeckEnsureSessionDoesNotCreateGroupWhenCreateValidationFails(t *testing.T) {
 	commandRunner := &fakeRunner{t: t, handler: func(args []string, input string) (RunResult, error) {
 		t.Fatalf("unexpected command args: %v", args)
