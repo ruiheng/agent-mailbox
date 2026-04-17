@@ -1690,7 +1690,7 @@ func TestAgentDeckEnsureSessionDerivesChildGroupFromChildParentSession(t *testin
 			return RunResult{ExitCode: 0, Stdout: `{"groups":[{"path":"planning"},{"path":"planning/active"}]}`}, nil
 		case strings.Join(args, "\x00") == strings.Join([]string{"agent-deck", "group", "create", "planner-child", "--parent", "planning/active"}, "\x00"):
 			return RunResult{ExitCode: 0}, nil
-		case strings.Join(args, "\x00") == strings.Join([]string{"agent-deck", "launch", "--json", "--title", "coder-ref", "--cmd", "codex --model gpt-5.4 --ask-for-approval on-request", "--group", "planning/active/planner-child", "--parent", "child-planner", "/tmp"}, "\x00"):
+		case strings.Join(args, "\x00") == strings.Join([]string{"agent-deck", "launch", "--json", "--title", "coder-ref", "--cmd", "codex --model gpt-5.4 --ask-for-approval on-request", "--group", "planning/active/planner-child", "--no-parent", "/tmp"}, "\x00"):
 			return RunResult{ExitCode: 0, Stdout: `{"id":"session-2","title":"coder-ref","status":"waiting","group":"planning/active/planner-child","path":"/tmp"}`}, nil
 		default:
 			t.Fatalf("unexpected command args: %v", args)
