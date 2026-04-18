@@ -161,9 +161,9 @@ The default state directory is:
 - otherwise `~/.local/state/ai-agent/mailbox`
 
 You can set `MAILBOX_STATE_DIR` once, or pass `--state-dir` per command.
-Structured-output commands (`send`, `list`, `recv`, `wait`, `watch`, and `stale`) accept
+Structured-output commands (`send`, `forward`, `list`, `recv`, `wait`, `watch`, and `stale`) accept
 either `--json` or `--yaml`, but not both together.
-`send`, `recv`, and `wait` also accept `--full` when you need the full legacy
+`send`, `forward`, `recv`, and `wait` also accept `--full` when you need the full legacy
 payload instead of the default compact view.
 
 ## Minimal Example
@@ -196,6 +196,16 @@ agent-mailbox --state-dir /tmp/mailbox-demo \
 Group send keeps personal send semantics unchanged: plain `send --to <address>`
 still targets the personal queue path and fails if `<address>` is already a
 known group address.
+
+Forward a stored message to a new recipient by message id or delivery id:
+
+```bash
+agent-mailbox --state-dir /tmp/mailbox-demo \
+  forward --message msg_123 --to workflow/reviewer/task-456 --from agent/sender --json
+```
+
+`forward` reuses the original body, `content_type`, and `schema_version`, and
+defaults the subject to `Fwd: <original subject>` unless `--subject` overrides it.
 
 Receive the next claimable message:
 

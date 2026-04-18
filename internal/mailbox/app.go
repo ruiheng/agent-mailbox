@@ -29,7 +29,7 @@ func (a *App) Run(ctx context.Context, args []string) error {
 
 func (a *App) RunWithStateDir(ctx context.Context, stateDir string, args []string) error {
 	if len(args) == 0 {
-		return errors.New("expected a command: send, recv, wait, watch, read, ack, renew, release, defer, fail, list, stale, group, or address")
+		return errors.New("expected a command: send, forward, recv, wait, watch, read, ack, renew, release, defer, fail, list, stale, group, or address")
 	}
 
 	command, err := a.prepareCommand(args)
@@ -48,12 +48,14 @@ func (a *App) RunWithStateDir(ctx context.Context, stateDir string, args []strin
 
 func (a *App) prepareCommand(args []string) (preparedCommand, error) {
 	if len(args) == 0 {
-		return nil, errors.New("expected a command: send, recv, wait, watch, read, ack, renew, release, defer, fail, list, stale, group, or address")
+		return nil, errors.New("expected a command: send, forward, recv, wait, watch, read, ack, renew, release, defer, fail, list, stale, group, or address")
 	}
 
 	switch args[0] {
 	case "send":
 		return a.prepareSendCommand(args[1:])
+	case "forward":
+		return a.prepareForwardCommand(args[1:])
 	case "recv":
 		return a.prepareRecvCommand(args[1:])
 	case "wait":

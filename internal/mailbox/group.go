@@ -537,6 +537,12 @@ func buildGroupListedMessage(viewer groupViewerState, record groupMessageRecord)
 		ReadCount:        record.ReadCount,
 		EligibleCount:    record.EligibleCount,
 	}
+	if record.ForwardedMessageID.Valid {
+		message.ForwardedMessageID = &record.ForwardedMessageID.String
+	}
+	if record.ForwardedFromAddress.Valid {
+		message.ForwardedFromAddress = &record.ForwardedFromAddress.String
+	}
 	if record.SenderEndpointID.Valid {
 		message.SenderEndpointID = &record.SenderEndpointID.String
 	}
@@ -563,6 +569,12 @@ func buildGroupReceivedMessage(viewer groupViewerState, record groupMessageRecor
 		ReadCount:        record.ReadCount,
 		EligibleCount:    record.EligibleCount,
 		FirstReadAt:      record.FirstReadAt.String,
+	}
+	if record.ForwardedMessageID.Valid {
+		message.ForwardedMessageID = &record.ForwardedMessageID.String
+	}
+	if record.ForwardedFromAddress.Valid {
+		message.ForwardedFromAddress = &record.ForwardedFromAddress.String
 	}
 	if record.SenderEndpointID.Valid {
 		message.SenderEndpointID = &record.SenderEndpointID.String

@@ -108,16 +108,112 @@ func (a *App) writeSendResultFullText(result SendResultFull) error {
 	return err
 }
 
-func (a *App) writeReceivedMessageText(message ReceivedMessageCompact) error {
-	if _, err := fmt.Fprintf(
+func (a *App) writeForwardResultText(result ForwardResultCompact) error {
+	if result.Mode == SendModeGroup {
+		eligibleCount := 0
+		if result.EligibleCount != nil {
+			eligibleCount = *result.EligibleCount
+		}
+		if result.SourceDeliveryID != "" {
+			_, err := fmt.Fprintf(
+				a.stdout,
+				"message_id=%s group=%s eligible_count=%d source_message_id=%s source_delivery_id=%s\n",
+				result.MessageID,
+				result.GroupAddress,
+				eligibleCount,
+				result.SourceMessageID,
+				result.SourceDeliveryID,
+			)
+			return err
+		}
+		_, err := fmt.Fprintf(
+			a.stdout,
+			"message_id=%s group=%s eligible_count=%d source_message_id=%s\n",
+			result.MessageID,
+			result.GroupAddress,
+			eligibleCount,
+			result.SourceMessageID,
+		)
+		return err
+	}
+	if result.SourceDeliveryID != "" {
+		_, err := fmt.Fprintf(
+			a.stdout,
+			"delivery_id=%s source_message_id=%s source_delivery_id=%s\n",
+			result.DeliveryID,
+			result.SourceMessageID,
+			result.SourceDeliveryID,
+		)
+		return err
+	}
+	_, err := fmt.Fprintf(a.stdout, "delivery_id=%s source_message_id=%s\n", result.DeliveryID, result.SourceMessageID)
+	return err
+}
+
+func (a *App) writeForwardResultFullText(result ForwardResultFull) error {
+	if result.Mode == SendModeGroup {
+		eligibleCount := 0
+		if result.EligibleCount != nil {
+			eligibleCount = *result.EligibleCount
+		}
+		if result.SourceDeliveryID != "" {
+			_, err := fmt.Fprintf(
+				a.stdout,
+				"message_id=%s group=%s eligible_count=%d source_message_id=%s source_delivery_id=%s\n",
+				result.MessageID,
+				result.GroupAddress,
+				eligibleCount,
+				result.SourceMessageID,
+				result.SourceDeliveryID,
+			)
+			return err
+		}
+		_, err := fmt.Fprintf(
+			a.stdout,
+			"message_id=%s group=%s eligible_count=%d source_message_id=%s\n",
+			result.MessageID,
+			result.GroupAddress,
+			eligibleCount,
+			result.SourceMessageID,
+		)
+		return err
+	}
+	if result.SourceDeliveryID != "" {
+		_, err := fmt.Fprintf(
+			a.stdout,
+			"message_id=%s delivery_id=%s blob_id=%s source_message_id=%s source_delivery_id=%s\n",
+			result.MessageID,
+			result.DeliveryID,
+			result.BlobID,
+			result.SourceMessageID,
+			result.SourceDeliveryID,
+		)
+		return err
+	}
+	_, err := fmt.Fprintf(
 		a.stdout,
-		"delivery_id=%s recipient_address=%s lease_token=%s content_type=%s subject=%q\n",
+		"message_id=%s delivery_id=%s blob_id=%s source_message_id=%s\n",
+		result.MessageID,
+		result.DeliveryID,
+		result.BlobID,
+		result.SourceMessageID,
+	)
+	return err
+}
+
+func (a *App) writeReceivedMessageText(message ReceivedMessageCompact) error {
+	header := fmt.Sprintf(
+		"delivery_id=%s recipient_address=%s lease_token=%s content_type=%s subject=%q",
 		message.DeliveryID,
 		message.RecipientAddress,
 		message.LeaseToken,
 		message.ContentType,
 		message.Subject,
-	); err != nil {
+	)
+	if message.ForwardedFromAddress != nil {
+		header += fmt.Sprintf(" forwarded_from_address=%s", *message.ForwardedFromAddress)
+	}
+	if _, err := fmt.Fprintln(a.stdout, header); err != nil {
 		return err
 	}
 	if _, err := fmt.Fprint(a.stdout, message.Body); err != nil {
@@ -132,16 +228,19 @@ func (a *App) writeReceivedMessageText(message ReceivedMessageCompact) error {
 }
 
 func (a *App) writeReceivedMessageFullText(message ReceivedMessage) error {
-	if _, err := fmt.Fprintf(
-		a.stdout,
-		"delivery_id=%s message_id=%s recipient_address=%s lease_token=%s lease_expires_at=%s subject=%q\n",
+	header := fmt.Sprintf(
+		"delivery_id=%s message_id=%s recipient_address=%s lease_token=%s lease_expires_at=%s subject=%q",
 		message.DeliveryID,
 		message.MessageID,
 		message.RecipientAddress,
 		message.LeaseToken,
 		message.LeaseExpiresAt,
 		message.Subject,
-	); err != nil {
+	)
+	if message.ForwardedFromAddress != nil {
+		header += fmt.Sprintf(" forwarded_from_address=%s", *message.ForwardedFromAddress)
+	}
+	if _, err := fmt.Fprintln(a.stdout, header); err != nil {
 		return err
 	}
 	if _, err := fmt.Fprint(a.stdout, message.Body); err != nil {
@@ -156,9 +255,8 @@ func (a *App) writeReceivedMessageFullText(message ReceivedMessage) error {
 }
 
 func (a *App) writeGroupReceivedMessageText(message GroupReceivedMessageCompact) error {
-	if _, err := fmt.Fprintf(
-		a.stdout,
-		"message_id=%s group=%s person=%s first_read_at=%s content_type=%s subject=%q read_count=%d eligible_count=%d\n",
+	header := fmt.Sprintf(
+		"message_id=%s group=%s person=%s first_read_at=%s content_type=%s subject=%q read_count=%d eligible_count=%d",
 		message.MessageID,
 		message.GroupAddress,
 		message.Person,
@@ -167,7 +265,11 @@ func (a *App) writeGroupReceivedMessageText(message GroupReceivedMessageCompact)
 		message.Subject,
 		message.ReadCount,
 		message.EligibleCount,
-	); err != nil {
+	)
+	if message.ForwardedFromAddress != nil {
+		header += fmt.Sprintf(" forwarded_from_address=%s", *message.ForwardedFromAddress)
+	}
+	if _, err := fmt.Fprintln(a.stdout, header); err != nil {
 		return err
 	}
 	if _, err := fmt.Fprint(a.stdout, message.Body); err != nil {
@@ -182,9 +284,8 @@ func (a *App) writeGroupReceivedMessageText(message GroupReceivedMessageCompact)
 }
 
 func (a *App) writeGroupReceivedMessageFullText(message GroupReceivedMessage) error {
-	if _, err := fmt.Fprintf(
-		a.stdout,
-		"message_id=%s group=%s person=%s first_read_at=%s content_type=%s subject=%q read_count=%d eligible_count=%d\n",
+	header := fmt.Sprintf(
+		"message_id=%s group=%s person=%s first_read_at=%s content_type=%s subject=%q read_count=%d eligible_count=%d",
 		message.MessageID,
 		message.GroupAddress,
 		message.Person,
@@ -193,7 +294,11 @@ func (a *App) writeGroupReceivedMessageFullText(message GroupReceivedMessage) er
 		message.Subject,
 		message.ReadCount,
 		message.EligibleCount,
-	); err != nil {
+	)
+	if message.ForwardedFromAddress != nil {
+		header += fmt.Sprintf(" forwarded_from_address=%s", *message.ForwardedFromAddress)
+	}
+	if _, err := fmt.Fprintln(a.stdout, header); err != nil {
 		return err
 	}
 	if _, err := fmt.Fprint(a.stdout, message.Body); err != nil {
@@ -265,10 +370,10 @@ func (a *App) writeLeaseRenewResultText(result LeaseRenewResult) error {
 }
 
 func (a *App) writeReadDeliveryText(delivery ReadDelivery) error {
+	header := ""
 	if delivery.AckedAt != nil {
-		if _, err := fmt.Fprintf(
-			a.stdout,
-			"delivery_id=%s recipient_address=%s state=%s visible_at=%s acked_at=%s content_type=%s subject=%q\n",
+		header = fmt.Sprintf(
+			"delivery_id=%s recipient_address=%s state=%s visible_at=%s acked_at=%s content_type=%s subject=%q",
 			delivery.DeliveryID,
 			delivery.RecipientAddress,
 			delivery.State,
@@ -276,22 +381,23 @@ func (a *App) writeReadDeliveryText(delivery ReadDelivery) error {
 			*delivery.AckedAt,
 			delivery.ContentType,
 			delivery.Subject,
-		); err != nil {
-			return err
-		}
+		)
 	} else {
-		if _, err := fmt.Fprintf(
-			a.stdout,
-			"delivery_id=%s recipient_address=%s state=%s visible_at=%s content_type=%s subject=%q\n",
+		header = fmt.Sprintf(
+			"delivery_id=%s recipient_address=%s state=%s visible_at=%s content_type=%s subject=%q",
 			delivery.DeliveryID,
 			delivery.RecipientAddress,
 			delivery.State,
 			delivery.VisibleAt,
 			delivery.ContentType,
 			delivery.Subject,
-		); err != nil {
-			return err
-		}
+		)
+	}
+	if delivery.ForwardedFromAddress != nil {
+		header += fmt.Sprintf(" forwarded_from_address=%s", *delivery.ForwardedFromAddress)
+	}
+	if _, err := fmt.Fprintln(a.stdout, header); err != nil {
+		return err
 	}
 	if _, err := fmt.Fprint(a.stdout, delivery.Body); err != nil {
 		return err
@@ -305,13 +411,16 @@ func (a *App) writeReadDeliveryText(delivery ReadDelivery) error {
 }
 
 func (a *App) writeReadMessageText(message ReadMessage) error {
-	if _, err := fmt.Fprintf(
-		a.stdout,
-		"message_id=%s content_type=%s subject=%q\n",
+	header := fmt.Sprintf(
+		"message_id=%s content_type=%s subject=%q",
 		message.MessageID,
 		message.ContentType,
 		message.Subject,
-	); err != nil {
+	)
+	if message.ForwardedFromAddress != nil {
+		header += fmt.Sprintf(" forwarded_from_address=%s", *message.ForwardedFromAddress)
+	}
+	if _, err := fmt.Fprintln(a.stdout, header); err != nil {
 		return err
 	}
 	if _, err := fmt.Fprint(a.stdout, message.Body); err != nil {
@@ -364,47 +473,55 @@ func (a *App) writeReadDeliveryResultText(result readDeliveryResult) error {
 }
 
 func (a *App) writeListedDeliveryText(delivery ListedDelivery) error {
+	forwardedFrom := ""
+	if delivery.ForwardedFromAddress != nil {
+		forwardedFrom = fmt.Sprintf(" forwarded_from_address=%s", *delivery.ForwardedFromAddress)
+	}
 	if delivery.AckedAt != nil {
 		_, err := fmt.Fprintf(
 			a.stdout,
-			"delivery_id=%s recipient_address=%s state=%s visible_at=%s acked_at=%s subject=%q\n",
+			"delivery_id=%s recipient_address=%s state=%s visible_at=%s acked_at=%s subject=%q%s\n",
 			delivery.DeliveryID,
 			delivery.RecipientAddress,
 			delivery.State,
 			delivery.VisibleAt,
 			*delivery.AckedAt,
 			delivery.Subject,
+			forwardedFrom,
 		)
 		return err
 	}
 	_, err := fmt.Fprintf(
 		a.stdout,
-		"delivery_id=%s recipient_address=%s state=%s visible_at=%s subject=%q\n",
+		"delivery_id=%s recipient_address=%s state=%s visible_at=%s subject=%q%s\n",
 		delivery.DeliveryID,
 		delivery.RecipientAddress,
 		delivery.State,
 		delivery.VisibleAt,
 		delivery.Subject,
+		forwardedFrom,
 	)
 	return err
 }
 
 func (a *App) writeWaitedDeliveryText(delivery ListedDeliveryCompact) error {
-	_, err := fmt.Fprintf(
-		a.stdout,
-		"delivery_id=%s recipient_address=%s content_type=%s subject=%q\n",
+	header := fmt.Sprintf(
+		"delivery_id=%s recipient_address=%s content_type=%s subject=%q",
 		delivery.DeliveryID,
 		delivery.RecipientAddress,
 		delivery.ContentType,
 		delivery.Subject,
 	)
+	if delivery.ForwardedFromAddress != nil {
+		header += fmt.Sprintf(" forwarded_from_address=%s", *delivery.ForwardedFromAddress)
+	}
+	_, err := fmt.Fprintln(a.stdout, header)
 	return err
 }
 
 func (a *App) writeGroupListedMessageText(message GroupListedMessage) error {
-	_, err := fmt.Fprintf(
-		a.stdout,
-		"message_id=%s group=%s person=%s read=%t read_count=%d eligible_count=%d created_at=%s subject=%q\n",
+	header := fmt.Sprintf(
+		"message_id=%s group=%s person=%s read=%t read_count=%d eligible_count=%d created_at=%s subject=%q",
 		message.MessageID,
 		message.GroupAddress,
 		message.Person,
@@ -414,13 +531,16 @@ func (a *App) writeGroupListedMessageText(message GroupListedMessage) error {
 		message.MessageCreatedAt,
 		message.Subject,
 	)
+	if message.ForwardedFromAddress != nil {
+		header += fmt.Sprintf(" forwarded_from_address=%s", *message.ForwardedFromAddress)
+	}
+	_, err := fmt.Fprintln(a.stdout, header)
 	return err
 }
 
 func (a *App) writeGroupWaitedMessageText(message GroupListedMessageCompact) error {
-	_, err := fmt.Fprintf(
-		a.stdout,
-		"message_id=%s group=%s person=%s read=%t read_count=%d eligible_count=%d content_type=%s subject=%q\n",
+	header := fmt.Sprintf(
+		"message_id=%s group=%s person=%s read=%t read_count=%d eligible_count=%d content_type=%s subject=%q",
 		message.MessageID,
 		message.GroupAddress,
 		message.Person,
@@ -430,6 +550,10 @@ func (a *App) writeGroupWaitedMessageText(message GroupListedMessageCompact) err
 		message.ContentType,
 		message.Subject,
 	)
+	if message.ForwardedFromAddress != nil {
+		header += fmt.Sprintf(" forwarded_from_address=%s", *message.ForwardedFromAddress)
+	}
+	_, err := fmt.Fprintln(a.stdout, header)
 	return err
 }
 

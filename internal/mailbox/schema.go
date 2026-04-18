@@ -60,9 +60,12 @@ CREATE TABLE IF NOT EXISTS messages (
   body_blob_ref TEXT NOT NULL,
   body_size INTEGER NOT NULL,
   body_sha256 TEXT NOT NULL,
+  forwarded_message_id TEXT,
+  forwarded_from_address TEXT,
   reply_to_message_id TEXT,
   metadata_json TEXT NOT NULL DEFAULT '{}',
   FOREIGN KEY (sender_endpoint_id) REFERENCES endpoints(endpoint_id),
+  FOREIGN KEY (forwarded_message_id) REFERENCES messages(message_id),
   FOREIGN KEY (reply_to_message_id) REFERENCES messages(message_id)
 );
 
@@ -162,6 +165,9 @@ func initSchema(ctx context.Context, db *sql.DB) error {
 	}
 	if _, err := db.ExecContext(ctx, schemaSQL); err != nil {
 		return fmt.Errorf("initialize schema: %w", err)
+	}
+	if err := migrateForwardedMessageSchema(ctx, db); err != nil {
+		return err
 	}
 	return nil
 }

@@ -3,6 +3,7 @@ package mailbox
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"os"
@@ -86,6 +87,161 @@ WHERE type = 'table' AND name = ?
 	}
 	if err := rows.Err(); err != nil {
 		t.Fatalf("iterate endpoints table info error = %v", err)
+	}
+}
+
+func TestOpenRuntimeMigratesForwardedMessageColumn(t *testing.T) {
+	t.Parallel()
+
+	stateDir := filepath.Join(t.TempDir(), "mailbox-state")
+	if err := ensureDir(stateDir); err != nil {
+		t.Fatalf("ensureDir(stateDir) error = %v", err)
+	}
+	if err := ensureDir(filepath.Join(stateDir, blobsDirName)); err != nil {
+		t.Fatalf("ensureDir(blobDir) error = %v", err)
+	}
+
+	dbPath := filepath.Join(stateDir, databaseFilename)
+	db, err := sql.Open("sqlite3", dbPath)
+	if err != nil {
+		t.Fatalf("sql.Open() error = %v", err)
+	}
+	_, err = db.Exec(`
+PRAGMA foreign_keys = ON;
+CREATE TABLE messages (
+  message_id TEXT PRIMARY KEY,
+  created_at TEXT NOT NULL,
+  sender_endpoint_id TEXT,
+  subject TEXT NOT NULL,
+  content_type TEXT NOT NULL,
+  schema_version TEXT NOT NULL,
+  idempotency_key TEXT,
+  body_blob_ref TEXT NOT NULL,
+  body_size INTEGER NOT NULL,
+  body_sha256 TEXT NOT NULL,
+  reply_to_message_id TEXT,
+  metadata_json TEXT NOT NULL DEFAULT '{}'
+);
+`)
+	if err != nil {
+		db.Close()
+		t.Fatalf("create legacy messages table error = %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("db.Close() error = %v", err)
+	}
+
+	runtime, err := OpenRuntime(context.Background(), stateDir)
+	if err != nil {
+		t.Fatalf("OpenRuntime() error = %v", err)
+	}
+	defer runtime.Close()
+
+	hasColumn, err := tableHasColumn(context.Background(), runtime.DB(), "messages", "forwarded_message_id")
+	if err != nil {
+		t.Fatalf("tableHasColumn(messages.forwarded_message_id) error = %v", err)
+	}
+	if !hasColumn {
+		t.Fatal("messages.forwarded_message_id missing after migration")
+	}
+
+	hasColumn, err = tableHasColumn(context.Background(), runtime.DB(), "messages", "forwarded_from_address")
+	if err != nil {
+		t.Fatalf("tableHasColumn(messages.forwarded_from_address) error = %v", err)
+	}
+	if !hasColumn {
+		t.Fatal("messages.forwarded_from_address missing after migration")
+	}
+}
+
+func TestOpenRuntimeBackfillsForwardedFromAddress(t *testing.T) {
+	t.Parallel()
+
+	stateDir := filepath.Join(t.TempDir(), "mailbox-state")
+	if err := ensureDir(stateDir); err != nil {
+		t.Fatalf("ensureDir(stateDir) error = %v", err)
+	}
+	if err := ensureDir(filepath.Join(stateDir, blobsDirName)); err != nil {
+		t.Fatalf("ensureDir(blobDir) error = %v", err)
+	}
+
+	dbPath := filepath.Join(stateDir, databaseFilename)
+	db, err := sql.Open("sqlite3", dbPath)
+	if err != nil {
+		t.Fatalf("sql.Open() error = %v", err)
+	}
+	_, err = db.Exec(`
+PRAGMA foreign_keys = ON;
+CREATE TABLE endpoints (
+  endpoint_id TEXT PRIMARY KEY,
+  created_at TEXT NOT NULL,
+  metadata_json TEXT NOT NULL DEFAULT '{}'
+);
+CREATE TABLE endpoint_addresses (
+  address TEXT PRIMARY KEY,
+  endpoint_id TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
+CREATE TABLE messages (
+  message_id TEXT PRIMARY KEY,
+  created_at TEXT NOT NULL,
+  sender_endpoint_id TEXT,
+  subject TEXT NOT NULL,
+  content_type TEXT NOT NULL,
+  schema_version TEXT NOT NULL,
+  idempotency_key TEXT,
+  body_blob_ref TEXT NOT NULL,
+  body_size INTEGER NOT NULL,
+  body_sha256 TEXT NOT NULL,
+  forwarded_message_id TEXT,
+  reply_to_message_id TEXT,
+  metadata_json TEXT NOT NULL DEFAULT '{}'
+);
+INSERT INTO endpoints (endpoint_id, created_at, metadata_json)
+VALUES ('ep_source', '2026-04-18T00:00:00Z', '{}');
+INSERT INTO endpoint_addresses (address, endpoint_id, created_at)
+VALUES ('agent/source', 'ep_source', '2026-04-18T00:00:00Z');
+INSERT INTO messages (
+  message_id,
+  created_at,
+  sender_endpoint_id,
+  subject,
+  content_type,
+  schema_version,
+  body_blob_ref,
+  body_size,
+  body_sha256,
+  forwarded_message_id,
+  reply_to_message_id,
+  metadata_json
+) VALUES
+  ('msg_source', '2026-04-18T00:00:00Z', 'ep_source', 'source', 'text/plain', 'v1', 'blob_source', 0, 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855', NULL, NULL, '{}'),
+  ('msg_forwarded', '2026-04-18T00:00:01Z', NULL, 'forwarded', 'text/plain', 'v1', 'blob_forwarded', 0, 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855', 'msg_source', NULL, '{}');
+`)
+	if err != nil {
+		db.Close()
+		t.Fatalf("create legacy forwarded data error = %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("db.Close() error = %v", err)
+	}
+
+	runtime, err := OpenRuntime(context.Background(), stateDir)
+	if err != nil {
+		t.Fatalf("OpenRuntime() error = %v", err)
+	}
+	defer runtime.Close()
+
+	var forwardedFromAddress sql.NullString
+	if err := runtime.DB().QueryRow(`
+SELECT forwarded_from_address
+FROM messages
+WHERE message_id = 'msg_forwarded'
+`).Scan(&forwardedFromAddress); err != nil {
+		t.Fatalf("query forwarded_from_address error = %v", err)
+	}
+	if !forwardedFromAddress.Valid || forwardedFromAddress.String != "agent/source" {
+		t.Fatalf("forwarded_from_address = %v, want agent/source", forwardedFromAddress)
 	}
 }
 
@@ -785,6 +941,22 @@ func TestInvalidCLIPathsDoNotCreateRuntimeState(t *testing.T) {
 			args: []string{"send", "--body-file", "-"},
 		},
 		{
+			name: "forward missing to",
+			args: []string{"forward", "--message", "msg_123"},
+		},
+		{
+			name: "forward missing source selector",
+			args: []string{"forward", "--to", "workflow/reviewer/task-123"},
+		},
+		{
+			name: "forward conflicting source selectors",
+			args: []string{"forward", "--message", "msg_123", "--delivery", "dlv_123", "--to", "workflow/reviewer/task-123"},
+		},
+		{
+			name: "forward conflicting formats",
+			args: []string{"forward", "--message", "msg_123", "--to", "workflow/reviewer/task-123", "--json", "--yaml"},
+		},
+		{
 			name: "list missing for",
 			args: []string{"list", "--json"},
 		},
@@ -1000,6 +1172,11 @@ func TestHelpCLIPathsDoNotCreateRuntimeState(t *testing.T) {
 			name:         "send help",
 			args:         []string{"send", "--help"},
 			wantContains: "Usage:\n  agent-mailbox send --to ADDRESS --body-file PATH [options] [--json | --yaml] [--full]",
+		},
+		{
+			name:         "forward help",
+			args:         []string{"forward", "--help"},
+			wantContains: "Usage:\n  agent-mailbox forward (--message ID | --delivery ID) --to ADDRESS [options] [--json | --yaml] [--full]",
 		},
 		{
 			name:         "stale help",

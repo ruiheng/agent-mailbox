@@ -337,6 +337,7 @@ func TestMailboxSendUsesExplicitFromAddressWithoutBoundState(t *testing.T) {
 		CommandRunner: &fakeRunner{t: t, handler: func(args []string, input string) (RunResult, error) {
 			return RunResult{}, errors.New("auto-bind should not run for explicit sender")
 		}},
+		DisableWakeScheduler: true,
 	})
 
 	output := callTool(t, service.Server(), "mailbox_send", map[string]any{
@@ -354,6 +355,7 @@ func TestMailboxSendUsesExplicitFromAddressWithoutBoundState(t *testing.T) {
 }
 
 func TestMailboxForwardByMessageIDPreservesPayloadAndPrefixesSubject(t *testing.T) {
+	sourceSenderAddress := "agent/source"
 	mailboxService := &fakeMailboxService{t: t}
 	mailboxService.readMessagesFunc = func(_ context.Context, messageIDs []string) ([]mailbox.ReadMessage, error) {
 		if diff := slices.Compare(messageIDs, []string{"msg_1"}); diff != 0 {
@@ -361,6 +363,7 @@ func TestMailboxForwardByMessageIDPreservesPayloadAndPrefixesSubject(t *testing.
 		}
 		return []mailbox.ReadMessage{{
 			MessageID:     "msg_1",
+			SenderAddress: &sourceSenderAddress,
 			Subject:       "Original subject",
 			ContentType:   "text/markdown",
 			SchemaVersion: "v2",
@@ -383,6 +386,12 @@ func TestMailboxForwardByMessageIDPreservesPayloadAndPrefixesSubject(t *testing.
 		if params.SchemaVersion != "v2" {
 			t.Fatalf("send schema_version = %q, want v2", params.SchemaVersion)
 		}
+		if params.ForwardedMessageID != "msg_1" {
+			t.Fatalf("send forwarded_message_id = %q, want msg_1", params.ForwardedMessageID)
+		}
+		if params.ForwardedFromAddress != "agent/source" {
+			t.Fatalf("send forwarded_from_address = %q, want agent/source", params.ForwardedFromAddress)
+		}
 		if string(params.Body) != "forward me" {
 			t.Fatalf("send body = %q, want forward me", string(params.Body))
 		}
@@ -394,6 +403,7 @@ func TestMailboxForwardByMessageIDPreservesPayloadAndPrefixesSubject(t *testing.
 		CommandRunner: &fakeRunner{t: t, handler: func(args []string, input string) (RunResult, error) {
 			return RunResult{}, errors.New("auto-bind should not run for explicit sender")
 		}},
+		DisableWakeScheduler: true,
 	})
 
 	output := callTool(t, service.Server(), "mailbox_forward", map[string]any{
@@ -414,6 +424,7 @@ func TestMailboxForwardByMessageIDPreservesPayloadAndPrefixesSubject(t *testing.
 }
 
 func TestMailboxForwardByDeliveryIDAllowsSubjectOverride(t *testing.T) {
+	sourceSenderAddress := "agent/source"
 	mailboxService := &fakeMailboxService{t: t}
 	mailboxService.readDeliveriesFunc = func(_ context.Context, deliveryIDs []string) ([]mailbox.ReadDelivery, error) {
 		if diff := slices.Compare(deliveryIDs, []string{"dlv_1"}); diff != 0 {
@@ -422,6 +433,7 @@ func TestMailboxForwardByDeliveryIDAllowsSubjectOverride(t *testing.T) {
 		return []mailbox.ReadDelivery{{
 			DeliveryID:    "dlv_1",
 			MessageID:     "msg_1",
+			SenderAddress: &sourceSenderAddress,
 			Subject:       "Original subject",
 			ContentType:   "text/plain",
 			SchemaVersion: "v1",
@@ -432,6 +444,12 @@ func TestMailboxForwardByDeliveryIDAllowsSubjectOverride(t *testing.T) {
 		if params.Subject != "Custom forward subject" {
 			t.Fatalf("send subject = %q, want Custom forward subject", params.Subject)
 		}
+		if params.ForwardedMessageID != "msg_1" {
+			t.Fatalf("send forwarded_message_id = %q, want msg_1", params.ForwardedMessageID)
+		}
+		if params.ForwardedFromAddress != "agent/source" {
+			t.Fatalf("send forwarded_from_address = %q, want agent/source", params.ForwardedFromAddress)
+		}
 		return mailbox.SendResult{DeliveryID: "dlv_forwarded"}, nil
 	}
 
@@ -440,6 +458,7 @@ func TestMailboxForwardByDeliveryIDAllowsSubjectOverride(t *testing.T) {
 		CommandRunner: &fakeRunner{t: t, handler: func(args []string, input string) (RunResult, error) {
 			return RunResult{}, errors.New("auto-bind should not run for explicit sender")
 		}},
+		DisableWakeScheduler: true,
 	})
 
 	output := callTool(t, service.Server(), "mailbox_forward", map[string]any{
@@ -457,6 +476,79 @@ func TestMailboxForwardByDeliveryIDAllowsSubjectOverride(t *testing.T) {
 	}
 }
 
+func TestMailboxForwardToGroupInboxPreservesGroupMode(t *testing.T) {
+	sourceSenderAddress := "agent/source"
+	mailboxService := &fakeMailboxService{t: t}
+	mailboxService.readMessagesFunc = func(_ context.Context, messageIDs []string) ([]mailbox.ReadMessage, error) {
+		if diff := slices.Compare(messageIDs, []string{"msg_1"}); diff != 0 {
+			t.Fatalf("ReadMessages ids = %v, want [msg_1]", messageIDs)
+		}
+		return []mailbox.ReadMessage{{
+			MessageID:     "msg_1",
+			SenderAddress: &sourceSenderAddress,
+			Subject:       "Original subject",
+			ContentType:   "text/plain",
+			Body:          "forward me",
+		}}, nil
+	}
+	mailboxService.sendFunc = func(_ context.Context, params mailbox.SendParams) (mailbox.SendResult, error) {
+		if !params.Group {
+			t.Fatal("send group = false, want true")
+		}
+		if params.ToAddress != "group/review" {
+			t.Fatalf("send to_address = %q, want group/review", params.ToAddress)
+		}
+		if params.ForwardedMessageID != "msg_1" {
+			t.Fatalf("send forwarded_message_id = %q, want msg_1", params.ForwardedMessageID)
+		}
+		if params.ForwardedFromAddress != "agent/source" {
+			t.Fatalf("send forwarded_from_address = %q, want agent/source", params.ForwardedFromAddress)
+		}
+		return mailbox.SendResult{
+			Mode:             mailbox.SendModeGroup,
+			MessageID:        "msg_forwarded",
+			GroupID:          "grp_1",
+			GroupAddress:     "group/review",
+			EligibleCount:    1,
+			MessageCreatedAt: "2026-04-18T00:00:00Z",
+		}, nil
+	}
+
+	service := newService(Options{
+		MailboxServiceFactory: fakeMailboxServiceFactory{service: mailboxService},
+		CommandRunner: &fakeRunner{t: t, handler: func(args []string, input string) (RunResult, error) {
+			return RunResult{}, errors.New("auto-bind should not run for explicit sender")
+		}},
+		DisableWakeScheduler: true,
+	})
+
+	output := callTool(t, service.Server(), "mailbox_forward", map[string]any{
+		"message_id":   "msg_1",
+		"to_address":   "group/review",
+		"from_address": "agent/sender",
+		"group":        true,
+	})
+
+	if got := output["status"]; got != "forwarded" {
+		t.Fatalf("status = %v, want forwarded", got)
+	}
+	if got := output["mode"]; got != mailbox.SendModeGroup {
+		t.Fatalf("mode = %v, want %q", got, mailbox.SendModeGroup)
+	}
+	if got := output["message_id"]; got != "msg_forwarded" {
+		t.Fatalf("message_id = %v, want msg_forwarded", got)
+	}
+	if got := output["group_address"]; got != "group/review" {
+		t.Fatalf("group_address = %v, want group/review", got)
+	}
+	if got := output["delivery_id"]; got != nil {
+		t.Fatalf("delivery_id = %v, want nil for group send", got)
+	}
+	if got := output["source_message_id"]; got != "msg_1" {
+		t.Fatalf("source_message_id = %v, want msg_1", got)
+	}
+}
+
 func TestMailboxForwardRequiresExactlyOneSourceID(t *testing.T) {
 	service := newService(Options{
 		MailboxServiceFactory: fakeMailboxServiceFactory{service: &fakeMailboxService{t: t}},
@@ -464,6 +556,7 @@ func TestMailboxForwardRequiresExactlyOneSourceID(t *testing.T) {
 			t.Fatalf("unexpected command call: %v", args)
 			return RunResult{}, nil
 		}},
+		DisableWakeScheduler: true,
 	})
 	service.state.autoBindAttempted = true
 
@@ -919,6 +1012,7 @@ func TestMailboxSendPreservesMailboxDefaultsWhenMetadataOmitted(t *testing.T) {
 			t.Fatalf("unexpected command call: %v", args)
 			return RunResult{}, nil
 		}},
+		DisableWakeScheduler: true,
 	})
 	service.state.boundAddresses = []string{"agent-deck/self"}
 	service.state.defaultSender = "agent-deck/self"
@@ -2132,6 +2226,133 @@ func TestMailboxLifecycleToolsUseDirectMailboxService(t *testing.T) {
 	}
 }
 
+func TestMailboxRecvExposesForwardedFromAddressInCompactPayload(t *testing.T) {
+	forwardedFromAddress := "agent/source"
+	mailboxService := &fakeMailboxService{t: t}
+	mailboxService.receiveBatchWithTTLFunc = func(_ context.Context, params mailbox.ReceiveBatchParams, ttl time.Duration) (mailbox.ReceiveResult, error) {
+		return mailbox.ReceiveResult{
+			Messages: []mailbox.ReceivedMessage{{
+				DeliveryID:           "dlv_forwarded",
+				MessageID:            "msg_forwarded",
+				ForwardedFromAddress: &forwardedFromAddress,
+				LeaseToken:           "lease_forwarded",
+				LeaseExpiresAt:       time.Now().UTC().Add(defaultMCPLeaseTTL).Format(time.RFC3339Nano),
+				RecipientAddress:     "agent-deck/self",
+				Subject:              "delegate",
+				Body:                 "body",
+			}},
+		}, nil
+	}
+
+	service := newService(Options{
+		MailboxServiceFactory: fakeMailboxServiceFactory{service: mailboxService},
+		CommandRunner: &fakeRunner{t: t, handler: func(args []string, input string) (RunResult, error) {
+			t.Fatalf("unexpected command call: %v", args)
+			return RunResult{}, nil
+		}},
+		DisableLeaseRenewLoop: true,
+	})
+	service.state.boundAddresses = []string{"agent-deck/self"}
+	service.state.defaultSender = "agent-deck/self"
+	service.state.autoBindAttempted = true
+
+	recv := callTool(t, service.Server(), "mailbox_recv", map[string]any{
+		"addresses": []string{"agent-deck/self"},
+	})
+	delivery := recv["delivery"].(map[string]any)
+	message := delivery["messages"].([]any)[0].(map[string]any)
+	if got := message["forwarded_from_address"]; got != "agent/source" {
+		t.Fatalf("forwarded_from_address = %v, want agent/source", got)
+	}
+	assertMCPMapOmitsForwardedMessageID(t, message)
+}
+
+func TestMailboxWaitExposesForwardedFromAddressInCompactPayload(t *testing.T) {
+	forwardedFromAddress := "agent/source"
+	mailboxService := &fakeMailboxService{t: t}
+	mailboxService.waitFunc = func(_ context.Context, params mailbox.WaitParams) (mailbox.ListedDelivery, error) {
+		return mailbox.ListedDelivery{
+			DeliveryID:           "dlv_forwarded",
+			MessageID:            "msg_forwarded",
+			ForwardedFromAddress: &forwardedFromAddress,
+			RecipientAddress:     "agent-deck/self",
+			Subject:              "delegate",
+			ContentType:          "text/plain",
+		}, nil
+	}
+
+	service := newService(Options{
+		MailboxServiceFactory: fakeMailboxServiceFactory{service: mailboxService},
+		CommandRunner: &fakeRunner{t: t, handler: func(args []string, input string) (RunResult, error) {
+			t.Fatalf("unexpected command call: %v", args)
+			return RunResult{}, nil
+		}},
+		DisableWakeScheduler: true,
+	})
+	service.state.boundAddresses = []string{"agent-deck/self"}
+	service.state.defaultSender = "agent-deck/self"
+	service.state.autoBindAttempted = true
+
+	wait := callTool(t, service.Server(), "mailbox_wait", map[string]any{
+		"addresses": []string{"agent-deck/self"},
+	})
+	delivery := wait["delivery"].(map[string]any)
+	if got := delivery["forwarded_from_address"]; got != "agent/source" {
+		t.Fatalf("forwarded_from_address = %v, want agent/source", got)
+	}
+	assertMCPMapOmitsForwardedMessageID(t, delivery)
+}
+
+func TestMailboxListAsPersonExposesForwardedFromAddress(t *testing.T) {
+	forwardedFromAddress := "agent/source"
+	mailboxService := &fakeMailboxService{t: t}
+	mailboxService.listGroupMessagesFunc = func(_ context.Context, params mailbox.GroupListParams) ([]mailbox.GroupListedMessage, error) {
+		if params.Address != "group/review" {
+			t.Fatalf("ListGroupMessages address = %q, want group/review", params.Address)
+		}
+		if params.Person != "alice" {
+			t.Fatalf("ListGroupMessages person = %q, want alice", params.Person)
+		}
+		return []mailbox.GroupListedMessage{{
+			MessageID:            "msg_forwarded",
+			ForwardedFromAddress: &forwardedFromAddress,
+			GroupID:              "grp_1",
+			GroupAddress:         "group/review",
+			Person:               "alice",
+			MessageCreatedAt:     "2026-04-18T00:00:00Z",
+			Subject:              "review",
+			ContentType:          "text/plain",
+			Read:                 false,
+			ReadCount:            0,
+			EligibleCount:        1,
+		}}, nil
+	}
+
+	service := newService(Options{
+		MailboxServiceFactory: fakeMailboxServiceFactory{service: mailboxService},
+		CommandRunner: &fakeRunner{t: t, handler: func(args []string, input string) (RunResult, error) {
+			t.Fatalf("unexpected command call: %v", args)
+			return RunResult{}, nil
+		}},
+		DisableWakeScheduler: true,
+	})
+	service.state.autoBindAttempted = true
+
+	list := callTool(t, service.Server(), "mailbox_list", map[string]any{
+		"address":   "group/review",
+		"as_person": "alice",
+	})
+	deliveries := list["deliveries"].([]any)
+	if len(deliveries) != 1 {
+		t.Fatalf("len(deliveries) = %d, want 1", len(deliveries))
+	}
+	delivery := deliveries[0].(map[string]any)
+	if got := delivery["forwarded_from_address"]; got != "agent/source" {
+		t.Fatalf("forwarded_from_address = %v, want agent/source", got)
+	}
+	assertMCPMapOmitsForwardedMessageID(t, delivery)
+}
+
 func TestMailboxRecvStartsLeaseRenewLoopWithShortTTL(t *testing.T) {
 	current := time.Date(2026, 4, 3, 6, 0, 0, 0, time.UTC)
 	renewed := make(chan struct{}, 1)
@@ -2555,6 +2776,14 @@ func callTool(t *testing.T, server *mcp.Server, name string, args map[string]any
 		t.Fatalf("unmarshal structured content: %v", err)
 	}
 	return output
+}
+
+func assertMCPMapOmitsForwardedMessageID(t *testing.T, payload map[string]any) {
+	t.Helper()
+
+	if _, ok := payload["forwarded_message_id"]; ok {
+		t.Fatalf("payload unexpectedly exposes forwarded_message_id: %v", payload)
+	}
 }
 
 func callToolExpectError(t *testing.T, server *mcp.Server, name string, args map[string]any) error {

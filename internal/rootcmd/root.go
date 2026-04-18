@@ -41,7 +41,7 @@ func (a *App) Run(ctx context.Context, args []string) error {
 		return mailbox.ErrHelpRequested
 	}
 	if len(rest) == 0 {
-		return errors.New("expected a command: mcp, send, recv, wait, watch, read, ack, renew, release, defer, fail, list, stale, group, or address")
+		return errors.New("expected a command: mcp, send, forward, recv, wait, watch, read, ack, renew, release, defer, fail, list, stale, group, or address")
 	}
 	if rest[0] == "mcp" {
 		return a.runMCPCommand(ctx, stateDir, rest[1:])
@@ -90,6 +90,7 @@ func (a *App) writeRootHelp() {
 		"Commands:",
 		"  mcp                 Run the built-in stdio MCP server",
 		"  send                Send a message to an address",
+		"  forward             Forward a stored message or delivery",
 		"  recv                Claim the next delivery",
 		"  wait                Wait for one delivery without claiming",
 		"  watch               Observe deliveries without claiming",

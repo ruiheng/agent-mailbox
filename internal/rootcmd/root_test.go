@@ -25,6 +25,35 @@ func TestRunRootHelpIncludesMCP(t *testing.T) {
 	}
 }
 
+func TestRunRootHelpIncludesForward(t *testing.T) {
+	t.Parallel()
+
+	var stdout bytes.Buffer
+	app := New(strings.NewReader(""), &stdout, &bytes.Buffer{})
+
+	err := app.Run(context.Background(), []string{"--help"})
+	if !errors.Is(err, mailbox.ErrHelpRequested) {
+		t.Fatalf("Run(--help) error = %v, want ErrHelpRequested", err)
+	}
+	if !strings.Contains(stdout.String(), "  forward             Forward a stored message or delivery") {
+		t.Fatalf("root help = %q, want forward command", stdout.String())
+	}
+}
+
+func TestRunWithoutCommandMentionsForward(t *testing.T) {
+	t.Parallel()
+
+	app := New(strings.NewReader(""), &bytes.Buffer{}, &bytes.Buffer{})
+
+	err := app.Run(context.Background(), nil)
+	if err == nil {
+		t.Fatal("Run() error = nil, want missing command error")
+	}
+	if !strings.Contains(err.Error(), "forward") {
+		t.Fatalf("Run() error = %q, want forward in command list", err.Error())
+	}
+}
+
 func TestRunMCPHelp(t *testing.T) {
 	t.Parallel()
 

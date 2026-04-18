@@ -41,6 +41,56 @@ func migrateLegacyGroupMessageSchema(ctx context.Context, db *sql.DB) error {
 	return nil
 }
 
+func migrateForwardedMessageSchema(ctx context.Context, db *sql.DB) error {
+	hasMessageIDColumn, err := tableHasColumn(ctx, db, "messages", "forwarded_message_id")
+	if err != nil {
+		return fmt.Errorf("inspect messages schema for forwarded_message_id: %w", err)
+	}
+	if !hasMessageIDColumn {
+		if _, err := db.ExecContext(ctx, `ALTER TABLE messages ADD COLUMN forwarded_message_id TEXT REFERENCES messages(message_id)`); err != nil {
+			return fmt.Errorf("add messages.forwarded_message_id column: %w", err)
+		}
+	}
+	hasFromAddressColumn, err := tableHasColumn(ctx, db, "messages", "forwarded_from_address")
+	if err != nil {
+		return fmt.Errorf("inspect messages schema for forwarded_from_address: %w", err)
+	}
+	if !hasFromAddressColumn {
+		if _, err := db.ExecContext(ctx, `ALTER TABLE messages ADD COLUMN forwarded_from_address TEXT`); err != nil {
+			return fmt.Errorf("add messages.forwarded_from_address column: %w", err)
+		}
+	}
+	if err := backfillForwardedFromAddress(ctx, db); err != nil {
+		return err
+	}
+	return nil
+}
+
+func backfillForwardedFromAddress(ctx context.Context, db *sql.DB) error {
+	if _, err := db.ExecContext(ctx, `
+UPDATE messages AS forwarded
+SET forwarded_from_address = (
+  SELECT sender_ea.address
+  FROM messages AS source
+  JOIN endpoint_addresses AS sender_ea ON sender_ea.endpoint_id = source.sender_endpoint_id
+  WHERE source.message_id = forwarded.forwarded_message_id
+  ORDER BY sender_ea.created_at ASC, sender_ea.address ASC
+  LIMIT 1
+)
+WHERE forwarded.forwarded_message_id IS NOT NULL
+  AND (forwarded.forwarded_from_address IS NULL OR trim(forwarded.forwarded_from_address) = '')
+  AND EXISTS (
+    SELECT 1
+    FROM messages AS source
+    JOIN endpoint_addresses AS sender_ea ON sender_ea.endpoint_id = source.sender_endpoint_id
+    WHERE source.message_id = forwarded.forwarded_message_id
+  )
+`); err != nil {
+		return fmt.Errorf("backfill messages.forwarded_from_address: %w", err)
+	}
+	return nil
+}
+
 func tableHasColumn(ctx context.Context, db *sql.DB, tableName, columnName string) (bool, error) {
 	rows, err := db.QueryContext(ctx, fmt.Sprintf("PRAGMA table_info(%s)", tableName))
 	if err != nil {

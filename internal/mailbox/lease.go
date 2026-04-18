@@ -82,43 +82,47 @@ type receiveLeasePolicy struct {
 }
 
 type ReceivedMessage struct {
-	DeliveryID          string  `json:"delivery_id"`
-	MessageID           string  `json:"message_id"`
-	RecipientAddress    string  `json:"recipient_address"`
-	RecipientEndpointID string  `json:"recipient_endpoint_id"`
-	SenderEndpointID    *string `json:"sender_endpoint_id,omitempty"`
-	State               string  `json:"state"`
-	VisibleAt           string  `json:"visible_at"`
-	LeaseToken          string  `json:"lease_token"`
-	LeaseExpiresAt      string  `json:"lease_expires_at"`
-	AttemptCount        int     `json:"attempt_count"`
-	MessageCreatedAt    string  `json:"message_created_at"`
-	Subject             string  `json:"subject"`
-	ContentType         string  `json:"content_type"`
-	SchemaVersion       string  `json:"schema_version"`
-	BodyBlobRef         string  `json:"body_blob_ref"`
-	BodySize            int64   `json:"body_size"`
-	BodySHA256          string  `json:"body_sha256"`
-	Body                string  `json:"body"`
+	DeliveryID           string  `json:"delivery_id"`
+	MessageID            string  `json:"message_id"`
+	ForwardedMessageID   *string `json:"-"`
+	ForwardedFromAddress *string `json:"forwarded_from_address,omitempty"`
+	RecipientAddress     string  `json:"recipient_address"`
+	RecipientEndpointID  string  `json:"recipient_endpoint_id"`
+	SenderEndpointID     *string `json:"sender_endpoint_id,omitempty"`
+	State                string  `json:"state"`
+	VisibleAt            string  `json:"visible_at"`
+	LeaseToken           string  `json:"lease_token"`
+	LeaseExpiresAt       string  `json:"lease_expires_at"`
+	AttemptCount         int     `json:"attempt_count"`
+	MessageCreatedAt     string  `json:"message_created_at"`
+	Subject              string  `json:"subject"`
+	ContentType          string  `json:"content_type"`
+	SchemaVersion        string  `json:"schema_version"`
+	BodyBlobRef          string  `json:"body_blob_ref"`
+	BodySize             int64   `json:"body_size"`
+	BodySHA256           string  `json:"body_sha256"`
+	Body                 string  `json:"body"`
 }
 
 type GroupReceivedMessage struct {
-	MessageID        string  `json:"message_id"`
-	GroupID          string  `json:"group_id"`
-	GroupAddress     string  `json:"group_address"`
-	Person           string  `json:"person"`
-	SenderEndpointID *string `json:"sender_endpoint_id,omitempty"`
-	MessageCreatedAt string  `json:"message_created_at"`
-	Subject          string  `json:"subject"`
-	ContentType      string  `json:"content_type"`
-	SchemaVersion    string  `json:"schema_version"`
-	BodyBlobRef      string  `json:"body_blob_ref"`
-	BodySize         int64   `json:"body_size"`
-	BodySHA256       string  `json:"body_sha256"`
-	Body             string  `json:"body"`
-	ReadCount        int     `json:"read_count"`
-	EligibleCount    int     `json:"eligible_count"`
-	FirstReadAt      string  `json:"first_read_at"`
+	MessageID            string  `json:"message_id"`
+	ForwardedMessageID   *string `json:"-"`
+	ForwardedFromAddress *string `json:"forwarded_from_address,omitempty"`
+	GroupID              string  `json:"group_id"`
+	GroupAddress         string  `json:"group_address"`
+	Person               string  `json:"person"`
+	SenderEndpointID     *string `json:"sender_endpoint_id,omitempty"`
+	MessageCreatedAt     string  `json:"message_created_at"`
+	Subject              string  `json:"subject"`
+	ContentType          string  `json:"content_type"`
+	SchemaVersion        string  `json:"schema_version"`
+	BodyBlobRef          string  `json:"body_blob_ref"`
+	BodySize             int64   `json:"body_size"`
+	BodySHA256           string  `json:"body_sha256"`
+	Body                 string  `json:"body"`
+	ReadCount            int     `json:"read_count"`
+	EligibleCount        int     `json:"eligible_count"`
+	FirstReadAt          string  `json:"first_read_at"`
 }
 
 type ReceiveResult struct {
@@ -530,6 +534,12 @@ WHERE delivery_id = ?
 			BodySize:            candidate.BodySize,
 			BodySHA256:          candidate.BodySHA256,
 			Body:                string(body),
+		}
+		if candidate.ForwardedMessageID.Valid {
+			message.ForwardedMessageID = &candidate.ForwardedMessageID.String
+		}
+		if candidate.ForwardedFromAddress.Valid {
+			message.ForwardedFromAddress = &candidate.ForwardedFromAddress.String
 		}
 		if candidate.SenderEndpointID.Valid {
 			message.SenderEndpointID = &candidate.SenderEndpointID.String

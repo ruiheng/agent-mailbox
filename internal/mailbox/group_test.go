@@ -711,6 +711,87 @@ func TestGroupListWaitAndRecvTrackPerPersonReadState(t *testing.T) {
 	}
 }
 
+func TestGroupListWaitAndRecvPreserveForwardedFromAddress(t *testing.T) {
+	t.Parallel()
+
+	runtime, store := newLeaseTestStore(t)
+	defer runtime.Close()
+
+	group, err := store.CreateGroup(context.Background(), "group/forwarded")
+	if err != nil {
+		t.Fatalf("CreateGroup() error = %v", err)
+	}
+	if _, err := store.AddGroupMember(context.Background(), group.Address, "alice"); err != nil {
+		t.Fatalf("AddGroupMember(alice) error = %v", err)
+	}
+
+	source, err := store.Send(context.Background(), SendParams{
+		ToAddress:     "workflow/source",
+		FromAddress:   "agent/sender",
+		Subject:       "source",
+		ContentType:   "text/plain",
+		SchemaVersion: "v1",
+		Body:          []byte("source body"),
+	})
+	if err != nil {
+		t.Fatalf("Send(source) error = %v", err)
+	}
+
+	sent, err := store.Send(context.Background(), SendParams{
+		ToAddress:            group.Address,
+		FromAddress:          "agent/sender",
+		Subject:              "forwarded",
+		ContentType:          "text/plain",
+		SchemaVersion:        "v1",
+		ForwardedMessageID:   source.MessageID,
+		ForwardedFromAddress: "agent/sender",
+		Body:                 []byte("forwarded body"),
+		Group:                true,
+	})
+	if err != nil {
+		t.Fatalf("Send(group forwarded) error = %v", err)
+	}
+
+	listed, err := store.ListGroupMessages(context.Background(), GroupListParams{
+		Address: group.Address,
+		Person:  "alice",
+	})
+	if err != nil {
+		t.Fatalf("ListGroupMessages() error = %v", err)
+	}
+	if len(listed) != 1 {
+		t.Fatalf("len(ListGroupMessages()) = %d, want 1", len(listed))
+	}
+	if listed[0].MessageID != sent.MessageID {
+		t.Fatalf("listed message_id = %q, want %q", listed[0].MessageID, sent.MessageID)
+	}
+	if listed[0].ForwardedFromAddress == nil || *listed[0].ForwardedFromAddress != "agent/sender" {
+		t.Fatalf("listed forwarded_from_address = %v, want agent/sender", listed[0].ForwardedFromAddress)
+	}
+
+	waited, err := store.WaitGroupMessage(context.Background(), GroupWaitParams{
+		Address: group.Address,
+		Person:  "alice",
+	})
+	if err != nil {
+		t.Fatalf("WaitGroupMessage() error = %v", err)
+	}
+	if waited.ForwardedFromAddress == nil || *waited.ForwardedFromAddress != "agent/sender" {
+		t.Fatalf("waited forwarded_from_address = %v, want agent/sender", waited.ForwardedFromAddress)
+	}
+
+	received, err := store.ReceiveGroupMessage(context.Background(), GroupReceiveParams{
+		Address: group.Address,
+		Person:  "alice",
+	})
+	if err != nil {
+		t.Fatalf("ReceiveGroupMessage() error = %v", err)
+	}
+	if received.ForwardedFromAddress == nil || *received.ForwardedFromAddress != "agent/sender" {
+		t.Fatalf("received forwarded_from_address = %v, want agent/sender", received.ForwardedFromAddress)
+	}
+}
+
 func TestGroupHistoryVisibilityJoinLeaveRejoinAndStableCounts(t *testing.T) {
 	t.Parallel()
 

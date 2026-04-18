@@ -27,6 +27,9 @@ type mailboxSendInput struct {
 	ContentType          string `json:"content_type,omitempty"`
 	SchemaVersion        string `json:"schema_version,omitempty"`
 	DisableNotifyMessage *bool  `json:"disable_notify_message,omitempty"`
+	forwardedMessageID   string
+	forwardedFromAddress string
+	group                bool
 }
 
 type mailboxForwardInput struct {
@@ -35,6 +38,7 @@ type mailboxForwardInput struct {
 	ToAddress            string `json:"to_address"`
 	FromAddress          string `json:"from_address,omitempty"`
 	Subject              string `json:"subject,omitempty"`
+	Group                bool   `json:"group,omitempty"`
 	DisableNotifyMessage *bool  `json:"disable_notify_message,omitempty"`
 }
 
@@ -237,12 +241,15 @@ func (s *Service) sendMailboxMessage(ctx context.Context, input mailboxSendInput
 
 	sendResult, err := withMailboxService(ctx, s.mailboxServices, func(service mailboxService) (mailbox.SendResult, error) {
 		return service.Send(ctx, mailbox.SendParams{
-			ToAddress:     input.ToAddress,
-			FromAddress:   fromAddress,
-			Subject:       input.Subject,
-			ContentType:   strings.TrimSpace(input.ContentType),
-			SchemaVersion: strings.TrimSpace(input.SchemaVersion),
-			Body:          []byte(input.Body),
+			ToAddress:            input.ToAddress,
+			FromAddress:          fromAddress,
+			Subject:              input.Subject,
+			ContentType:          strings.TrimSpace(input.ContentType),
+			SchemaVersion:        strings.TrimSpace(input.SchemaVersion),
+			ForwardedMessageID:   strings.TrimSpace(input.forwardedMessageID),
+			ForwardedFromAddress: strings.TrimSpace(input.forwardedFromAddress),
+			Body:                 []byte(input.Body),
+			Group:                input.group,
 		})
 	})
 	if err != nil {
@@ -262,18 +269,29 @@ func (s *Service) sendMailboxMessage(ctx context.Context, input mailboxSendInput
 		notifyError = notify.Err.Error()
 	}
 
-	return map[string]any{
+	out := map[string]any{
 		"status":                "sent",
 		"from_address":          fromAddress,
 		"to_address":            input.ToAddress,
 		"subject":               input.Subject,
-		"delivery_id":           sendResult.DeliveryID,
 		"notify_status":         notify.Status,
 		"notify_scheme":         notifyScheme,
 		"notify_error":          notifyError,
 		"workspace_lock_status": workspaceLockStatus,
 		"workspace_lock_dir":    nilIfEmpty(workspaceLockDir),
-	}, nil
+	}
+	if sendResult.Mode == mailbox.SendModeGroup {
+		out["mode"] = sendResult.Mode
+		out["message_id"] = sendResult.MessageID
+		out["group_id"] = sendResult.GroupID
+		out["group_address"] = sendResult.GroupAddress
+		out["eligible_count"] = sendResult.EligibleCount
+		out["message_created_at"] = sendResult.MessageCreatedAt
+		out["delivery_id"] = nil
+	} else {
+		out["delivery_id"] = sendResult.DeliveryID
+	}
+	return out, nil
 }
 
 func (s *Service) mailboxSend(ctx context.Context, _ *mcp.CallToolRequest, input mailboxSendInput) (*mcp.CallToolResult, map[string]any, error) {
@@ -284,77 +302,32 @@ func (s *Service) mailboxSend(ctx context.Context, _ *mcp.CallToolRequest, input
 	return s.mailboxMutationToolResult(ctx, out)
 }
 
-func forwardSubject(original, override string) string {
-	if trimmed := strings.TrimSpace(override); trimmed != "" {
-		return trimmed
-	}
-	base := strings.TrimSpace(original)
-	if base == "" {
-		return "Fwd"
-	}
-	if strings.HasPrefix(strings.ToLower(base), "fwd:") {
-		return base
-	}
-	return "Fwd: " + base
-}
-
 func (s *Service) mailboxForward(ctx context.Context, _ *mcp.CallToolRequest, input mailboxForwardInput) (*mcp.CallToolResult, map[string]any, error) {
-	hasMessageID := strings.TrimSpace(input.MessageID) != ""
-	hasDeliveryID := strings.TrimSpace(input.DeliveryID) != ""
-	if hasMessageID == hasDeliveryID {
-		return nil, nil, errors.New("mailbox_forward requires exactly one of message_id or delivery_id")
+	prepared, err := withMailboxService(ctx, s.mailboxServices, func(service mailboxService) (mailbox.PreparedForward, error) {
+		return mailbox.PrepareForward(ctx, service, "mailbox_forward", mailbox.ForwardParams{
+			MessageID:   input.MessageID,
+			DeliveryID:  input.DeliveryID,
+			ToAddress:   input.ToAddress,
+			FromAddress: input.FromAddress,
+			Subject:     input.Subject,
+			Group:       input.Group,
+		})
+	})
+	if err != nil {
+		return nil, nil, err
 	}
 
-	var sendInput mailboxSendInput
-	var sourceMessageID string
-	var sourceDeliveryID string
-
-	switch {
-	case hasMessageID:
-		messageID := strings.TrimSpace(input.MessageID)
-		messages, err := withMailboxService(ctx, s.mailboxServices, func(service mailboxService) ([]mailbox.ReadMessage, error) {
-			return service.ReadMessages(ctx, []string{messageID})
-		})
-		if err != nil {
-			return nil, nil, err
-		}
-		if len(messages) != 1 {
-			return nil, nil, fmt.Errorf("mailbox_forward source message not found: %s", messageID)
-		}
-		source := messages[0]
-		sendInput = mailboxSendInput{
-			ToAddress:            input.ToAddress,
-			FromAddress:          input.FromAddress,
-			Subject:              forwardSubject(source.Subject, input.Subject),
-			Body:                 source.Body,
-			ContentType:          source.ContentType,
-			SchemaVersion:        source.SchemaVersion,
-			DisableNotifyMessage: input.DisableNotifyMessage,
-		}
-		sourceMessageID = source.MessageID
-	case hasDeliveryID:
-		deliveryID := strings.TrimSpace(input.DeliveryID)
-		deliveries, err := withMailboxService(ctx, s.mailboxServices, func(service mailboxService) ([]mailbox.ReadDelivery, error) {
-			return service.ReadDeliveries(ctx, []string{deliveryID})
-		})
-		if err != nil {
-			return nil, nil, err
-		}
-		if len(deliveries) != 1 {
-			return nil, nil, fmt.Errorf("mailbox_forward source delivery not found: %s", deliveryID)
-		}
-		source := deliveries[0]
-		sendInput = mailboxSendInput{
-			ToAddress:            input.ToAddress,
-			FromAddress:          input.FromAddress,
-			Subject:              forwardSubject(source.Subject, input.Subject),
-			Body:                 source.Body,
-			ContentType:          source.ContentType,
-			SchemaVersion:        source.SchemaVersion,
-			DisableNotifyMessage: input.DisableNotifyMessage,
-		}
-		sourceMessageID = source.MessageID
-		sourceDeliveryID = source.DeliveryID
+	sendInput := mailboxSendInput{
+		ToAddress:            prepared.SendParams.ToAddress,
+		FromAddress:          prepared.SendParams.FromAddress,
+		Subject:              prepared.SendParams.Subject,
+		Body:                 string(prepared.SendParams.Body),
+		ContentType:          prepared.SendParams.ContentType,
+		SchemaVersion:        prepared.SendParams.SchemaVersion,
+		DisableNotifyMessage: input.DisableNotifyMessage,
+		forwardedMessageID:   prepared.SendParams.ForwardedMessageID,
+		forwardedFromAddress: prepared.SendParams.ForwardedFromAddress,
+		group:                prepared.SendParams.Group,
 	}
 
 	out, err := s.sendMailboxMessage(ctx, sendInput)
@@ -362,8 +335,8 @@ func (s *Service) mailboxForward(ctx context.Context, _ *mcp.CallToolRequest, in
 		return nil, nil, err
 	}
 	out["status"] = "forwarded"
-	out["source_message_id"] = sourceMessageID
-	out["source_delivery_id"] = nilIfEmpty(sourceDeliveryID)
+	out["source_message_id"] = prepared.SourceMessageID
+	out["source_delivery_id"] = nilIfEmpty(prepared.SourceDeliveryID)
 	return s.mailboxMutationToolResult(ctx, out)
 }
 

@@ -168,6 +168,328 @@ func TestCLISendRecvAckFlow(t *testing.T) {
 	}
 }
 
+func TestCLIForwardByMessageIDPreservesPayload(t *testing.T) {
+	stateDir := filepath.Join(t.TempDir(), "mailbox-state")
+
+	send := runCLI(t, "forward me\n", "--state-dir", stateDir,
+		"send",
+		"--to", "workflow/source",
+		"--from", "agent/sender",
+		"--subject", "Original subject",
+		"--content-type", "text/markdown",
+		"--schema-version", "v2",
+		"--body-file", "-",
+		"--json",
+		"--full",
+	)
+	if send.exitCode != 0 {
+		t.Fatalf("send exit code = %d, stderr = %q", send.exitCode, send.stderr)
+	}
+
+	var sent map[string]any
+	if err := json.Unmarshal([]byte(send.stdout), &sent); err != nil {
+		t.Fatalf("json.Unmarshal(send stdout) error = %v; stdout = %q", err, send.stdout)
+	}
+	sourceMessageID := sent["message_id"].(string)
+	if sourceMessageID == "" {
+		t.Fatalf("message_id = %v, want non-empty", sent["message_id"])
+	}
+
+	forward := runCLI(t, "", "--state-dir", stateDir,
+		"forward",
+		"--message", sourceMessageID,
+		"--to", "workflow/forwarded",
+		"--from", "agent/sender",
+		"--json",
+	)
+	if forward.exitCode != 0 {
+		t.Fatalf("forward exit code = %d, stderr = %q", forward.exitCode, forward.stderr)
+	}
+
+	var forwarded map[string]any
+	if err := json.Unmarshal([]byte(forward.stdout), &forwarded); err != nil {
+		t.Fatalf("json.Unmarshal(forward stdout) error = %v; stdout = %q", err, forward.stdout)
+	}
+	if forwarded["delivery_id"] == "" {
+		t.Fatalf("forward delivery_id = %v, want non-empty", forwarded["delivery_id"])
+	}
+	if forwarded["source_message_id"] != sourceMessageID {
+		t.Fatalf("forward source_message_id = %v, want %s", forwarded["source_message_id"], sourceMessageID)
+	}
+
+	recv := runCLI(t, "", "--state-dir", stateDir,
+		"recv",
+		"--for", "workflow/forwarded",
+		"--json",
+	)
+	if recv.exitCode != 0 {
+		t.Fatalf("recv forwarded exit code = %d, stderr = %q", recv.exitCode, recv.stderr)
+	}
+	message := decodeReceivedMessage(t, recv.stdout)
+	if message.Subject != "Fwd: Original subject" {
+		t.Fatalf("forwarded subject = %q, want Fwd: Original subject", message.Subject)
+	}
+	if message.ContentType != "text/markdown" {
+		t.Fatalf("forwarded content_type = %q, want text/markdown", message.ContentType)
+	}
+	if message.Body != "forward me\n" {
+		t.Fatalf("forwarded body = %q, want forward me\\n", message.Body)
+	}
+	if message.ForwardedFromAddress == nil || *message.ForwardedFromAddress != "agent/sender" {
+		t.Fatalf("recv forwarded_from_address = %v, want agent/sender", message.ForwardedFromAddress)
+	}
+	assertNoForwardedMessageID(t, recv.stdout)
+
+	read := runCLI(t, "", "--state-dir", stateDir,
+		"read",
+		"--delivery", message.DeliveryID,
+		"--json",
+	)
+	if read.exitCode != 0 {
+		t.Fatalf("read forwarded exit code = %d, stderr = %q", read.exitCode, read.stderr)
+	}
+
+	var stored readResult
+	if err := json.Unmarshal([]byte(read.stdout), &stored); err != nil {
+		t.Fatalf("json.Unmarshal(read forwarded stdout) error = %v; stdout = %q", err, read.stdout)
+	}
+	if len(stored.Items) != 1 {
+		t.Fatalf("len(read forwarded items) = %d, want 1", len(stored.Items))
+	}
+	if stored.Items[0]["schema_version"] != "v2" {
+		t.Fatalf("forwarded schema_version = %v, want v2", stored.Items[0]["schema_version"])
+	}
+	if stored.Items[0]["forwarded_from_address"] != "agent/sender" {
+		t.Fatalf("forwarded_from_address = %v, want agent/sender", stored.Items[0]["forwarded_from_address"])
+	}
+	assertMapOmitsForwardedMessageID(t, stored.Items[0])
+
+}
+
+func TestCLIForwardByDeliveryIDAllowsSubjectOverride(t *testing.T) {
+	stateDir := filepath.Join(t.TempDir(), "mailbox-state")
+
+	send := runCLI(t, "forward me too\n", "--state-dir", stateDir,
+		"send",
+		"--to", "workflow/source-delivery",
+		"--from", "agent/sender",
+		"--subject", "Original subject",
+		"--body-file", "-",
+		"--json",
+		"--full",
+	)
+	if send.exitCode != 0 {
+		t.Fatalf("send exit code = %d, stderr = %q", send.exitCode, send.stderr)
+	}
+
+	var sent map[string]any
+	if err := json.Unmarshal([]byte(send.stdout), &sent); err != nil {
+		t.Fatalf("json.Unmarshal(send stdout) error = %v; stdout = %q", err, send.stdout)
+	}
+	sourceDeliveryID := sent["delivery_id"].(string)
+	if sourceDeliveryID == "" {
+		t.Fatalf("delivery_id = %v, want non-empty", sent["delivery_id"])
+	}
+
+	forward := runCLI(t, "", "--state-dir", stateDir,
+		"forward",
+		"--delivery", sourceDeliveryID,
+		"--to", "workflow/forwarded-delivery",
+		"--from", "agent/sender",
+		"--subject", "Custom forward subject",
+		"--json",
+	)
+	if forward.exitCode != 0 {
+		t.Fatalf("forward exit code = %d, stderr = %q", forward.exitCode, forward.stderr)
+	}
+
+	var forwarded map[string]any
+	if err := json.Unmarshal([]byte(forward.stdout), &forwarded); err != nil {
+		t.Fatalf("json.Unmarshal(forward stdout) error = %v; stdout = %q", err, forward.stdout)
+	}
+	if forwarded["source_delivery_id"] != sourceDeliveryID {
+		t.Fatalf("forward source_delivery_id = %v, want %s", forwarded["source_delivery_id"], sourceDeliveryID)
+	}
+
+	recv := runCLI(t, "", "--state-dir", stateDir,
+		"recv",
+		"--for", "workflow/forwarded-delivery",
+		"--json",
+		"--full",
+	)
+	if recv.exitCode != 0 {
+		t.Fatalf("recv forwarded exit code = %d, stderr = %q", recv.exitCode, recv.stderr)
+	}
+	message := decodeFullReceivedMessage(t, recv.stdout)
+	if message.Subject != "Custom forward subject" {
+		t.Fatalf("forwarded subject = %q, want Custom forward subject", message.Subject)
+	}
+	if message.Body != "forward me too\n" {
+		t.Fatalf("forwarded body = %q, want forward me too\\n", message.Body)
+	}
+	if message.ForwardedFromAddress == nil || *message.ForwardedFromAddress != "agent/sender" {
+		t.Fatalf("recv forwarded_from_address = %v, want agent/sender", message.ForwardedFromAddress)
+	}
+	assertNoForwardedMessageID(t, recv.stdout)
+
+	ack := runCLI(t, "", "--state-dir", stateDir,
+		"ack",
+		"--delivery", message.DeliveryID,
+		"--lease-token", message.LeaseToken,
+	)
+	if ack.exitCode != 0 {
+		t.Fatalf("ack forwarded exit code = %d, stderr = %q", ack.exitCode, ack.stderr)
+	}
+
+	read := runCLI(t, "", "--state-dir", stateDir,
+		"read",
+		"--delivery", message.DeliveryID,
+		"--json",
+	)
+	if read.exitCode != 0 {
+		t.Fatalf("read forwarded exit code = %d, stderr = %q", read.exitCode, read.stderr)
+	}
+
+	var stored readResult
+	if err := json.Unmarshal([]byte(read.stdout), &stored); err != nil {
+		t.Fatalf("json.Unmarshal(read forwarded stdout) error = %v; stdout = %q", err, read.stdout)
+	}
+	if len(stored.Items) != 1 {
+		t.Fatalf("len(read forwarded items) = %d, want 1", len(stored.Items))
+	}
+	if stored.Items[0]["forwarded_from_address"] != "agent/sender" {
+		t.Fatalf("forwarded_from_address = %v, want agent/sender", stored.Items[0]["forwarded_from_address"])
+	}
+	assertMapOmitsForwardedMessageID(t, stored.Items[0])
+}
+
+func TestCLIForwardToGroupInboxPreservesGroupMode(t *testing.T) {
+	stateDir := filepath.Join(t.TempDir(), "mailbox-state")
+
+	groupCreate := runCLI(t, "", "--state-dir", stateDir,
+		"group",
+		"create",
+		"--group", "group/review",
+		"--json",
+	)
+	if groupCreate.exitCode != 0 {
+		t.Fatalf("group create exit code = %d, stderr = %q", groupCreate.exitCode, groupCreate.stderr)
+	}
+
+	addMember := runCLI(t, "", "--state-dir", stateDir,
+		"group",
+		"add-member",
+		"--group", "group/review",
+		"--person", "alice",
+		"--json",
+	)
+	if addMember.exitCode != 0 {
+		t.Fatalf("group add-member exit code = %d, stderr = %q", addMember.exitCode, addMember.stderr)
+	}
+
+	send := runCLI(t, "forward to group\n", "--state-dir", stateDir,
+		"send",
+		"--to", "workflow/source-group-forward",
+		"--from", "agent/sender",
+		"--subject", "Original subject",
+		"--body-file", "-",
+		"--json",
+		"--full",
+	)
+	if send.exitCode != 0 {
+		t.Fatalf("send exit code = %d, stderr = %q", send.exitCode, send.stderr)
+	}
+
+	var sent map[string]any
+	if err := json.Unmarshal([]byte(send.stdout), &sent); err != nil {
+		t.Fatalf("json.Unmarshal(send stdout) error = %v; stdout = %q", err, send.stdout)
+	}
+
+	forward := runCLI(t, "", "--state-dir", stateDir,
+		"forward",
+		"--message", sent["message_id"].(string),
+		"--to", "group/review",
+		"--group",
+		"--from", "agent/sender",
+		"--json",
+	)
+	if forward.exitCode != 0 {
+		t.Fatalf("forward exit code = %d, stderr = %q", forward.exitCode, forward.stderr)
+	}
+
+	var forwarded map[string]any
+	if err := json.Unmarshal([]byte(forward.stdout), &forwarded); err != nil {
+		t.Fatalf("json.Unmarshal(forward stdout) error = %v; stdout = %q", err, forward.stdout)
+	}
+	if forwarded["mode"] != mailbox.SendModeGroup {
+		t.Fatalf("forward mode = %v, want %q", forwarded["mode"], mailbox.SendModeGroup)
+	}
+	if forwarded["message_id"] == "" {
+		t.Fatalf("forward message_id = %v, want non-empty", forwarded["message_id"])
+	}
+
+	list := runCLI(t, "", "--state-dir", stateDir,
+		"list",
+		"--for", "group/review",
+		"--as", "alice",
+		"--json",
+	)
+	if list.exitCode != 0 {
+		t.Fatalf("group list exit code = %d, stderr = %q", list.exitCode, list.stderr)
+	}
+	var listed []map[string]any
+	if err := json.Unmarshal([]byte(list.stdout), &listed); err != nil {
+		t.Fatalf("json.Unmarshal(group list stdout) error = %v; stdout = %q", err, list.stdout)
+	}
+	if len(listed) != 1 {
+		t.Fatalf("len(group listed messages) = %d, want 1", len(listed))
+	}
+	if listed[0]["forwarded_from_address"] != "agent/sender" {
+		t.Fatalf("group list forwarded_from_address = %v, want agent/sender", listed[0]["forwarded_from_address"])
+	}
+	assertMapOmitsForwardedMessageID(t, listed[0])
+
+	wait := runCLI(t, "", "--state-dir", stateDir,
+		"wait",
+		"--for", "group/review",
+		"--as", "alice",
+		"--json",
+	)
+	if wait.exitCode != 0 {
+		t.Fatalf("group wait exit code = %d, stderr = %q", wait.exitCode, wait.stderr)
+	}
+	var waited map[string]any
+	if err := json.Unmarshal([]byte(wait.stdout), &waited); err != nil {
+		t.Fatalf("json.Unmarshal(group wait stdout) error = %v; stdout = %q", err, wait.stdout)
+	}
+	if waited["forwarded_from_address"] != "agent/sender" {
+		t.Fatalf("group wait forwarded_from_address = %v, want agent/sender", waited["forwarded_from_address"])
+	}
+	assertMapOmitsForwardedMessageID(t, waited)
+
+	recv := runCLI(t, "", "--state-dir", stateDir,
+		"recv",
+		"--for", "group/review",
+		"--as", "alice",
+		"--json",
+	)
+	if recv.exitCode != 0 {
+		t.Fatalf("group recv exit code = %d, stderr = %q", recv.exitCode, recv.stderr)
+	}
+
+	var message map[string]any
+	if err := json.Unmarshal([]byte(recv.stdout), &message); err != nil {
+		t.Fatalf("json.Unmarshal(group recv stdout) error = %v; stdout = %q", err, recv.stdout)
+	}
+	if message["body"] != "forward to group\n" {
+		t.Fatalf("group forwarded body = %v, want forward to group\\n", message["body"])
+	}
+	if message["forwarded_from_address"] != "agent/sender" {
+		t.Fatalf("group recv forwarded_from_address = %v, want agent/sender", message["forwarded_from_address"])
+	}
+	assertMapOmitsForwardedMessageID(t, message)
+}
+
 func TestCLIRenewExtendsLeaseAndPreservesToken(t *testing.T) {
 	stateDir := filepath.Join(t.TempDir(), "mailbox-state")
 
@@ -1000,6 +1322,57 @@ func TestCLIWaitReturnsOneJSONDeliveryWithoutClaiming(t *testing.T) {
 	}
 }
 
+func TestCLIWaitPreservesForwardedFromAddressInCompactJSON(t *testing.T) {
+	stateDir := filepath.Join(t.TempDir(), "mailbox-state")
+
+	send := runCLI(t, "forward me\n", "--state-dir", stateDir,
+		"send",
+		"--to", "workflow/source-wait",
+		"--from", "agent/sender",
+		"--subject", "Original subject",
+		"--body-file", "-",
+		"--json",
+		"--full",
+	)
+	if send.exitCode != 0 {
+		t.Fatalf("send exit code = %d, stderr = %q", send.exitCode, send.stderr)
+	}
+
+	var sent map[string]any
+	if err := json.Unmarshal([]byte(send.stdout), &sent); err != nil {
+		t.Fatalf("json.Unmarshal(send stdout) error = %v; stdout = %q", err, send.stdout)
+	}
+	sourceMessageID := sent["message_id"].(string)
+
+	forward := runCLI(t, "", "--state-dir", stateDir,
+		"forward",
+		"--message", sourceMessageID,
+		"--to", "workflow/wait-forwarded",
+		"--from", "agent/sender",
+	)
+	if forward.exitCode != 0 {
+		t.Fatalf("forward exit code = %d, stderr = %q", forward.exitCode, forward.stderr)
+	}
+
+	wait := runCLI(t, "", "--state-dir", stateDir,
+		"wait",
+		"--for", "workflow/wait-forwarded",
+		"--json",
+	)
+	if wait.exitCode != 0 {
+		t.Fatalf("wait exit code = %d, stderr = %q", wait.exitCode, wait.stderr)
+	}
+
+	var delivery map[string]any
+	if err := json.Unmarshal([]byte(wait.stdout), &delivery); err != nil {
+		t.Fatalf("json.Unmarshal(wait stdout) error = %v; stdout = %q", err, wait.stdout)
+	}
+	if delivery["forwarded_from_address"] != "agent/sender" {
+		t.Fatalf("wait forwarded_from_address = %v, want agent/sender", delivery["forwarded_from_address"])
+	}
+	assertMapOmitsForwardedMessageID(t, delivery)
+}
+
 func TestCLIWaitReturnsYAMLWithoutClaiming(t *testing.T) {
 	stateDir := filepath.Join(t.TempDir(), "mailbox-state")
 
@@ -1233,6 +1606,11 @@ func TestCLIHelpExitsZeroAndPrintsUsage(t *testing.T) {
 			wantContains: "  stale               List stale personal inboxes",
 		},
 		{
+			name:         "root help lists forward",
+			args:         []string{"--help"},
+			wantContains: "  forward             Forward a stored message or delivery",
+		},
+		{
 			name:         "send help",
 			args:         []string{"send", "--help"},
 			wantContains: "Usage:\n  agent-mailbox send --to ADDRESS --body-file PATH [options] [--json | --yaml] [--full]",
@@ -1406,12 +1784,13 @@ func runCLI(t *testing.T, stdin string, args ...string) cliResult {
 }
 
 type receivedMessageSummary struct {
-	DeliveryID       string `json:"delivery_id"`
-	RecipientAddress string `json:"recipient_address"`
-	LeaseToken       string `json:"lease_token"`
-	Subject          string `json:"subject"`
-	ContentType      string `json:"content_type"`
-	Body             string `json:"body"`
+	DeliveryID           string  `json:"delivery_id"`
+	RecipientAddress     string  `json:"recipient_address"`
+	LeaseToken           string  `json:"lease_token"`
+	ForwardedFromAddress *string `json:"forwarded_from_address,omitempty"`
+	Subject              string  `json:"subject"`
+	ContentType          string  `json:"content_type"`
+	Body                 string  `json:"body"`
 }
 
 type receiveResultSummary struct {
@@ -1442,6 +1821,24 @@ func decodeReceivedMessage(t *testing.T, raw string) receivedMessageSummary {
 		t.Fatalf("json.Unmarshal(recv stdout) error = %v; stdout = %q", err, raw)
 	}
 	return message
+}
+
+func assertNoForwardedMessageID(t *testing.T, raw string) {
+	t.Helper()
+
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(raw), &payload); err != nil {
+		t.Fatalf("json.Unmarshal(payload) error = %v; raw = %q", err, raw)
+	}
+	assertMapOmitsForwardedMessageID(t, payload)
+}
+
+func assertMapOmitsForwardedMessageID(t *testing.T, payload map[string]any) {
+	t.Helper()
+
+	if _, ok := payload["forwarded_message_id"]; ok {
+		t.Fatalf("payload unexpectedly exposes forwarded_message_id: %v", payload)
+	}
 }
 
 func decodeFullReceivedMessage(t *testing.T, raw string) mailbox.ReceivedMessage {

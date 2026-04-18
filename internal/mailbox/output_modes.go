@@ -13,6 +13,19 @@ func (a *App) writeSendOutput(format outputFormat, full bool, result SendResult)
 	return a.writeSendResultText(CompactSendResult(result))
 }
 
+func (a *App) writeForwardOutput(format outputFormat, full bool, result ForwardResult) error {
+	if format != outputFormatText {
+		if full {
+			return a.writeStructuredOutput(format, FullForwardResult(result))
+		}
+		return a.writeStructuredOutput(format, CompactForwardResult(result))
+	}
+	if full {
+		return a.writeForwardResultFullText(FullForwardResult(result))
+	}
+	return a.writeForwardResultText(CompactForwardResult(result))
+}
+
 func (a *App) writeReceiveOutput(format outputFormat, full bool, message ReceivedMessage) error {
 	if format != outputFormatText {
 		if full {

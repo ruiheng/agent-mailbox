@@ -38,22 +38,24 @@ type personalAvailabilityScope struct {
 }
 
 type personalDeliveryRecord struct {
-	DeliveryID          string
-	MessageID           string
-	RecipientAddress    string
-	RecipientEndpointID string
-	SenderEndpointID    sql.NullString
-	State               string
-	VisibleAt           string
-	AckedAt             sql.NullString
-	AttemptCount        int
-	MessageCreatedAt    string
-	Subject             string
-	ContentType         string
-	SchemaVersion       string
-	BodyBlobRef         string
-	BodySize            int64
-	BodySHA256          string
+	DeliveryID           string
+	MessageID            string
+	ForwardedMessageID   sql.NullString
+	ForwardedFromAddress sql.NullString
+	RecipientAddress     string
+	RecipientEndpointID  string
+	SenderEndpointID     sql.NullString
+	State                string
+	VisibleAt            string
+	AckedAt              sql.NullString
+	AttemptCount         int
+	MessageCreatedAt     string
+	Subject              string
+	ContentType          string
+	SchemaVersion        string
+	BodyBlobRef          string
+	BodySize             int64
+	BodySHA256           string
 }
 
 type groupAvailabilityScope struct {
@@ -68,19 +70,21 @@ type groupViewerState struct {
 }
 
 type groupMessageRecord struct {
-	MessageID        string
-	SenderEndpointID sql.NullString
-	MessageCreatedAt string
-	Subject          string
-	ContentType      string
-	SchemaVersion    string
-	BodyBlobRef      string
-	BodySize         int64
-	BodySHA256       string
-	FirstReadAt      sql.NullString
-	ViewerEligible   int
-	ReadCount        int
-	EligibleCount    int
+	MessageID            string
+	ForwardedMessageID   sql.NullString
+	ForwardedFromAddress sql.NullString
+	SenderEndpointID     sql.NullString
+	MessageCreatedAt     string
+	Subject              string
+	ContentType          string
+	SchemaVersion        string
+	BodyBlobRef          string
+	BodySize             int64
+	BodySHA256           string
+	FirstReadAt          sql.NullString
+	ViewerEligible       int
+	ReadCount            int
+	EligibleCount        int
 }
 
 type availabilityOwner struct {
@@ -150,10 +154,12 @@ func (o availabilityOwner) claimablePersonalDelivery(ctx context.Context, querie
 	var record personalDeliveryRecord
 	err := querier.QueryRowContext(ctx, fmt.Sprintf(`
 SELECT
-  d.delivery_id,
-  d.message_id,
-  d.recipient_endpoint_id,
-  m.sender_endpoint_id,
+	  d.delivery_id,
+	  d.message_id,
+	  m.forwarded_message_id,
+	  m.forwarded_from_address,
+	  d.recipient_endpoint_id,
+	  m.sender_endpoint_id,
   d.state,
   d.visible_at,
   d.attempt_count,
@@ -173,6 +179,8 @@ LIMIT 1
 `, placeholders, claimableDeliveryFilter), args...).Scan(
 		&record.DeliveryID,
 		&record.MessageID,
+		&record.ForwardedMessageID,
+		&record.ForwardedFromAddress,
 		&record.RecipientEndpointID,
 		&record.SenderEndpointID,
 		&record.State,
@@ -206,10 +214,12 @@ func (o availabilityOwner) listPersonalDeliveries(ctx context.Context, querier r
 
 	query := fmt.Sprintf(`
 SELECT
-  d.delivery_id,
-  d.message_id,
-  d.recipient_endpoint_id,
-  m.sender_endpoint_id,
+	  d.delivery_id,
+	  d.message_id,
+	  m.forwarded_message_id,
+	  m.forwarded_from_address,
+	  d.recipient_endpoint_id,
+	  m.sender_endpoint_id,
   d.state,
   d.visible_at,
   d.acked_at,
@@ -251,9 +261,13 @@ ORDER BY d.visible_at ASC, m.created_at ASC, d.delivery_id ASC
 		var delivery ListedDelivery
 		var ackedAt sql.NullString
 		var senderID sql.NullString
+		var forwardedMessageID sql.NullString
+		var forwardedFromAddress sql.NullString
 		if err := rows.Scan(
 			&delivery.DeliveryID,
 			&delivery.MessageID,
+			&forwardedMessageID,
+			&forwardedFromAddress,
 			&delivery.RecipientEndpointID,
 			&senderID,
 			&delivery.State,
@@ -272,6 +286,12 @@ ORDER BY d.visible_at ASC, m.created_at ASC, d.delivery_id ASC
 		delivery.RecipientAddress = scope.addressByEndpointID[delivery.RecipientEndpointID]
 		if senderID.Valid {
 			delivery.SenderEndpointID = &senderID.String
+		}
+		if forwardedMessageID.Valid {
+			delivery.ForwardedMessageID = &forwardedMessageID.String
+		}
+		if forwardedFromAddress.Valid {
+			delivery.ForwardedFromAddress = &forwardedFromAddress.String
 		}
 		if ackedAt.Valid {
 			delivery.AckedAt = &ackedAt.String
@@ -436,6 +456,8 @@ func (o availabilityOwner) listGroupMessages(ctx context.Context, querier rowsQu
 	query := `
 SELECT
   gm.message_id,
+  m.forwarded_message_id,
+  m.forwarded_from_address,
   m.sender_endpoint_id,
   gm.created_at,
   m.subject,
@@ -502,6 +524,8 @@ LIMIT ?
 		var record groupMessageRecord
 		if err := rows.Scan(
 			&record.MessageID,
+			&record.ForwardedMessageID,
+			&record.ForwardedFromAddress,
 			&record.SenderEndpointID,
 			&record.MessageCreatedAt,
 			&record.Subject,

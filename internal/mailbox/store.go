@@ -45,13 +45,15 @@ type EndpointRegistration struct {
 }
 
 type SendParams struct {
-	ToAddress     string
-	FromAddress   string
-	Subject       string
-	ContentType   string
-	SchemaVersion string
-	Body          []byte
-	Group         bool
+	ToAddress            string
+	FromAddress          string
+	Subject              string
+	ContentType          string
+	SchemaVersion        string
+	ForwardedMessageID   string
+	ForwardedFromAddress string
+	Body                 []byte
+	Group                bool
 }
 
 type SendResult struct {
@@ -86,69 +88,79 @@ type GroupListParams struct {
 }
 
 type ListedDelivery struct {
-	DeliveryID          string  `json:"delivery_id"`
-	MessageID           string  `json:"message_id"`
-	RecipientAddress    string  `json:"recipient_address"`
-	RecipientEndpointID string  `json:"recipient_endpoint_id"`
-	SenderEndpointID    *string `json:"sender_endpoint_id,omitempty"`
-	State               string  `json:"state"`
-	VisibleAt           string  `json:"visible_at"`
-	AckedAt             *string `json:"acked_at,omitempty"`
-	MessageCreatedAt    string  `json:"message_created_at"`
-	Subject             string  `json:"subject"`
-	ContentType         string  `json:"content_type"`
-	SchemaVersion       string  `json:"schema_version"`
-	BodyBlobRef         string  `json:"body_blob_ref"`
-	BodySize            int64   `json:"body_size"`
-	BodySHA256          string  `json:"body_sha256"`
+	DeliveryID           string  `json:"delivery_id"`
+	MessageID            string  `json:"message_id"`
+	ForwardedMessageID   *string `json:"-"`
+	ForwardedFromAddress *string `json:"forwarded_from_address,omitempty"`
+	RecipientAddress     string  `json:"recipient_address"`
+	RecipientEndpointID  string  `json:"recipient_endpoint_id"`
+	SenderEndpointID     *string `json:"sender_endpoint_id,omitempty"`
+	State                string  `json:"state"`
+	VisibleAt            string  `json:"visible_at"`
+	AckedAt              *string `json:"acked_at,omitempty"`
+	MessageCreatedAt     string  `json:"message_created_at"`
+	Subject              string  `json:"subject"`
+	ContentType          string  `json:"content_type"`
+	SchemaVersion        string  `json:"schema_version"`
+	BodyBlobRef          string  `json:"body_blob_ref"`
+	BodySize             int64   `json:"body_size"`
+	BodySHA256           string  `json:"body_sha256"`
 }
 
 type ReadDelivery struct {
-	DeliveryID          string  `json:"delivery_id"`
-	MessageID           string  `json:"message_id"`
-	RecipientAddress    string  `json:"recipient_address"`
-	RecipientEndpointID string  `json:"recipient_endpoint_id"`
-	SenderEndpointID    *string `json:"sender_endpoint_id,omitempty"`
-	State               string  `json:"state"`
-	VisibleAt           string  `json:"visible_at"`
-	AckedAt             *string `json:"acked_at,omitempty"`
-	MessageCreatedAt    string  `json:"message_created_at"`
-	Subject             string  `json:"subject"`
-	ContentType         string  `json:"content_type"`
-	SchemaVersion       string  `json:"schema_version"`
-	BodyBlobRef         string  `json:"body_blob_ref"`
-	BodySize            int64   `json:"body_size"`
-	BodySHA256          string  `json:"body_sha256"`
-	Body                string  `json:"body"`
+	DeliveryID           string  `json:"delivery_id"`
+	MessageID            string  `json:"message_id"`
+	ForwardedMessageID   *string `json:"-"`
+	ForwardedFromAddress *string `json:"forwarded_from_address,omitempty"`
+	RecipientAddress     string  `json:"recipient_address"`
+	RecipientEndpointID  string  `json:"recipient_endpoint_id"`
+	SenderEndpointID     *string `json:"sender_endpoint_id,omitempty"`
+	SenderAddress        *string `json:"-"`
+	State                string  `json:"state"`
+	VisibleAt            string  `json:"visible_at"`
+	AckedAt              *string `json:"acked_at,omitempty"`
+	MessageCreatedAt     string  `json:"message_created_at"`
+	Subject              string  `json:"subject"`
+	ContentType          string  `json:"content_type"`
+	SchemaVersion        string  `json:"schema_version"`
+	BodyBlobRef          string  `json:"body_blob_ref"`
+	BodySize             int64   `json:"body_size"`
+	BodySHA256           string  `json:"body_sha256"`
+	Body                 string  `json:"body"`
 }
 
 type ReadMessage struct {
-	MessageID        string  `json:"message_id"`
-	SenderEndpointID *string `json:"sender_endpoint_id,omitempty"`
-	MessageCreatedAt string  `json:"message_created_at"`
-	Subject          string  `json:"subject"`
-	ContentType      string  `json:"content_type"`
-	SchemaVersion    string  `json:"schema_version"`
-	BodyBlobRef      string  `json:"body_blob_ref"`
-	BodySize         int64   `json:"body_size"`
-	BodySHA256       string  `json:"body_sha256"`
-	Body             string  `json:"body"`
+	MessageID            string  `json:"message_id"`
+	ForwardedMessageID   *string `json:"-"`
+	ForwardedFromAddress *string `json:"forwarded_from_address,omitempty"`
+	SenderEndpointID     *string `json:"sender_endpoint_id,omitempty"`
+	SenderAddress        *string `json:"-"`
+	MessageCreatedAt     string  `json:"message_created_at"`
+	Subject              string  `json:"subject"`
+	ContentType          string  `json:"content_type"`
+	SchemaVersion        string  `json:"schema_version"`
+	BodyBlobRef          string  `json:"body_blob_ref"`
+	BodySize             int64   `json:"body_size"`
+	BodySHA256           string  `json:"body_sha256"`
+	Body                 string  `json:"body"`
 }
 
 type GroupListedMessage struct {
-	MessageID        string  `json:"message_id"`
-	GroupID          string  `json:"group_id"`
-	GroupAddress     string  `json:"group_address"`
-	Person           string  `json:"person"`
-	SenderEndpointID *string `json:"sender_endpoint_id,omitempty"`
-	MessageCreatedAt string  `json:"message_created_at"`
-	Subject          string  `json:"subject"`
-	ContentType      string  `json:"content_type"`
-	SchemaVersion    string  `json:"schema_version"`
-	Read             bool    `json:"read"`
-	FirstReadAt      *string `json:"first_read_at,omitempty"`
-	ReadCount        int     `json:"read_count"`
-	EligibleCount    int     `json:"eligible_count"`
+	MessageID            string  `json:"message_id"`
+	ForwardedMessageID   *string `json:"-"`
+	ForwardedFromAddress *string `json:"forwarded_from_address,omitempty"`
+	GroupID              string  `json:"group_id"`
+	GroupAddress         string  `json:"group_address"`
+	Person               string  `json:"person"`
+	SenderEndpointID     *string `json:"sender_endpoint_id,omitempty"`
+	MessageCreatedAt     string  `json:"message_created_at"`
+	Subject              string  `json:"subject"`
+	ContentType          string  `json:"content_type"`
+	SchemaVersion        string  `json:"schema_version"`
+	Read                 bool    `json:"read"`
+	FirstReadAt          *string `json:"first_read_at,omitempty"`
+	ReadCount            int     `json:"read_count"`
+	EligibleCount        int     `json:"eligible_count"`
 }
 
 func NewStore(readDB, writeDB, claimDB *sql.DB, blobDir string) *Store {
@@ -266,6 +278,14 @@ func (s *Store) Send(ctx context.Context, params SendParams) (SendResult, error)
 	if senderEndpointID != nil {
 		senderEndpointValue = *senderEndpointID
 	}
+	var forwardedMessageIDValue any
+	if forwardedMessageID := strings.TrimSpace(params.ForwardedMessageID); forwardedMessageID != "" {
+		forwardedMessageIDValue = forwardedMessageID
+	}
+	var forwardedFromAddressValue any
+	if forwardedFromAddress := strings.TrimSpace(params.ForwardedFromAddress); forwardedFromAddress != "" {
+		forwardedFromAddressValue = forwardedFromAddress
+	}
 
 	if _, err := tx.ExecContext(ctx, `
 INSERT INTO messages (
@@ -279,10 +299,12 @@ INSERT INTO messages (
   body_blob_ref,
   body_size,
   body_sha256,
+  forwarded_message_id,
+  forwarded_from_address,
   reply_to_message_id,
   metadata_json
-) VALUES (?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, NULL, '{}')
-	`, messageID, timestamp, senderEndpointValue, params.Subject, contentType, schemaVersion, blobRef, bodySize, bodySHA256); err != nil {
+) VALUES (?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, NULL, '{}')
+		`, messageID, timestamp, senderEndpointValue, params.Subject, contentType, schemaVersion, blobRef, bodySize, bodySHA256, forwardedMessageIDValue, forwardedFromAddressValue); err != nil {
 		return SendResult{}, fmt.Errorf("insert message: %w", err)
 	}
 
@@ -504,14 +526,26 @@ func (s *Store) ReadDelivery(ctx context.Context, deliveryID string) (ReadDelive
 
 	var result ReadDelivery
 	var senderID sql.NullString
+	var senderAddress sql.NullString
+	var forwardedMessageID sql.NullString
+	var forwardedFromAddress sql.NullString
 	var ackedAt sql.NullString
 	err := s.readDB.QueryRowContext(ctx, `
 SELECT
   d.delivery_id,
   d.message_id,
+  m.forwarded_message_id,
+  m.forwarded_from_address,
   ea.address,
   d.recipient_endpoint_id,
   m.sender_endpoint_id,
+  (
+    SELECT sender_ea.address
+    FROM endpoint_addresses AS sender_ea
+    WHERE sender_ea.endpoint_id = m.sender_endpoint_id
+    ORDER BY sender_ea.created_at ASC, sender_ea.address ASC
+    LIMIT 1
+  ) AS sender_address,
   d.state,
   d.visible_at,
   d.acked_at,
@@ -529,9 +563,12 @@ WHERE d.delivery_id = ?
 `, deliveryID).Scan(
 		&result.DeliveryID,
 		&result.MessageID,
+		&forwardedMessageID,
+		&forwardedFromAddress,
 		&result.RecipientAddress,
 		&result.RecipientEndpointID,
 		&senderID,
+		&senderAddress,
 		&result.State,
 		&result.VisibleAt,
 		&ackedAt,
@@ -551,6 +588,15 @@ WHERE d.delivery_id = ?
 	}
 	if senderID.Valid {
 		result.SenderEndpointID = &senderID.String
+	}
+	if senderAddress.Valid {
+		result.SenderAddress = &senderAddress.String
+	}
+	if forwardedMessageID.Valid {
+		result.ForwardedMessageID = &forwardedMessageID.String
+	}
+	if forwardedFromAddress.Valid {
+		result.ForwardedFromAddress = &forwardedFromAddress.String
 	}
 	if ackedAt.Valid {
 		result.AckedAt = &ackedAt.String
@@ -573,10 +619,22 @@ func (s *Store) ReadMessage(ctx context.Context, messageID string) (ReadMessage,
 
 	var result ReadMessage
 	var senderID sql.NullString
+	var senderAddress sql.NullString
+	var forwardedMessageID sql.NullString
+	var forwardedFromAddress sql.NullString
 	err := s.readDB.QueryRowContext(ctx, `
 SELECT
   m.message_id,
+  m.forwarded_message_id,
+  m.forwarded_from_address,
   m.sender_endpoint_id,
+  (
+    SELECT sender_ea.address
+    FROM endpoint_addresses AS sender_ea
+    WHERE sender_ea.endpoint_id = m.sender_endpoint_id
+    ORDER BY sender_ea.created_at ASC, sender_ea.address ASC
+    LIMIT 1
+  ) AS sender_address,
   m.created_at,
   m.subject,
   m.content_type,
@@ -588,7 +646,10 @@ FROM messages AS m
 WHERE m.message_id = ?
 `, messageID).Scan(
 		&result.MessageID,
+		&forwardedMessageID,
+		&forwardedFromAddress,
 		&senderID,
+		&senderAddress,
 		&result.MessageCreatedAt,
 		&result.Subject,
 		&result.ContentType,
@@ -605,6 +666,15 @@ WHERE m.message_id = ?
 	}
 	if senderID.Valid {
 		result.SenderEndpointID = &senderID.String
+	}
+	if senderAddress.Valid {
+		result.SenderAddress = &senderAddress.String
+	}
+	if forwardedMessageID.Valid {
+		result.ForwardedMessageID = &forwardedMessageID.String
+	}
+	if forwardedFromAddress.Valid {
+		result.ForwardedFromAddress = &forwardedFromAddress.String
 	}
 
 	body, err := s.readBlob(result.BodyBlobRef, result.BodySize, result.BodySHA256)
