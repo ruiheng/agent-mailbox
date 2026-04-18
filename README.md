@@ -129,9 +129,7 @@ The Go MCP entrypoint keeps the existing tool names:
 
 `mailbox_send` always uses the fixed wakeup text for supported remote notify
 paths. Set `disable_notify_message = true` to skip only that immediate send-time
-notify. Delegate dispatch bodies with `Action: execute_delegate_task` also
-acquire `.agent-artifacts/active-task.lock` under the bound `default_workdir`,
-and they must include `- Integration branch:` before send.
+notify.
 
 `mailbox_forward` forwards exactly one stored message selected by `message_id`
 or `delivery_id` to a new recipient through the normal `mailbox_send` path. It

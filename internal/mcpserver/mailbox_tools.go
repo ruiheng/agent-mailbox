@@ -99,7 +99,7 @@ func (s *Service) registerMailboxTools(server *mcp.Server) {
 	}, s.mailboxStatus)
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "mailbox_send",
-		Description: "Send one mailbox message and automatically push-notify a non-local target when the address scheme supports it. Set disable_notify_message=true to skip notify for that send. Delegate dispatch (`Action: execute_delegate_task`) also enforces a single active task lock for the current workspace.",
+		Description: "Send one mailbox message and automatically push-notify a non-local target when the address scheme supports it. Set disable_notify_message=true to skip notify for that send.",
 	}, s.mailboxSend)
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "mailbox_forward",
@@ -167,78 +167,6 @@ func (s *Service) sendMailboxMessage(ctx context.Context, input mailboxSendInput
 		return nil, err
 	}
 
-	envelope := parseWorkflowEnvelope(input.Body)
-	workspaceLockStatus := "not_applicable"
-	workspaceLockDir := ""
-	if envelope.Action == "execute_delegate_task" {
-		if envelope.TaskID == "" {
-			return nil, errors.New("delegate dispatch requires a Task header before mailbox_send")
-		}
-		lockWorkdir := ""
-		toParsed, err := parseAddress(input.ToAddress)
-		if err == nil && toParsed.Scheme == "agent-deck" {
-			probe, probeErr := s.sessions.probeSessionShowBestEffort(ctx, toParsed.ID)
-			if probeErr != nil {
-				return nil, probeErr
-			}
-			switch probe.Status {
-			case sessionShowProbeNotFound:
-				return nil, fmt.Errorf("delegate dispatch target agent-deck session not found: %s", toParsed.ID)
-			case sessionShowProbeFound:
-				targetPath := strings.TrimSpace(probe.Data.Path)
-				if targetPath == "" {
-					return nil, fmt.Errorf("delegate dispatch target session path unavailable: %s", toParsed.ID)
-				}
-				canonicalTargetPath, err := canonicalizeExistingPath(targetPath)
-				if err != nil {
-					return nil, fmt.Errorf("canonicalize delegate target session path %q: %w", targetPath, err)
-				}
-				lockWorkdir = canonicalTargetPath
-			case sessionShowProbeUnknown:
-				// execute_delegate_task promises a single active task per target
-				// workspace. If the target workspace cannot be resolved, sending the
-				// message anyway would bypass the lock guarantee, so we fail closed.
-				if !s.sessions.isLocalAddress(ctx, input.ToAddress) {
-					return nil, fmt.Errorf("delegate dispatch requires a resolvable target workspace so active-task.lock can be enforced: %s", toParsed.ID)
-				}
-			}
-		}
-		if lockWorkdir == "" {
-			bound, err := s.sessions.boundState(ctx)
-			if err != nil {
-				return nil, err
-			}
-			lockWorkdir = strings.TrimSpace(bound.DefaultWorkdir)
-			if lockWorkdir == "" {
-				return nil, errors.New("delegate dispatch requires a resolvable workspace so active-task.lock can be enforced")
-			}
-		}
-		fromParsed, err := parseAddress(fromAddress)
-		if err != nil {
-			return nil, err
-		}
-		plannerSessionID := ""
-		if fromParsed.Scheme == "agent-deck" {
-			plannerSessionID = fromParsed.ID
-		}
-		lockMetadata := parseDelegateLockMetadata(input.Body, delegateLockMetadata{
-			TaskID:           envelope.TaskID,
-			Action:           envelope.Action,
-			PlannerSessionID: plannerSessionID,
-			FromAddress:      fromAddress,
-			ToAddress:        input.ToAddress,
-			Subject:          input.Subject,
-		})
-		if err := validateDelegateLockMetadata(lockMetadata); err != nil {
-			return nil, err
-		}
-		workspaceLockDir, err = acquireActiveTaskLock(lockWorkdir, lockMetadata)
-		if err != nil {
-			return nil, err
-		}
-		workspaceLockStatus = "acquired"
-	}
-
 	sendResult, err := withMailboxService(ctx, s.mailboxServices, func(service mailboxService) (mailbox.SendResult, error) {
 		return service.Send(ctx, mailbox.SendParams{
 			ToAddress:            input.ToAddress,
@@ -253,9 +181,6 @@ func (s *Service) sendMailboxMessage(ctx context.Context, input mailboxSendInput
 		})
 	})
 	if err != nil {
-		if workspaceLockStatus == "acquired" {
-			_ = releaseActiveTaskLock(workspaceLockDir)
-		}
 		return nil, err
 	}
 
@@ -270,15 +195,13 @@ func (s *Service) sendMailboxMessage(ctx context.Context, input mailboxSendInput
 	}
 
 	out := map[string]any{
-		"status":                "sent",
-		"from_address":          fromAddress,
-		"to_address":            input.ToAddress,
-		"subject":               input.Subject,
-		"notify_status":         notify.Status,
-		"notify_scheme":         notifyScheme,
-		"notify_error":          notifyError,
-		"workspace_lock_status": workspaceLockStatus,
-		"workspace_lock_dir":    nilIfEmpty(workspaceLockDir),
+		"status":        "sent",
+		"from_address":  fromAddress,
+		"to_address":    input.ToAddress,
+		"subject":       input.Subject,
+		"notify_status": notify.Status,
+		"notify_scheme": notifyScheme,
+		"notify_error":  notifyError,
 	}
 	if sendResult.Mode == mailbox.SendModeGroup {
 		out["mode"] = sendResult.Mode
