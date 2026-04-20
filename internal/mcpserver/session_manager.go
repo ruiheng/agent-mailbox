@@ -435,16 +435,9 @@ func (m *sessionManager) ensureSession(ctx context.Context, input agentDeckEnsur
 		}
 		parentGroup := strings.TrimSpace(parentData.Group)
 		childGroupName := firstNonEmpty(input.ChildGroupName, input.EnsureTitle, input.SessionRef, input.SessionID)
-		if parentGroup == "" {
-			targetGroupPath = sanitizeGroupSegment(childGroupName)
-			if targetGroupPath == "" {
-				return nil, errors.New("child group name resolves to an empty segment")
-			}
-		} else {
-			targetGroupPath, err = buildChildGroupPath(parentGroup, childGroupName)
-			if err != nil {
-				return nil, err
-			}
+		targetGroupPath, err = deriveGroupPathFromParentGroup(parentGroup, childGroupName)
+		if err != nil {
+			return nil, err
 		}
 	}
 	if data == nil {
@@ -468,16 +461,16 @@ func (m *sessionManager) ensureSession(ctx context.Context, input agentDeckEnsur
 			if parentData == nil {
 				return nil, fmt.Errorf("parent_session_id not found: %s", input.ParentSessionID)
 			}
-			if targetGroupPath == "" && strings.TrimSpace(parentData.ParentSessionID) != "" {
-				parentGroup := strings.TrimSpace(parentData.Group)
-				if parentGroup != "" {
+			if strings.TrimSpace(parentData.ParentSessionID) != "" {
+				if targetGroupPath == "" {
+					parentGroup := strings.TrimSpace(parentData.Group)
 					childGroupName := firstNonEmpty(parentData.Title, input.ParentSessionID, parentData.ID)
-					targetGroupPath, err = buildChildGroupPath(parentGroup, childGroupName)
+					targetGroupPath, err = deriveGroupPathFromParentGroup(parentGroup, childGroupName)
 					if err != nil {
 						return nil, err
 					}
-					derivedGroupFromChildParent = true
 				}
+				derivedGroupFromChildParent = true
 			}
 			if derivedGroupFromChildParent {
 				launchParentSessionID = ""

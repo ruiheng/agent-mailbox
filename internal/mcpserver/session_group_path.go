@@ -26,6 +26,17 @@ func buildChildGroupPath(parentGroup, childGroupName string) (string, error) {
 	return parent + "/" + child, nil
 }
 
+func deriveGroupPathFromParentGroup(parentGroup, childGroupName string) (string, error) {
+	if strings.TrimSpace(parentGroup) == "" {
+		groupPath := sanitizeGroupSegment(childGroupName)
+		if groupPath == "" {
+			return "", fmt.Errorf("child group name resolves to an empty segment")
+		}
+		return groupPath, nil
+	}
+	return buildChildGroupPath(parentGroup, childGroupName)
+}
+
 type ensureSessionLaunchInput struct {
 	EnsureTitle     string
 	EnsureCmd       string

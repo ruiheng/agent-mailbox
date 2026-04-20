@@ -1416,13 +1416,17 @@ func TestAgentDeckEnsureSessionDerivesChildGroupFromChildParentSession(t *testin
 	}
 }
 
-func TestAgentDeckEnsureSessionFallsBackToParentOnlyWhenChildParentHasNoGroup(t *testing.T) {
+func TestAgentDeckEnsureSessionDerivesTopLevelGroupFromChildParentWithoutGroup(t *testing.T) {
 	commandRunner := &fakeRunner{t: t, handler: func(args []string, input string) (RunResult, error) {
 		switch {
 		case strings.Join(args, "\x00") == strings.Join([]string{"agent-deck", "session", "show", "child-planner", "--json"}, "\x00"):
 			return RunResult{ExitCode: 0, Stdout: `{"id":"child-planner","title":"planner-child","status":"waiting","path":"/tmp","group":"","parent_session_id":"root-planner"}`}, nil
-		case strings.Join(args, "\x00") == strings.Join([]string{"agent-deck", "launch", "--json", "--title", "coder-ref", "--cmd", "codex --model gpt-5.4 --ask-for-approval on-request", "--parent", "child-planner", "/tmp"}, "\x00"):
-			return RunResult{ExitCode: 0, Stdout: `{"id":"session-2","title":"coder-ref","status":"waiting","path":"/tmp"}`}, nil
+		case strings.Join(args, "\x00") == strings.Join([]string{"agent-deck", "group", "list", "--json"}, "\x00"):
+			return RunResult{ExitCode: 0, Stdout: `{"groups":[]}`}, nil
+		case strings.Join(args, "\x00") == strings.Join([]string{"agent-deck", "group", "create", "planner-child"}, "\x00"):
+			return RunResult{ExitCode: 0}, nil
+		case strings.Join(args, "\x00") == strings.Join([]string{"agent-deck", "launch", "--json", "--title", "coder-ref", "--cmd", "codex --model gpt-5.4 --ask-for-approval on-request", "--group", "planner-child", "--no-parent", "/tmp"}, "\x00"):
+			return RunResult{ExitCode: 0, Stdout: `{"id":"session-2","title":"coder-ref","status":"waiting","group":"planner-child","path":"/tmp"}`}, nil
 		default:
 			t.Fatalf("unexpected command args: %v", args)
 			return RunResult{}, nil
@@ -1444,20 +1448,20 @@ func TestAgentDeckEnsureSessionFallsBackToParentOnlyWhenChildParentHasNoGroup(t 
 	if got := output["created_target"]; got != true {
 		t.Fatalf("created_target = %v, want true", got)
 	}
-	if got := output["group"]; got != nil {
-		t.Fatalf("group = %v, want nil", got)
+	if got := output["group"]; got != "planner-child" {
+		t.Fatalf("group = %v, want planner-child", got)
 	}
 }
 
-func TestAgentDeckEnsureSessionPreservesExplicitParentForExplicitGroupPath(t *testing.T) {
+func TestAgentDeckEnsureSessionDropsChildParentLinkForExplicitGroupPath(t *testing.T) {
 	commandRunner := &fakeRunner{t: t, handler: func(args []string, input string) (RunResult, error) {
 		switch {
 		case strings.Join(args, "\x00") == strings.Join([]string{"agent-deck", "session", "show", "child-planner", "--json"}, "\x00"):
 			return RunResult{ExitCode: 0, Stdout: `{"id":"child-planner","title":"planner-child","status":"waiting","path":"/tmp","group":"planning/active","parent_session_id":"root-planner"}`}, nil
 		case strings.Join(args, "\x00") == strings.Join([]string{"agent-deck", "group", "list", "--json"}, "\x00"):
 			return RunResult{ExitCode: 0, Stdout: `{"groups":[{"path":"planning"},{"path":"planning/active"},{"path":"reviews"},{"path":"reviews/ready"}]}`}, nil
-		case strings.Join(args, "\x00") == strings.Join([]string{"agent-deck", "launch", "--json", "--title", "coder-ref", "--cmd", "codex --model gpt-5.4 --ask-for-approval on-request", "--group", "reviews/ready", "--parent", "child-planner", "/tmp"}, "\x00"):
-			return RunResult{ExitCode: 0, Stdout: `{"id":"session-2","title":"coder-ref","status":"waiting","group":"reviews/ready","path":"/tmp","parent_session_id":"child-planner"}`}, nil
+		case strings.Join(args, "\x00") == strings.Join([]string{"agent-deck", "launch", "--json", "--title", "coder-ref", "--cmd", "codex --model gpt-5.4 --ask-for-approval on-request", "--group", "reviews/ready", "--no-parent", "/tmp"}, "\x00"):
+			return RunResult{ExitCode: 0, Stdout: `{"id":"session-2","title":"coder-ref","status":"waiting","group":"reviews/ready","path":"/tmp"}`}, nil
 		default:
 			t.Fatalf("unexpected command args: %v", args)
 			return RunResult{}, nil
