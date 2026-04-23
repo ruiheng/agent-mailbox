@@ -2,6 +2,10 @@ package mcpserver
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
+	"slices"
+	"strings"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
@@ -10,9 +14,7 @@ type agentDeckResolveSessionInput struct {
 	Session string `json:"session"`
 }
 
-type agentDeckEnsureSessionInput struct {
-	SessionID            string `json:"session_id,omitempty"`
-	SessionRef           string `json:"session_ref,omitempty"`
+type agentDeckCreateSessionInput struct {
 	EnsureTitle          string `json:"ensure_title,omitempty"`
 	EnsureCmd            string `json:"ensure_cmd,omitempty"`
 	ParentSessionID      string `json:"parent_session_id,omitempty"`
@@ -24,15 +26,26 @@ type agentDeckEnsureSessionInput struct {
 	ListenerMessage      string `json:"listener_message,omitempty"`
 }
 
+type agentDeckRequireSessionInput struct {
+	SessionID       string `json:"session_id,omitempty"`
+	SessionRef      string `json:"session_ref,omitempty"`
+	Workdir         string `json:"workdir"`
+	ListenerMessage string `json:"listener_message,omitempty"`
+}
+
 func (s *Service) registerSessionTools(server *mcp.Server) {
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "agent_deck_resolve_session",
 		Description: "Resolve an agent-deck session ref or id and return its canonical session id, status, and mailbox addresses.",
 	}, s.agentDeckResolveSession)
 	mcp.AddTool(server, &mcp.Tool{
-		Name:        "agent_deck_ensure_session",
-		Description: "Resolve or create an agent-deck session in an explicit workdir. If the target exists but is not active, start it; if it is already active, return notify_needed=true. Existing sessions must already match the requested workdir. Can also ensure explicit group placement without relying on direct parent-child session wiring. Leave listener_message empty in normal workflow; use it only for rare bootstrap/control cases before mailbox pickup.",
-	}, s.agentDeckEnsureSession)
+		Name:        "agent_deck_create_session",
+		Description: "Create a new agent-deck session in an explicit workdir. The target must not already exist. Accepts create-only lifecycle parameters such as ensure_title, ensure_cmd, parent_session_id, group_path, group_parent_session_id, child_group_name, and no_parent_link.",
+	}, s.agentDeckCreateSession)
+	mcp.AddTool(server, &mcp.Tool{
+		Name:        "agent_deck_require_session",
+		Description: "Require an existing agent-deck session in an explicit workdir. Resolves session_id or session_ref, verifies the existing session already matches the requested workdir, and starts it if it is inactive. Does not create sessions or accept create-only lifecycle parameters.",
+	}, s.agentDeckRequireSession)
 }
 
 func (s *Service) agentDeckResolveSession(ctx context.Context, _ *mcp.CallToolRequest, input agentDeckResolveSessionInput) (*mcp.CallToolResult, map[string]any, error) {
@@ -51,10 +64,51 @@ func (s *Service) agentDeckResolveSession(ctx context.Context, _ *mcp.CallToolRe
 	return s.toolResult(ctx, out)
 }
 
-func (s *Service) agentDeckEnsureSession(ctx context.Context, _ *mcp.CallToolRequest, input agentDeckEnsureSessionInput) (*mcp.CallToolResult, map[string]any, error) {
-	out, err := s.sessions.ensureSession(ctx, input)
+func (s *Service) agentDeckCreateSession(ctx context.Context, _ *mcp.CallToolRequest, input agentDeckCreateSessionInput) (*mcp.CallToolResult, map[string]any, error) {
+	out, err := s.sessions.createSession(ctx, input)
 	if err != nil {
 		return nil, nil, err
 	}
 	return s.toolResult(ctx, out)
+}
+
+func (s *Service) agentDeckRequireSession(ctx context.Context, req *mcp.CallToolRequest, input agentDeckRequireSessionInput) (*mcp.CallToolResult, map[string]any, error) {
+	if err := validateRequireSessionArgs(req); err != nil {
+		return nil, nil, err
+	}
+	out, err := s.sessions.requireSession(ctx, input)
+	if err != nil {
+		return nil, nil, err
+	}
+	return s.toolResult(ctx, out)
+}
+
+func validateRequireSessionArgs(req *mcp.CallToolRequest) error {
+	if req == nil || len(req.Params.Arguments) == 0 {
+		return nil
+	}
+
+	var rawArgs map[string]json.RawMessage
+	if err := json.Unmarshal(req.Params.Arguments, &rawArgs); err != nil {
+		return fmt.Errorf("invalid tool arguments: %w", err)
+	}
+
+	allowedFields := map[string]bool{
+		"session_id":       true,
+		"session_ref":      true,
+		"workdir":          true,
+		"listener_message": true,
+	}
+	unexpected := make([]string, 0, len(rawArgs))
+	for field := range rawArgs {
+		if !allowedFields[field] {
+			unexpected = append(unexpected, field)
+		}
+	}
+	if len(unexpected) == 0 {
+		return nil
+	}
+	slices.Sort(unexpected)
+
+	return fmt.Errorf("agent_deck_require_session does not accept extra fields: %s", strings.Join(unexpected, ", "))
 }

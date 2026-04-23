@@ -125,7 +125,8 @@ The Go MCP entrypoint keeps the existing tool names:
 - `mailbox_defer`
 - `mailbox_fail`
 - `agent_deck_resolve_session`
-- `agent_deck_ensure_session`
+- `agent_deck_create_session`
+- `agent_deck_require_session`
 
 `mailbox_send` always uses the fixed wakeup text for supported remote notify
 paths. Set `disable_notify_message = true` to skip only that immediate send-time
@@ -135,11 +136,15 @@ notify.
 or `delivery_id` to a new recipient through the normal `mailbox_send` path. It
 reuses the original body, `content_type`, and `schema_version`.
 
-`agent_deck_ensure_session` also supports explicit group placement through
-`group_path` or `group_parent_session_id` plus `child_group_name`, and can
-launch detached sessions with `no_parent_link = true`. It now requires an
-explicit `workdir` and verifies existing sessions already belong to that
-workspace.
+`agent_deck_create_session` is for lifecycle allocation only. It creates a new
+session, errors if the target already exists, supports explicit group placement
+through `group_path` or `group_parent_session_id` plus `child_group_name`, and
+can launch detached sessions with `no_parent_link = true`.
+
+`agent_deck_require_session` is the send-time guard. It never creates a
+session; it resolves `session_id` or `session_ref`, verifies the existing
+session already belongs to the explicit `workdir`, and starts it if needed.
+`mailbox_send` remains transport-only and does not create downstream sessions.
 
 ## Quick Start
 

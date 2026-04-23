@@ -35,7 +35,7 @@ const (
 	defaultNotifyMessage         = "Use the check-agent-mail skill now. Receive the pending message and execute its requested action."
 	defaultMailHint              = "mailbox_recv"
 	mailboxRecoveryHint          = "If you forget the mailbox details or next action after ack, use `mailbox_read` on the latest `acked` delivery for this session. For older mail, use `mailbox_list` with `state: acked` and then `mailbox_read` by delivery id."
-	serverInstructions           = "Bootstrap this MCP process once per agent-managed session. If it is not bound yet, run `agent-deck session current --json`, take the current session id, and call `mailbox_bind`. Use `agent-deck/<id>` as the default sender. `agent_deck_ensure_session` requires an explicit workdir argument and will verify existing sessions already match it. `mailbox_wait` is not recommended for normal workflow; prefer `mailbox_recv`. Later reuse the bound addresses until MCP state is lost."
+	serverInstructions           = "Bootstrap this MCP process once per agent-managed session. If it is not bound yet, run `agent-deck session current --json`, take the current session id, and call `mailbox_bind`. Use `agent-deck/<id>` as the default sender. Use `agent_deck_create_session` only to allocate a new lifecycle-owned session. Before sending mail to an existing target, call `agent_deck_require_session` with an explicit workdir to verify it still belongs to that workspace and start it if needed. `mailbox_send` is transport-only and does not create sessions. `mailbox_wait` is not recommended for normal workflow; prefer `mailbox_recv`. Later reuse the bound addresses until MCP state is lost."
 	unsetValue                   = "<unset>"
 )
 

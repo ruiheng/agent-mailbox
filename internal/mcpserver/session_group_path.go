@@ -37,7 +37,7 @@ func deriveGroupPathFromParentGroup(parentGroup, childGroupName string) (string,
 	return buildChildGroupPath(parentGroup, childGroupName)
 }
 
-type ensureSessionLaunchInput struct {
+type createSessionLaunchInput struct {
 	EnsureTitle     string
 	EnsureCmd       string
 	Workdir         string
@@ -47,7 +47,7 @@ type ensureSessionLaunchInput struct {
 	GroupPath       string
 }
 
-func buildEnsureSessionLaunchArgs(input ensureSessionLaunchInput) []string {
+func buildCreateSessionLaunchArgs(input createSessionLaunchInput) []string {
 	launchArgs := []string{
 		"agent-deck", "launch", "--json",
 		"--title", input.EnsureTitle,

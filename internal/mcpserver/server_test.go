@@ -41,13 +41,44 @@ type fakeMailboxService struct {
 	failFunc                func(context.Context, string, string, string) (mailbox.DeliveryTransitionResult, error)
 }
 
-func TestAgentDeckEnsureSessionSchemaRequiresWorkdir(t *testing.T) {
-	schema, err := jsonschema.For[agentDeckEnsureSessionInput](nil)
+func TestAgentDeckCreateSessionSchemaRequiresWorkdir(t *testing.T) {
+	schema, err := jsonschema.For[agentDeckCreateSessionInput](nil)
 	if err != nil {
 		t.Fatalf("jsonschema.For() error = %v", err)
 	}
 	if !slices.Contains(schema.Required, "workdir") {
 		t.Fatalf("required fields = %v, want workdir", schema.Required)
+	}
+}
+
+func TestAgentDeckRequireSessionSchemaRequiresWorkdir(t *testing.T) {
+	schema, err := jsonschema.For[agentDeckRequireSessionInput](nil)
+	if err != nil {
+		t.Fatalf("jsonschema.For() error = %v", err)
+	}
+	if !slices.Contains(schema.Required, "workdir") {
+		t.Fatalf("required fields = %v, want workdir", schema.Required)
+	}
+}
+
+func TestAgentDeckRequireSessionSchemaOmitsCreateOnlyFields(t *testing.T) {
+	schema, err := jsonschema.For[agentDeckRequireSessionInput](nil)
+	if err != nil {
+		t.Fatalf("jsonschema.For() error = %v", err)
+	}
+
+	for _, field := range []string{
+		"ensure_title",
+		"ensure_cmd",
+		"parent_session_id",
+		"group_path",
+		"group_parent_session_id",
+		"child_group_name",
+		"no_parent_link",
+	} {
+		if _, ok := schema.Properties[field]; ok {
+			t.Fatalf("schema.Properties[%q] unexpectedly present", field)
+		}
 	}
 }
 
@@ -1291,7 +1322,46 @@ func TestProcessWakeSchedulerFallsThroughWhenMailboxOverviewUpdateFails(t *testi
 	}
 }
 
-func TestAgentDeckEnsureSessionStartsInactiveTarget(t *testing.T) {
+func TestAgentDeckRequireSessionReturnsActiveTargetWithoutStart(t *testing.T) {
+	commandRunner := &fakeRunner{t: t, handler: func(args []string, input string) (RunResult, error) {
+		switch {
+		case strings.Join(args, "\x00") == strings.Join([]string{"agent-deck", "session", "show", "coder-ref", "--json"}, "\x00"):
+			return RunResult{ExitCode: 0, Stdout: `{"id":"session-1","title":"coder-123","status":"waiting","path":"/tmp"}`}, nil
+		default:
+			t.Fatalf("unexpected command args: %v", args)
+			return RunResult{}, nil
+		}
+	}}
+
+	service := newService(Options{
+		MailboxServiceFactory: fakeMailboxServiceFactory{service: &fakeMailboxService{t: t}},
+		CommandRunner:         commandRunner,
+	})
+	service.state.autoBindAttempted = true
+
+	output := callTool(t, service.Server(), "agent_deck_require_session", map[string]any{
+		"session_ref": "coder-ref",
+		"workdir":     "/tmp",
+	})
+
+	if got := output["status"]; got != "ready" {
+		t.Fatalf("status = %v, want ready", got)
+	}
+	if got := output["created_target"]; got != false {
+		t.Fatalf("created_target = %v, want false", got)
+	}
+	if got := output["started_session"]; got != false {
+		t.Fatalf("started_session = %v, want false", got)
+	}
+	if got := output["notify_needed"]; got != true {
+		t.Fatalf("notify_needed = %v, want true", got)
+	}
+	if got := output["listener_status"]; got != "not_needed_existing_session" {
+		t.Fatalf("listener_status = %v, want not_needed_existing_session", got)
+	}
+}
+
+func TestAgentDeckRequireSessionStartsInactiveTarget(t *testing.T) {
 	commandRunner := &fakeRunner{t: t, handler: func(args []string, input string) (RunResult, error) {
 		switch {
 		case strings.Join(args, "\x00") == strings.Join([]string{"agent-deck", "session", "show", "coder-ref", "--json"}, "\x00"):
@@ -1312,7 +1382,7 @@ func TestAgentDeckEnsureSessionStartsInactiveTarget(t *testing.T) {
 	})
 	service.state.autoBindAttempted = true
 
-	output := callTool(t, service.Server(), "agent_deck_ensure_session", map[string]any{
+	output := callTool(t, service.Server(), "agent_deck_require_session", map[string]any{
 		"session_ref": "coder-ref",
 		"workdir":     "/tmp",
 	})
@@ -1334,7 +1404,7 @@ func TestAgentDeckEnsureSessionStartsInactiveTarget(t *testing.T) {
 	}
 }
 
-func TestAgentDeckEnsureSessionStartsInactiveTargetWithExplicitListenerMessage(t *testing.T) {
+func TestAgentDeckRequireSessionStartsInactiveTargetWithExplicitListenerMessage(t *testing.T) {
 	commandRunner := &fakeRunner{t: t, handler: func(args []string, input string) (RunResult, error) {
 		switch {
 		case strings.Join(args, "\x00") == strings.Join([]string{"agent-deck", "session", "show", "coder-ref", "--json"}, "\x00"):
@@ -1355,7 +1425,7 @@ func TestAgentDeckEnsureSessionStartsInactiveTargetWithExplicitListenerMessage(t
 	})
 	service.state.autoBindAttempted = true
 
-	output := callTool(t, service.Server(), "agent_deck_ensure_session", map[string]any{
+	output := callTool(t, service.Server(), "agent_deck_require_session", map[string]any{
 		"session_ref":      "coder-ref",
 		"listener_message": "listen now",
 		"workdir":          "/tmp",
@@ -1366,7 +1436,7 @@ func TestAgentDeckEnsureSessionStartsInactiveTargetWithExplicitListenerMessage(t
 	}
 }
 
-func TestAgentDeckEnsureSessionRequiresExplicitWorkdir(t *testing.T) {
+func TestAgentDeckRequireSessionRequiresExplicitWorkdir(t *testing.T) {
 	service := newService(Options{
 		MailboxServiceFactory: fakeMailboxServiceFactory{service: &fakeMailboxService{t: t}},
 		CommandRunner: &fakeRunner{t: t, handler: func(args []string, input string) (RunResult, error) {
@@ -1376,15 +1446,41 @@ func TestAgentDeckEnsureSessionRequiresExplicitWorkdir(t *testing.T) {
 	})
 	service.state.autoBindAttempted = true
 
-	err := callToolExpectError(t, service.Server(), "agent_deck_ensure_session", map[string]any{
+	err := callToolExpectError(t, service.Server(), "agent_deck_require_session", map[string]any{
 		"session_ref": "coder-ref",
 	})
 	if err == nil || !strings.Contains(err.Error(), "workdir") {
-		t.Fatalf("agent_deck_ensure_session error = %v, want workdir validation", err)
+		t.Fatalf("agent_deck_require_session error = %v, want workdir validation", err)
 	}
 }
 
-func TestAgentDeckEnsureSessionRejectsExistingSessionWithoutPath(t *testing.T) {
+func TestAgentDeckRequireSessionRejectsMissingTarget(t *testing.T) {
+	commandRunner := &fakeRunner{t: t, handler: func(args []string, input string) (RunResult, error) {
+		switch {
+		case strings.Join(args, "\x00") == strings.Join([]string{"agent-deck", "session", "show", "coder-ref", "--json"}, "\x00"):
+			return RunResult{ExitCode: 1, Stderr: "not found"}, nil
+		default:
+			t.Fatalf("unexpected command args: %v", args)
+			return RunResult{}, nil
+		}
+	}}
+
+	service := newService(Options{
+		MailboxServiceFactory: fakeMailboxServiceFactory{service: &fakeMailboxService{t: t}},
+		CommandRunner:         commandRunner,
+	})
+	service.state.autoBindAttempted = true
+
+	err := callToolExpectError(t, service.Server(), "agent_deck_require_session", map[string]any{
+		"session_ref": "coder-ref",
+		"workdir":     "/tmp",
+	})
+	if err == nil || !strings.Contains(err.Error(), "target session not found") {
+		t.Fatalf("agent_deck_require_session error = %v, want missing target validation", err)
+	}
+}
+
+func TestAgentDeckRequireSessionRejectsExistingSessionWithoutPath(t *testing.T) {
 	commandRunner := &fakeRunner{t: t, handler: func(args []string, input string) (RunResult, error) {
 		switch {
 		case strings.Join(args, "\x00") == strings.Join([]string{"agent-deck", "session", "show", "coder-ref", "--json"}, "\x00"):
@@ -1401,18 +1497,41 @@ func TestAgentDeckEnsureSessionRejectsExistingSessionWithoutPath(t *testing.T) {
 	})
 	service.state.autoBindAttempted = true
 
-	err := callToolExpectError(t, service.Server(), "agent_deck_ensure_session", map[string]any{
+	err := callToolExpectError(t, service.Server(), "agent_deck_require_session", map[string]any{
 		"session_ref": "coder-ref",
 		"workdir":     "/tmp",
 	})
 	if err == nil || !strings.Contains(err.Error(), "existing session path unavailable") {
-		t.Fatalf("agent_deck_ensure_session error = %v, want existing session path unavailable", err)
+		t.Fatalf("agent_deck_require_session error = %v, want existing session path unavailable", err)
 	}
 }
 
-func TestAgentDeckEnsureSessionCreatesTargetWithoutDefaultListenerMessage(t *testing.T) {
+func TestAgentDeckRequireSessionRejectsExtraFields(t *testing.T) {
+	service := newService(Options{
+		MailboxServiceFactory: fakeMailboxServiceFactory{service: &fakeMailboxService{t: t}},
+		CommandRunner: &fakeRunner{t: t, handler: func(args []string, input string) (RunResult, error) {
+			t.Fatalf("unexpected command args: %v", args)
+			return RunResult{}, nil
+		}},
+	})
+	service.state.autoBindAttempted = true
+
+	err := callToolExpectError(t, service.Server(), "agent_deck_require_session", map[string]any{
+		"session_ref":       "coder-ref",
+		"workdir":           "/tmp",
+		"ensure_title":      "coder-ref",
+		"parent_session_id": "planner-1",
+	})
+	if err == nil || !strings.Contains(err.Error(), "unexpected additional properties") {
+		t.Fatalf("agent_deck_require_session error = %v, want schema-level extra field validation", err)
+	}
+}
+
+func TestAgentDeckCreateSessionCreatesTargetWithoutDefaultListenerMessage(t *testing.T) {
 	commandRunner := &fakeRunner{t: t, handler: func(args []string, input string) (RunResult, error) {
 		switch {
+		case strings.Join(args, "\x00") == strings.Join([]string{"agent-deck", "session", "show", "coder-ref", "--json"}, "\x00"):
+			return RunResult{ExitCode: 1, Stderr: "not found"}, nil
 		case strings.Join(args, "\x00") == strings.Join([]string{"agent-deck", "session", "show", "planner-1", "--json"}, "\x00"):
 			return RunResult{ExitCode: 0, Stdout: `{"id":"planner-1","title":"planner","status":"waiting","path":"/tmp"}`}, nil
 		case strings.Join(args, "\x00") == strings.Join([]string{"agent-deck", "launch", "--json", "--title", "coder-ref", "--cmd", "codex --model gpt-5.4 --ask-for-approval on-request", "--parent", "planner-1", "/tmp"}, "\x00"):
@@ -1429,7 +1548,7 @@ func TestAgentDeckEnsureSessionCreatesTargetWithoutDefaultListenerMessage(t *tes
 	})
 	service.state.autoBindAttempted = true
 
-	output := callTool(t, service.Server(), "agent_deck_ensure_session", map[string]any{
+	output := callTool(t, service.Server(), "agent_deck_create_session", map[string]any{
 		"ensure_title":      "coder-ref",
 		"ensure_cmd":        "codex --model gpt-5.4 --ask-for-approval on-request",
 		"parent_session_id": "planner-1",
@@ -1439,14 +1558,75 @@ func TestAgentDeckEnsureSessionCreatesTargetWithoutDefaultListenerMessage(t *tes
 	if got := output["created_target"]; got != true {
 		t.Fatalf("created_target = %v, want true", got)
 	}
+	if got := output["status"]; got != "created" {
+		t.Fatalf("status = %v, want created", got)
+	}
 	if got := output["listener_status"]; got != "started_waiting" {
 		t.Fatalf("listener_status = %v, want started_waiting", got)
 	}
 }
 
-func TestAgentDeckEnsureSessionAllowsDetachedCreateWithoutGroup(t *testing.T) {
+func TestAgentDeckCreateSessionRejectsExistingTarget(t *testing.T) {
 	commandRunner := &fakeRunner{t: t, handler: func(args []string, input string) (RunResult, error) {
 		switch {
+		case strings.Join(args, "\x00") == strings.Join([]string{"agent-deck", "session", "show", "coder-ref", "--json"}, "\x00"):
+			return RunResult{ExitCode: 0, Stdout: `{"id":"session-9","title":"coder-ref","status":"waiting","path":"/tmp"}`}, nil
+		default:
+			t.Fatalf("unexpected command args: %v", args)
+			return RunResult{}, nil
+		}
+	}}
+
+	service := newService(Options{
+		MailboxServiceFactory: fakeMailboxServiceFactory{service: &fakeMailboxService{t: t}},
+		CommandRunner:         commandRunner,
+	})
+	service.state.autoBindAttempted = true
+
+	err := callToolExpectError(t, service.Server(), "agent_deck_create_session", map[string]any{
+		"ensure_title":   "coder-ref",
+		"ensure_cmd":     "codex --model gpt-5.4 --ask-for-approval on-request",
+		"no_parent_link": true,
+		"workdir":        "/tmp",
+	})
+	if err == nil || !strings.Contains(err.Error(), "target session already exists") {
+		t.Fatalf("agent_deck_create_session error = %v, want existing target validation", err)
+	}
+}
+
+func TestAgentDeckCreateSessionRejectsExistingTargetWithMismatchedWorkdir(t *testing.T) {
+	commandRunner := &fakeRunner{t: t, handler: func(args []string, input string) (RunResult, error) {
+		switch {
+		case strings.Join(args, "\x00") == strings.Join([]string{"agent-deck", "session", "show", "coder-ref", "--json"}, "\x00"):
+			return RunResult{ExitCode: 0, Stdout: `{"id":"session-9","title":"coder-ref","status":"waiting","path":"/var/tmp"}`}, nil
+		default:
+			t.Fatalf("unexpected command args: %v", args)
+			return RunResult{}, nil
+		}
+	}}
+
+	service := newService(Options{
+		MailboxServiceFactory: fakeMailboxServiceFactory{service: &fakeMailboxService{t: t}},
+		CommandRunner:         commandRunner,
+	})
+	service.state.autoBindAttempted = true
+
+	err := callToolExpectError(t, service.Server(), "agent_deck_create_session", map[string]any{
+		"ensure_title":   "coder-ref",
+		"ensure_cmd":     "codex --model gpt-5.4 --ask-for-approval on-request",
+		"no_parent_link": true,
+		"workdir":        "/tmp",
+	})
+	if err == nil || !strings.Contains(err.Error(), "session path mismatch") {
+		t.Fatalf("agent_deck_create_session error = %v, want workdir mismatch validation", err)
+	}
+}
+
+func TestAgentDeckCreateSessionAllowsDetachedCreateWithoutGroup(t *testing.T) {
+	commandRunner := &fakeRunner{t: t, handler: func(args []string, input string) (RunResult, error) {
+		switch {
+		case strings.Join(args, "\x00") == strings.Join([]string{"agent-deck", "session", "show", "coder-ref", "--json"}, "\x00"):
+			return RunResult{ExitCode: 1, Stderr: "not found"}, nil
 		case strings.Join(args, "\x00") == strings.Join([]string{"agent-deck", "launch", "--json", "--title", "coder-ref", "--cmd", "codex --model gpt-5.4 --ask-for-approval on-request", "--no-parent", "/tmp"}, "\x00"):
 			return RunResult{ExitCode: 0, Stdout: `{"id":"session-2","title":"coder-ref","status":"waiting","path":"/tmp"}`}, nil
 		default:
@@ -1461,7 +1641,7 @@ func TestAgentDeckEnsureSessionAllowsDetachedCreateWithoutGroup(t *testing.T) {
 	})
 	service.state.autoBindAttempted = true
 
-	output := callTool(t, service.Server(), "agent_deck_ensure_session", map[string]any{
+	output := callTool(t, service.Server(), "agent_deck_create_session", map[string]any{
 		"ensure_title":   "coder-ref",
 		"ensure_cmd":     "codex --model gpt-5.4 --ask-for-approval on-request",
 		"no_parent_link": true,
@@ -1478,9 +1658,11 @@ func TestAgentDeckEnsureSessionAllowsDetachedCreateWithoutGroup(t *testing.T) {
 	}
 }
 
-func TestAgentDeckEnsureSessionDerivesChildGroupFromChildParentSession(t *testing.T) {
+func TestAgentDeckCreateSessionDerivesChildGroupFromChildParentSession(t *testing.T) {
 	commandRunner := &fakeRunner{t: t, handler: func(args []string, input string) (RunResult, error) {
 		switch {
+		case strings.Join(args, "\x00") == strings.Join([]string{"agent-deck", "session", "show", "coder-ref", "--json"}, "\x00"):
+			return RunResult{ExitCode: 1, Stderr: "not found"}, nil
 		case strings.Join(args, "\x00") == strings.Join([]string{"agent-deck", "session", "show", "child-planner", "--json"}, "\x00"):
 			return RunResult{ExitCode: 0, Stdout: `{"id":"child-planner","title":"planner-child","status":"waiting","path":"/tmp","group":"planning/active","parent_session_id":"root-planner"}`}, nil
 		case strings.Join(args, "\x00") == strings.Join([]string{"agent-deck", "group", "list", "--json"}, "\x00"):
@@ -1501,7 +1683,7 @@ func TestAgentDeckEnsureSessionDerivesChildGroupFromChildParentSession(t *testin
 	})
 	service.state.autoBindAttempted = true
 
-	output := callTool(t, service.Server(), "agent_deck_ensure_session", map[string]any{
+	output := callTool(t, service.Server(), "agent_deck_create_session", map[string]any{
 		"ensure_title":      "coder-ref",
 		"ensure_cmd":        "codex --model gpt-5.4 --ask-for-approval on-request",
 		"parent_session_id": "child-planner",
@@ -1515,9 +1697,11 @@ func TestAgentDeckEnsureSessionDerivesChildGroupFromChildParentSession(t *testin
 	}
 }
 
-func TestAgentDeckEnsureSessionDerivesTopLevelGroupFromChildParentWithoutGroup(t *testing.T) {
+func TestAgentDeckCreateSessionDerivesTopLevelGroupFromChildParentWithoutGroup(t *testing.T) {
 	commandRunner := &fakeRunner{t: t, handler: func(args []string, input string) (RunResult, error) {
 		switch {
+		case strings.Join(args, "\x00") == strings.Join([]string{"agent-deck", "session", "show", "coder-ref", "--json"}, "\x00"):
+			return RunResult{ExitCode: 1, Stderr: "not found"}, nil
 		case strings.Join(args, "\x00") == strings.Join([]string{"agent-deck", "session", "show", "child-planner", "--json"}, "\x00"):
 			return RunResult{ExitCode: 0, Stdout: `{"id":"child-planner","title":"planner-child","status":"waiting","path":"/tmp","group":"","parent_session_id":"root-planner"}`}, nil
 		case strings.Join(args, "\x00") == strings.Join([]string{"agent-deck", "group", "list", "--json"}, "\x00"):
@@ -1538,7 +1722,7 @@ func TestAgentDeckEnsureSessionDerivesTopLevelGroupFromChildParentWithoutGroup(t
 	})
 	service.state.autoBindAttempted = true
 
-	output := callTool(t, service.Server(), "agent_deck_ensure_session", map[string]any{
+	output := callTool(t, service.Server(), "agent_deck_create_session", map[string]any{
 		"ensure_title":      "coder-ref",
 		"ensure_cmd":        "codex --model gpt-5.4 --ask-for-approval on-request",
 		"parent_session_id": "child-planner",
@@ -1552,9 +1736,11 @@ func TestAgentDeckEnsureSessionDerivesTopLevelGroupFromChildParentWithoutGroup(t
 	}
 }
 
-func TestAgentDeckEnsureSessionDropsChildParentLinkForExplicitGroupPath(t *testing.T) {
+func TestAgentDeckCreateSessionDropsChildParentLinkForExplicitGroupPath(t *testing.T) {
 	commandRunner := &fakeRunner{t: t, handler: func(args []string, input string) (RunResult, error) {
 		switch {
+		case strings.Join(args, "\x00") == strings.Join([]string{"agent-deck", "session", "show", "coder-ref", "--json"}, "\x00"):
+			return RunResult{ExitCode: 1, Stderr: "not found"}, nil
 		case strings.Join(args, "\x00") == strings.Join([]string{"agent-deck", "session", "show", "child-planner", "--json"}, "\x00"):
 			return RunResult{ExitCode: 0, Stdout: `{"id":"child-planner","title":"planner-child","status":"waiting","path":"/tmp","group":"planning/active","parent_session_id":"root-planner"}`}, nil
 		case strings.Join(args, "\x00") == strings.Join([]string{"agent-deck", "group", "list", "--json"}, "\x00"):
@@ -1573,7 +1759,7 @@ func TestAgentDeckEnsureSessionDropsChildParentLinkForExplicitGroupPath(t *testi
 	})
 	service.state.autoBindAttempted = true
 
-	output := callTool(t, service.Server(), "agent_deck_ensure_session", map[string]any{
+	output := callTool(t, service.Server(), "agent_deck_create_session", map[string]any{
 		"ensure_title":      "coder-ref",
 		"ensure_cmd":        "codex --model gpt-5.4 --ask-for-approval on-request",
 		"parent_session_id": "child-planner",
@@ -1588,7 +1774,44 @@ func TestAgentDeckEnsureSessionDropsChildParentLinkForExplicitGroupPath(t *testi
 	}
 }
 
-func TestAgentDeckEnsureSessionDoesNotCreateGroupWhenCreateValidationFails(t *testing.T) {
+func TestAgentDeckCreateSessionDerivesGroupFromGroupParentSession(t *testing.T) {
+	commandRunner := &fakeRunner{t: t, handler: func(args []string, input string) (RunResult, error) {
+		switch {
+		case strings.Join(args, "\x00") == strings.Join([]string{"agent-deck", "session", "show", "coder-ref", "--json"}, "\x00"):
+			return RunResult{ExitCode: 1, Stderr: "not found"}, nil
+		case strings.Join(args, "\x00") == strings.Join([]string{"agent-deck", "session", "show", "planner-1", "--json"}, "\x00"):
+			return RunResult{ExitCode: 0, Stdout: `{"id":"planner-1","title":"planner","status":"waiting","group":"planning","path":"/tmp"}`}, nil
+		case strings.Join(args, "\x00") == strings.Join([]string{"agent-deck", "group", "list", "--json"}, "\x00"):
+			return RunResult{ExitCode: 0, Stdout: `{"groups":[{"path":"planning"}]}`}, nil
+		case strings.Join(args, "\x00") == strings.Join([]string{"agent-deck", "group", "create", "coder-review", "--parent", "planning"}, "\x00"):
+			return RunResult{ExitCode: 0}, nil
+		case strings.Join(args, "\x00") == strings.Join([]string{"agent-deck", "launch", "--json", "--title", "coder-ref", "--cmd", "codex --model gpt-5.4 --ask-for-approval on-request", "--group", "planning/coder-review", "/tmp"}, "\x00"):
+			return RunResult{ExitCode: 0, Stdout: `{"id":"session-2","title":"coder-ref","status":"waiting","group":"planning/coder-review","path":"/tmp"}`}, nil
+		default:
+			t.Fatalf("unexpected command args: %v", args)
+			return RunResult{}, nil
+		}
+	}}
+
+	service := newService(Options{
+		MailboxServiceFactory: fakeMailboxServiceFactory{service: &fakeMailboxService{t: t}},
+		CommandRunner:         commandRunner,
+	})
+	service.state.autoBindAttempted = true
+
+	output := callTool(t, service.Server(), "agent_deck_create_session", map[string]any{
+		"ensure_title":            "coder-ref",
+		"ensure_cmd":              "codex --model gpt-5.4 --ask-for-approval on-request",
+		"group_parent_session_id": "planner-1",
+		"child_group_name":        "Coder Review",
+		"workdir":                 "/tmp",
+	})
+	if got := output["group"]; got != "planning/coder-review" {
+		t.Fatalf("group = %v, want planning/coder-review", got)
+	}
+}
+
+func TestAgentDeckCreateSessionDoesNotCreateGroupWhenCreateValidationFails(t *testing.T) {
 	commandRunner := &fakeRunner{t: t, handler: func(args []string, input string) (RunResult, error) {
 		t.Fatalf("unexpected command args: %v", args)
 		return RunResult{}, nil
@@ -1600,108 +1823,17 @@ func TestAgentDeckEnsureSessionDoesNotCreateGroupWhenCreateValidationFails(t *te
 	})
 	service.state.autoBindAttempted = true
 
-	err := callToolExpectError(t, service.Server(), "agent_deck_ensure_session", map[string]any{
+	err := callToolExpectError(t, service.Server(), "agent_deck_create_session", map[string]any{
 		"ensure_title": "coder-ref",
 		"group_path":   "reviews/new-group",
 		"workdir":      "/tmp",
 	})
 	if err == nil || !strings.Contains(err.Error(), "ensure_cmd is required") {
-		t.Fatalf("agent_deck_ensure_session error = %v, want ensure_cmd is required", err)
+		t.Fatalf("agent_deck_create_session error = %v, want ensure_cmd is required", err)
 	}
 }
 
-func TestAgentDeckEnsureSessionMovesExistingSessionIntoDerivedChildGroup(t *testing.T) {
-	commandRunner := &fakeRunner{t: t, handler: func(args []string, input string) (RunResult, error) {
-		switch {
-		case strings.Join(args, "\x00") == strings.Join([]string{"agent-deck", "session", "show", "coder-ref", "--json"}, "\x00"):
-			return RunResult{ExitCode: 0, Stdout: `{"id":"session-1","title":"coder-123","status":"stopped","group":"planning/active","path":"/tmp"}`}, nil
-		case strings.Join(args, "\x00") == strings.Join([]string{"agent-deck", "session", "show", "planner-1", "--json"}, "\x00"):
-			return RunResult{ExitCode: 0, Stdout: `{"id":"planner-1","title":"planner","status":"waiting","group":"planning"}`}, nil
-		case strings.Join(args, "\x00") == strings.Join([]string{"agent-deck", "group", "list", "--json"}, "\x00"):
-			return RunResult{ExitCode: 0, Stdout: `{"groups":[{"path":"planning"},{"path":"planning/active"}]}`}, nil
-		case strings.Join(args, "\x00") == strings.Join([]string{"agent-deck", "group", "create", "coder-review", "--parent", "planning"}, "\x00"):
-			return RunResult{ExitCode: 0}, nil
-		case strings.Join(args, "\x00") == strings.Join([]string{"agent-deck", "group", "move", "session-1", "planning/coder-review"}, "\x00"):
-			return RunResult{ExitCode: 0}, nil
-		case strings.Join(args, "\x00") == strings.Join([]string{"agent-deck", "session", "show", "session-1", "--json"}, "\x00"):
-			return RunResult{ExitCode: 0, Stdout: `{"id":"session-1","title":"coder-123","status":"stopped","group":"planning/coder-review","path":"/tmp"}`}, nil
-		case strings.Join(args, "\x00") == strings.Join([]string{"agent-deck", "session", "start", "--json", "session-1"}, "\x00"):
-			return RunResult{ExitCode: 0}, nil
-		default:
-			t.Fatalf("unexpected command args: %v", args)
-			return RunResult{}, nil
-		}
-	}}
-
-	service := newService(Options{
-		MailboxServiceFactory: fakeMailboxServiceFactory{service: &fakeMailboxService{t: t}},
-		CommandRunner:         commandRunner,
-	})
-	service.state.autoBindAttempted = true
-
-	output := callTool(t, service.Server(), "agent_deck_ensure_session", map[string]any{
-		"session_ref":             "coder-ref",
-		"group_parent_session_id": "planner-1",
-		"child_group_name":        "Coder Review",
-		"workdir":                 "/tmp",
-	})
-
-	if got := output["group"]; got != "planning/coder-review" {
-		t.Fatalf("group = %v, want planning/coder-review", got)
-	}
-	if got := output["path"]; got != "/tmp" {
-		t.Fatalf("path = %v, want /tmp", got)
-	}
-	if got := output["listener_status"]; got != "started" {
-		t.Fatalf("listener_status = %v, want started", got)
-	}
-}
-
-func TestAgentDeckEnsureSessionDerivesTopLevelGroupFromRootParent(t *testing.T) {
-	commandRunner := &fakeRunner{t: t, handler: func(args []string, input string) (RunResult, error) {
-		switch {
-		case strings.Join(args, "\x00") == strings.Join([]string{"agent-deck", "session", "show", "coder-ref", "--json"}, "\x00"):
-			return RunResult{ExitCode: 0, Stdout: `{"id":"session-1","title":"coder-123","status":"stopped","group":"","path":"/tmp"}`}, nil
-		case strings.Join(args, "\x00") == strings.Join([]string{"agent-deck", "session", "show", "planner-1", "--json"}, "\x00"):
-			return RunResult{ExitCode: 0, Stdout: `{"id":"planner-1","title":"planner","status":"waiting","group":"","path":"/tmp"}`}, nil
-		case strings.Join(args, "\x00") == strings.Join([]string{"agent-deck", "group", "list", "--json"}, "\x00"):
-			return RunResult{ExitCode: 0, Stdout: `{"groups":[]}`}, nil
-		case strings.Join(args, "\x00") == strings.Join([]string{"agent-deck", "group", "create", "coder-review"}, "\x00"):
-			return RunResult{ExitCode: 0}, nil
-		case strings.Join(args, "\x00") == strings.Join([]string{"agent-deck", "group", "move", "session-1", "coder-review"}, "\x00"):
-			return RunResult{ExitCode: 0}, nil
-		case strings.Join(args, "\x00") == strings.Join([]string{"agent-deck", "session", "show", "session-1", "--json"}, "\x00"):
-			return RunResult{ExitCode: 0, Stdout: `{"id":"session-1","title":"coder-123","status":"stopped","group":"coder-review","path":"/tmp"}`}, nil
-		case strings.Join(args, "\x00") == strings.Join([]string{"agent-deck", "session", "start", "--json", "session-1"}, "\x00"):
-			return RunResult{ExitCode: 0}, nil
-		default:
-			t.Fatalf("unexpected command args: %v", args)
-			return RunResult{}, nil
-		}
-	}}
-
-	service := newService(Options{
-		MailboxServiceFactory: fakeMailboxServiceFactory{service: &fakeMailboxService{t: t}},
-		CommandRunner:         commandRunner,
-	})
-	service.state.autoBindAttempted = true
-
-	output := callTool(t, service.Server(), "agent_deck_ensure_session", map[string]any{
-		"session_ref":             "coder-ref",
-		"group_parent_session_id": "planner-1",
-		"child_group_name":        "Coder Review",
-		"workdir":                 "/tmp",
-	})
-
-	if got := output["group"]; got != "coder-review" {
-		t.Fatalf("group = %v, want coder-review", got)
-	}
-	if got := output["listener_status"]; got != "started" {
-		t.Fatalf("listener_status = %v, want started", got)
-	}
-}
-
-func TestAgentDeckEnsureSessionAcceptsSymlinkedEquivalentWorkdir(t *testing.T) {
+func TestAgentDeckRequireSessionAcceptsSymlinkedEquivalentWorkdir(t *testing.T) {
 	baseDir := t.TempDir()
 	realDir := filepath.Join(baseDir, "real")
 	if err := os.Mkdir(realDir, 0o755); err != nil {
@@ -1732,7 +1864,7 @@ func TestAgentDeckEnsureSessionAcceptsSymlinkedEquivalentWorkdir(t *testing.T) {
 	})
 	service.state.autoBindAttempted = true
 
-	output := callTool(t, service.Server(), "agent_deck_ensure_session", map[string]any{
+	output := callTool(t, service.Server(), "agent_deck_require_session", map[string]any{
 		"session_ref": "coder-ref",
 		"workdir":     symlinkDir,
 	})
@@ -1744,9 +1876,11 @@ func TestAgentDeckEnsureSessionAcceptsSymlinkedEquivalentWorkdir(t *testing.T) {
 	}
 }
 
-func TestAgentDeckEnsureSessionCreatesTargetWithGroupPathAndNoParentLink(t *testing.T) {
+func TestAgentDeckCreateSessionCreatesTargetWithGroupPathAndNoParentLink(t *testing.T) {
 	commandRunner := &fakeRunner{t: t, handler: func(args []string, input string) (RunResult, error) {
 		switch {
+		case strings.Join(args, "\x00") == strings.Join([]string{"agent-deck", "session", "show", "coder-ref", "--json"}, "\x00"):
+			return RunResult{ExitCode: 1, Stderr: "not found"}, nil
 		case strings.Join(args, "\x00") == strings.Join([]string{"agent-deck", "group", "list", "--json"}, "\x00"):
 			return RunResult{ExitCode: 0, Stdout: `{"groups":[]}`}, nil
 		case strings.Join(args, "\x00") == strings.Join([]string{"agent-deck", "group", "create", "reviews"}, "\x00"):
@@ -1765,7 +1899,7 @@ func TestAgentDeckEnsureSessionCreatesTargetWithGroupPathAndNoParentLink(t *test
 	})
 	service.state.autoBindAttempted = true
 
-	output := callTool(t, service.Server(), "agent_deck_ensure_session", map[string]any{
+	output := callTool(t, service.Server(), "agent_deck_create_session", map[string]any{
 		"ensure_title":   "coder-ref",
 		"ensure_cmd":     "codex --model gpt-5.4 --ask-for-approval on-request",
 		"group_path":     "reviews",
