@@ -36,6 +36,14 @@ func (a *App) prepareForwardCommand(args []string) (preparedCommand, error) {
 	if err := requireFlag(toAddress, "--to"); err != nil {
 		return nil, err
 	}
+	toAddress, err := NormalizeAddress(toAddress)
+	if err != nil {
+		return nil, err
+	}
+	fromAddress, err = NormalizeOptionalAddress(fromAddress)
+	if err != nil {
+		return nil, err
+	}
 	hasMessageID := strings.TrimSpace(messageID) != ""
 	hasDeliveryID := strings.TrimSpace(deliveryID) != ""
 	if hasMessageID == hasDeliveryID {

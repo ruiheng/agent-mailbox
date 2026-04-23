@@ -941,6 +941,10 @@ func TestInvalidCLIPathsDoNotCreateRuntimeState(t *testing.T) {
 			args: []string{"send", "--body-file", "-"},
 		},
 		{
+			name: "send invalid known-session target",
+			args: []string{"send", "--to", "agent-deck", "--body-file", "-"},
+		},
+		{
 			name: "forward missing to",
 			args: []string{"forward", "--message", "msg_123"},
 		},
@@ -955,6 +959,10 @@ func TestInvalidCLIPathsDoNotCreateRuntimeState(t *testing.T) {
 		{
 			name: "forward conflicting formats",
 			args: []string{"forward", "--message", "msg_123", "--to", "workflow/reviewer/task-123", "--json", "--yaml"},
+		},
+		{
+			name: "forward invalid known-session target",
+			args: []string{"forward", "--message", "msg_123", "--to", "agent-deck"},
 		},
 		{
 			name: "list missing for",
@@ -1007,6 +1015,10 @@ func TestInvalidCLIPathsDoNotCreateRuntimeState(t *testing.T) {
 		{
 			name: "group create missing group",
 			args: []string{"group", "create"},
+		},
+		{
+			name: "group create invalid known-session nested target",
+			args: []string{"group", "create", "--group", "codex/reviewer/task"},
 		},
 		{
 			name: "address missing subcommand",

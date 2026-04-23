@@ -41,10 +41,17 @@ func PrepareForward(ctx context.Context, reader ForwardSourceReader, label strin
 
 	prepared := PreparedForward{
 		SendParams: SendParams{
-			ToAddress:   strings.TrimSpace(params.ToAddress),
-			FromAddress: strings.TrimSpace(params.FromAddress),
-			Group:       params.Group,
+			Group: params.Group,
 		},
+	}
+	var err error
+	prepared.SendParams.ToAddress, err = NormalizeAddress(params.ToAddress)
+	if err != nil {
+		return PreparedForward{}, err
+	}
+	prepared.SendParams.FromAddress, err = NormalizeOptionalAddress(params.FromAddress)
+	if err != nil {
+		return PreparedForward{}, err
 	}
 
 	switch {

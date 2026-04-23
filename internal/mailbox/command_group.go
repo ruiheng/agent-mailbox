@@ -46,6 +46,10 @@ func (a *App) prepareGroupCreateCommand(args []string) (preparedCommand, error) 
 	if err := requireFlag(groupAddress, "--group"); err != nil {
 		return nil, err
 	}
+	groupAddress, err := NormalizeAddress(groupAddress)
+	if err != nil {
+		return nil, err
+	}
 	format, err := formats.resolve()
 	if err != nil {
 		return nil, err
@@ -79,6 +83,10 @@ func (a *App) prepareGroupAddMemberCommand(args []string) (preparedCommand, erro
 		return nil, err
 	}
 	if err := requireFlag(groupAddress, "--group"); err != nil {
+		return nil, err
+	}
+	groupAddress, err := NormalizeAddress(groupAddress)
+	if err != nil {
 		return nil, err
 	}
 	if err := requireFlag(person, "--person"); err != nil {
@@ -125,6 +133,10 @@ func (a *App) prepareGroupRemoveMemberCommand(args []string) (preparedCommand, e
 		return nil, err
 	}
 	if err := requireFlag(groupAddress, "--group"); err != nil {
+		return nil, err
+	}
+	groupAddress, err := NormalizeAddress(groupAddress)
+	if err != nil {
 		return nil, err
 	}
 	if err := requireFlag(person, "--person"); err != nil {
@@ -174,6 +186,10 @@ func (a *App) prepareGroupMembersCommand(args []string) (preparedCommand, error)
 		return nil, err
 	}
 	if err := requireFlag(groupAddress, "--group"); err != nil {
+		return nil, err
+	}
+	groupAddress, err := NormalizeAddress(groupAddress)
+	if err != nil {
 		return nil, err
 	}
 	format, err := formats.resolve()

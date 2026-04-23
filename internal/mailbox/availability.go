@@ -405,9 +405,13 @@ ORDER BY oldest_eligible_at ASC, d.recipient_endpoint_id ASC
 }
 
 func (o availabilityOwner) resolveGroup(ctx context.Context, querier rowQuerier, groupAddress, person string) (groupAvailabilityScope, error) {
-	groupAddress = strings.TrimSpace(groupAddress)
-	if groupAddress == "" {
-		return groupAvailabilityScope{}, errors.New("group address is required")
+	rawGroupAddress := groupAddress
+	groupAddress, err := NormalizeAddress(rawGroupAddress)
+	if err != nil {
+		if strings.TrimSpace(rawGroupAddress) == "" {
+			return groupAvailabilityScope{}, errors.New("group address is required")
+		}
+		return groupAvailabilityScope{}, err
 	}
 	person = strings.TrimSpace(person)
 	if person == "" {

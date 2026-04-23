@@ -162,6 +162,15 @@ func (s *Service) mailboxStatus(ctx context.Context, _ *mcp.CallToolRequest, _ m
 }
 
 func (s *Service) sendMailboxMessage(ctx context.Context, input mailboxSendInput) (map[string]any, error) {
+	toAddress, err := mailbox.NormalizeAddress(input.ToAddress)
+	if err != nil {
+		if strings.TrimSpace(input.ToAddress) == "" {
+			return nil, errors.New("recipient address is required")
+		}
+		return nil, err
+	}
+	input.ToAddress = toAddress
+
 	fromAddress, err := s.sessions.senderAddress(ctx, input.FromAddress)
 	if err != nil {
 		return nil, err

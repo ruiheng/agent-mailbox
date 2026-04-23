@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 	"sync"
@@ -808,6 +809,104 @@ func TestMailboxBindIncludesMailHint(t *testing.T) {
 	})
 	if got := bind["mail_hint"]; got != defaultMailHint {
 		t.Fatalf("mailbox_bind mail_hint = %v, want %q", got, defaultMailHint)
+	}
+}
+
+func TestMailboxBindRejectsInvalidAddress(t *testing.T) {
+	service := newService(Options{
+		MailboxServiceFactory: fakeMailboxServiceFactory{service: &fakeMailboxService{t: t}},
+		CommandRunner: &fakeRunner{t: t, handler: func(args []string, input string) (RunResult, error) {
+			t.Fatalf("unexpected command call: %v", args)
+			return RunResult{}, nil
+		}},
+	})
+	service.state.autoBindAttempted = true
+
+	err := callToolExpectError(t, service.Server(), "mailbox_bind", map[string]any{
+		"addresses": []string{"agent-deck"},
+	})
+	if err == nil || !strings.Contains(err.Error(), `invalid address`) || !strings.Contains(err.Error(), `agent-deck`) {
+		t.Fatalf("mailbox_bind error = %v, want invalid address", err)
+	}
+	if got := service.state.boundAddresses; len(got) != 0 {
+		t.Fatalf("boundAddresses = %v, want unchanged empty state", got)
+	}
+}
+
+func TestMailboxBindAcceptsGenericAddressCharacters(t *testing.T) {
+	service := newService(Options{
+		MailboxServiceFactory: fakeMailboxServiceFactory{service: &fakeMailboxService{t: t}},
+		CommandRunner: &fakeRunner{t: t, handler: func(args []string, input string) (RunResult, error) {
+			t.Fatalf("unexpected command call: %v", args)
+			return RunResult{}, nil
+		}},
+	})
+	service.state.autoBindAttempted = true
+
+	output := callTool(t, service.Server(), "mailbox_bind", map[string]any{
+		"addresses": []string{"workflow/收件箱+tag@example.com"},
+	})
+	if got := output["bound_addresses"]; !reflect.DeepEqual(got, []any{"workflow/收件箱+tag@example.com"}) {
+		t.Fatalf("bound_addresses = %v, want generic address preserved", got)
+	}
+}
+
+func TestMailboxSendRejectsInvalidOverrideSender(t *testing.T) {
+	service := newService(Options{
+		MailboxServiceFactory: fakeMailboxServiceFactory{service: &fakeMailboxService{t: t}},
+		CommandRunner: &fakeRunner{t: t, handler: func(args []string, input string) (RunResult, error) {
+			t.Fatalf("unexpected command call: %v", args)
+			return RunResult{}, nil
+		}},
+	})
+	service.state.autoBindAttempted = true
+
+	err := callToolExpectError(t, service.Server(), "mailbox_send", map[string]any{
+		"to_address":   "agent-deck/target",
+		"from_address": "agent-deck",
+		"subject":      "delegate",
+		"body":         "body",
+	})
+	if err == nil || !strings.Contains(err.Error(), `invalid address`) || !strings.Contains(err.Error(), `agent-deck`) {
+		t.Fatalf("mailbox_send error = %v, want invalid address", err)
+	}
+}
+
+func TestMailboxSendRejectsInvalidRecipientAddress(t *testing.T) {
+	service := newService(Options{
+		MailboxServiceFactory: fakeMailboxServiceFactory{service: &fakeMailboxService{t: t}},
+		CommandRunner: &fakeRunner{t: t, handler: func(args []string, input string) (RunResult, error) {
+			t.Fatalf("unexpected command call: %v", args)
+			return RunResult{}, nil
+		}},
+	})
+	service.state.autoBindAttempted = true
+
+	err := callToolExpectError(t, service.Server(), "mailbox_send", map[string]any{
+		"to_address": "agent-deck",
+		"subject":    "delegate",
+		"body":       "body",
+	})
+	if err == nil || !strings.Contains(err.Error(), `invalid address`) || !strings.Contains(err.Error(), `agent-deck`) {
+		t.Fatalf("mailbox_send error = %v, want invalid recipient address", err)
+	}
+}
+
+func TestMailboxRecvRejectsInvalidExplicitAddress(t *testing.T) {
+	service := newService(Options{
+		MailboxServiceFactory: fakeMailboxServiceFactory{service: &fakeMailboxService{t: t}},
+		CommandRunner: &fakeRunner{t: t, handler: func(args []string, input string) (RunResult, error) {
+			t.Fatalf("unexpected command call: %v", args)
+			return RunResult{}, nil
+		}},
+	})
+	service.state.autoBindAttempted = true
+
+	err := callToolExpectError(t, service.Server(), "mailbox_recv", map[string]any{
+		"addresses": []string{"agent-deck"},
+	})
+	if err == nil || !strings.Contains(err.Error(), `invalid address`) || !strings.Contains(err.Error(), `agent-deck`) {
+		t.Fatalf("mailbox_recv error = %v, want invalid address", err)
 	}
 }
 

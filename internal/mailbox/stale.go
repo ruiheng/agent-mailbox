@@ -148,9 +148,12 @@ func normalizeGroupStaleViews(groupViews []GroupStaleView) ([]GroupStaleView, er
 	normalized := make([]GroupStaleView, 0, len(groupViews))
 	seen := make(map[string]struct{}, len(groupViews))
 	for _, groupView := range groupViews {
-		address := strings.TrimSpace(groupView.Address)
-		if address == "" {
-			return nil, errors.New("--for is required")
+		address, err := NormalizeAddress(groupView.Address)
+		if err != nil {
+			if strings.TrimSpace(groupView.Address) == "" {
+				return nil, errors.New("--for is required")
+			}
+			return nil, err
 		}
 		person := strings.TrimSpace(groupView.Person)
 		if person == "" {

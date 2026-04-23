@@ -40,6 +40,14 @@ func (a *App) prepareSendCommand(args []string) (preparedCommand, error) {
 	if err := requireFlag(toAddress, "--to"); err != nil {
 		return nil, err
 	}
+	toAddress, err := NormalizeAddress(toAddress)
+	if err != nil {
+		return nil, err
+	}
+	fromAddress, err = NormalizeOptionalAddress(fromAddress)
+	if err != nil {
+		return nil, err
+	}
 	format, err := formats.resolve()
 	if err != nil {
 		return nil, err

@@ -40,6 +40,10 @@ func (a *App) prepareAddressInspectCommand(args []string) (preparedCommand, erro
 	if err := requireFlag(address, "--address"); err != nil {
 		return nil, err
 	}
+	address, err := NormalizeAddress(address)
+	if err != nil {
+		return nil, err
+	}
 	format, err := formats.resolve()
 	if err != nil {
 		return nil, err

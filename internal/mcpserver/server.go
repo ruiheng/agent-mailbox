@@ -126,11 +126,6 @@ type runOptions struct {
 	timeout time.Duration
 }
 
-type parsedAddress struct {
-	Scheme string
-	ID     string
-}
-
 type osCommandRunner struct {
 	cwd string
 }
@@ -324,12 +319,8 @@ func dedupe(values []string) []string {
 	return out
 }
 
-func parseAddress(address string) (parsedAddress, error) {
-	scheme, id, ok := strings.Cut(address, "/")
-	if !ok || scheme == "" || id == "" {
-		return parsedAddress{}, fmt.Errorf("invalid address: %s", address)
-	}
-	return parsedAddress{Scheme: scheme, ID: id}, nil
+func parseAddress(address string) (mailbox.ParsedAddress, error) {
+	return mailbox.ParseAddress(address)
 }
 
 func notificationRouteForAddress(address string) (notificationRoute, error) {

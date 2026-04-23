@@ -55,9 +55,13 @@ type AddressInspection struct {
 }
 
 func (s *Store) CreateGroup(ctx context.Context, address string) (GroupRecord, error) {
-	address = strings.TrimSpace(address)
-	if address == "" {
-		return GroupRecord{}, errors.New("group address is required")
+	rawAddress := address
+	address, err := NormalizeAddress(rawAddress)
+	if err != nil {
+		if strings.TrimSpace(rawAddress) == "" {
+			return GroupRecord{}, errors.New("group address is required")
+		}
+		return GroupRecord{}, err
 	}
 
 	tx, err := s.writeDB.BeginTx(ctx, nil)
@@ -119,9 +123,13 @@ WHERE NOT EXISTS (
 }
 
 func (s *Store) AddGroupMember(ctx context.Context, groupAddress, person string) (GroupMembershipRecord, error) {
-	groupAddress = strings.TrimSpace(groupAddress)
-	if groupAddress == "" {
-		return GroupMembershipRecord{}, errors.New("group address is required")
+	rawGroupAddress := groupAddress
+	groupAddress, err := NormalizeAddress(rawGroupAddress)
+	if err != nil {
+		if strings.TrimSpace(rawGroupAddress) == "" {
+			return GroupMembershipRecord{}, errors.New("group address is required")
+		}
+		return GroupMembershipRecord{}, err
 	}
 	person = strings.TrimSpace(person)
 	if person == "" {
@@ -195,9 +203,13 @@ INSERT OR IGNORE INTO group_memberships (
 }
 
 func (s *Store) RemoveGroupMember(ctx context.Context, groupAddress, person string) (GroupMembershipRecord, error) {
-	groupAddress = strings.TrimSpace(groupAddress)
-	if groupAddress == "" {
-		return GroupMembershipRecord{}, errors.New("group address is required")
+	rawGroupAddress := groupAddress
+	groupAddress, err := NormalizeAddress(rawGroupAddress)
+	if err != nil {
+		if strings.TrimSpace(rawGroupAddress) == "" {
+			return GroupMembershipRecord{}, errors.New("group address is required")
+		}
+		return GroupMembershipRecord{}, err
 	}
 	person = strings.TrimSpace(person)
 	if person == "" {
@@ -262,9 +274,13 @@ WHERE membership_id = ?
 }
 
 func (s *Store) ListGroupMembers(ctx context.Context, groupAddress string) ([]GroupMembershipRecord, error) {
-	groupAddress = strings.TrimSpace(groupAddress)
-	if groupAddress == "" {
-		return nil, errors.New("group address is required")
+	rawGroupAddress := groupAddress
+	groupAddress, err := NormalizeAddress(rawGroupAddress)
+	if err != nil {
+		if strings.TrimSpace(rawGroupAddress) == "" {
+			return nil, errors.New("group address is required")
+		}
+		return nil, err
 	}
 
 	group, found, err := lookupGroupRecord(ctx, s.readDB, groupAddress)
@@ -309,9 +325,13 @@ ORDER BY gm.joined_at ASC, gm.membership_id ASC
 }
 
 func (s *Store) InspectAddress(ctx context.Context, address string) (AddressInspection, error) {
-	address = strings.TrimSpace(address)
-	if address == "" {
-		return AddressInspection{}, errors.New("address is required")
+	rawAddress := address
+	address, err := NormalizeAddress(rawAddress)
+	if err != nil {
+		if strings.TrimSpace(rawAddress) == "" {
+			return AddressInspection{}, errors.New("address is required")
+		}
+		return AddressInspection{}, err
 	}
 
 	endpointID, endpointFound, err := s.lookupEndpointID(ctx, s.readDB, address)

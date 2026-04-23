@@ -43,7 +43,7 @@ func normalizeAddresses(address string, addresses []string, flagName string) ([]
 	}
 	values = append(values, addresses...)
 
-	return normalizeFlagValues(values, flagName)
+	return NormalizeRequiredAddressValues(values, flagName)
 }
 
 func normalizeFlagValues(values []string, flagName string) ([]string, error) {

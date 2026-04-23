@@ -168,6 +168,36 @@ func TestCLISendRecvAckFlow(t *testing.T) {
 	}
 }
 
+func TestCLISendRecvSupportsGenericAddressCharacters(t *testing.T) {
+	stateDir := filepath.Join(t.TempDir(), "mailbox-state")
+	address := "workflow/收件箱+tag@example.com"
+
+	send := runCLI(t, "hello generic\n", "--state-dir", stateDir,
+		"send",
+		"--to", address,
+		"--from", "agent/sender",
+		"--subject", "generic",
+		"--body-file", "-",
+	)
+	if send.exitCode != 0 {
+		t.Fatalf("send exit code = %d, stderr = %q", send.exitCode, send.stderr)
+	}
+
+	recv := runCLI(t, "", "--state-dir", stateDir,
+		"recv",
+		"--for", address,
+		"--json",
+	)
+	if recv.exitCode != 0 {
+		t.Fatalf("recv exit code = %d, stderr = %q", recv.exitCode, recv.stderr)
+	}
+
+	message := decodeReceivedMessage(t, recv.stdout)
+	if message.RecipientAddress != address {
+		t.Fatalf("recipient_address = %q, want %q", message.RecipientAddress, address)
+	}
+}
+
 func TestCLIForwardByMessageIDPreservesPayload(t *testing.T) {
 	stateDir := filepath.Join(t.TempDir(), "mailbox-state")
 

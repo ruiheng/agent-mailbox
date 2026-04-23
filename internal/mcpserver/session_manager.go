@@ -12,6 +12,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/ruiheng/agent-mailbox/internal/mailbox"
 )
 
 var (
@@ -96,10 +98,19 @@ func newSessionManager(runner Runner, state *serverState) *sessionManager {
 }
 
 func (m *sessionManager) bind(ctx context.Context, input mailboxBindInput) (boundState, error) {
-	boundAddresses := dedupe(input.Addresses)
+	boundAddresses, err := mailbox.NormalizeAddressList(input.Addresses)
+	if err != nil {
+		return boundState{}, err
+	}
 	defaultSender := strings.TrimSpace(input.DefaultSender)
 	if defaultSender == "" && len(boundAddresses) > 0 {
 		defaultSender = boundAddresses[0]
+	}
+	if defaultSender != "" {
+		defaultSender, err = mailbox.NormalizeAddress(defaultSender)
+		if err != nil {
+			return boundState{}, fmt.Errorf("invalid default_sender: %w", err)
+		}
 	}
 
 	m.state.mu.Lock()
@@ -298,7 +309,7 @@ func (m *sessionManager) extractCodexSessionIDFromLsof(ctx context.Context, pid 
 
 func (m *sessionManager) mailboxAddresses(ctx context.Context, addresses []string) ([]string, error) {
 	if len(addresses) > 0 {
-		return dedupe(addresses), nil
+		return mailbox.NormalizeAddressList(addresses)
 	}
 	bound, err := m.boundState(ctx)
 	if err != nil {
@@ -312,7 +323,7 @@ func (m *sessionManager) mailboxAddresses(ctx context.Context, addresses []strin
 
 func (m *sessionManager) senderAddress(ctx context.Context, override string) (string, error) {
 	if strings.TrimSpace(override) != "" {
-		return strings.TrimSpace(override), nil
+		return mailbox.NormalizeAddress(override)
 	}
 	bound, err := m.boundState(ctx)
 	if err != nil {

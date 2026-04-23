@@ -191,9 +191,13 @@ func NewStore(readDB, writeDB, claimDB *sql.DB, blobDir string) *Store {
 }
 
 func (s *Store) RegisterEndpoint(ctx context.Context, address string) (EndpointRegistration, error) {
-	address = strings.TrimSpace(address)
-	if address == "" {
-		return EndpointRegistration{}, errors.New("endpoint address is required")
+	rawAddress := address
+	address, err := NormalizeAddress(rawAddress)
+	if err != nil {
+		if strings.TrimSpace(rawAddress) == "" {
+			return EndpointRegistration{}, errors.New("endpoint address is required")
+		}
+		return EndpointRegistration{}, err
 	}
 	if err := s.rejectGroupAddress(ctx, address); err != nil {
 		return EndpointRegistration{}, err
@@ -217,9 +221,12 @@ func (s *Store) RegisterEndpoint(ctx context.Context, address string) (EndpointR
 }
 
 func (s *Store) Send(ctx context.Context, params SendParams) (SendResult, error) {
-	toAddress := strings.TrimSpace(params.ToAddress)
-	if toAddress == "" {
-		return SendResult{}, errors.New("recipient address is required")
+	toAddress, err := NormalizeAddress(params.ToAddress)
+	if err != nil {
+		if strings.TrimSpace(params.ToAddress) == "" {
+			return SendResult{}, errors.New("recipient address is required")
+		}
+		return SendResult{}, err
 	}
 	if len(params.Body) == 0 {
 		return SendResult{}, ErrEmptyBody
@@ -232,8 +239,12 @@ func (s *Store) Send(ctx context.Context, params SendParams) (SendResult, error)
 	if schemaVersion == "" {
 		schemaVersion = "v1"
 	}
-	if address := strings.TrimSpace(params.FromAddress); address != "" {
-		if err := s.rejectGroupAddress(ctx, address); err != nil {
+	fromAddress, err := NormalizeOptionalAddress(params.FromAddress)
+	if err != nil {
+		return SendResult{}, err
+	}
+	if fromAddress != "" {
+		if err := s.rejectGroupAddress(ctx, fromAddress); err != nil {
 			return SendResult{}, err
 		}
 	}
@@ -267,8 +278,8 @@ func (s *Store) Send(ctx context.Context, params SendParams) (SendResult, error)
 	defer tx.Rollback()
 
 	var senderEndpointID *string
-	if address := strings.TrimSpace(params.FromAddress); address != "" {
-		registration, err := s.ensureEndpointAddress(ctx, tx, address)
+	if fromAddress != "" {
+		registration, err := s.ensureEndpointAddress(ctx, tx, fromAddress)
 		if err != nil {
 			return SendResult{}, fmt.Errorf("resolve sender address: %w", err)
 		}
@@ -506,9 +517,13 @@ VALUES (?, ?, ?, ?, ?, ?)
 }
 
 func (s *Store) List(ctx context.Context, params ListParams) ([]ListedDelivery, error) {
-	address := strings.TrimSpace(params.Address)
-	if address == "" {
-		return nil, errors.New("recipient address is required")
+	rawAddress := params.Address
+	address, err := NormalizeAddress(rawAddress)
+	if err != nil {
+		if strings.TrimSpace(rawAddress) == "" {
+			return nil, errors.New("recipient address is required")
+		}
+		return nil, err
 	}
 
 	scope, err := s.availability().resolvePersonal(ctx, s.readDB, []string{address})
@@ -711,6 +726,10 @@ func (s *Store) ReadMessages(ctx context.Context, messageIDs []string) ([]ReadMe
 }
 
 func (s *Store) ReadLatestDeliveries(ctx context.Context, addresses []string, state string, limit int) ([]ReadDelivery, bool, error) {
+	addresses, err := NormalizeAddressList(addresses)
+	if err != nil {
+		return nil, false, err
+	}
 	if len(addresses) == 0 {
 		return []ReadDelivery{}, false, nil
 	}
