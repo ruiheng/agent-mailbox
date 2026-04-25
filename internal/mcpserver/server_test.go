@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"slices"
 	"strings"
 	"sync"
@@ -1841,6 +1842,9 @@ func TestAgentDeckRequireSessionAcceptsSymlinkedEquivalentWorkdir(t *testing.T) 
 	}
 	symlinkDir := filepath.Join(baseDir, "linked")
 	if err := os.Symlink(realDir, symlinkDir); err != nil {
+		if runtime.GOOS == "windows" {
+			t.Skipf("symlink privileges unavailable on Windows: %v", err)
+		}
 		t.Fatalf("Symlink() error = %v", err)
 	}
 

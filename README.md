@@ -33,10 +33,32 @@ Build a local executable:
 make build
 ```
 
+On Windows without GNU `make`, use the PowerShell wrapper with the same targets:
+
+```powershell
+./make.ps1 build
+```
+
+This project still requires CGO. If `go env CGO_ENABLED` prints `0`, install a
+Windows C toolchain first and rerun with CGO enabled, for example:
+
+```powershell
+$env:CGO_ENABLED = 1
+$env:CC = "C:/msys64/ucrt64/bin/gcc.exe"
+$env:CXX = "C:/msys64/ucrt64/bin/g++.exe"
+./make.ps1 build
+```
+
 This produces:
 
 ```text
 ./bin/agent-mailbox
+```
+
+On Windows, the PowerShell wrapper builds:
+
+```text
+.\bin\agent-mailbox.exe
 ```
 
 Run the full test suite:
@@ -45,16 +67,34 @@ Run the full test suite:
 make test
 ```
 
+Windows:
+
+```powershell
+./make.ps1 test
+```
+
 Show the available build targets:
 
 ```bash
 make help
 ```
 
+Windows:
+
+```powershell
+./make.ps1 help
+```
+
 Run the stdio MCP server from the main binary:
 
 ```bash
 make run-mcp
+```
+
+Windows:
+
+```powershell
+./make.ps1 run-mcp
 ```
 
 ## Install
@@ -65,10 +105,23 @@ Install into `/usr/local/bin`:
 make install
 ```
 
+On Windows, `install` copies the binary into `%USERPROFILE%\.local\bin` by default:
+
+```powershell
+./make.ps1 install
+```
+
 Install into a user-local prefix without needing root:
 
 ```bash
 make install PREFIX="$HOME/.local"
+```
+
+Windows PowerShell equivalent:
+
+```powershell
+$env:PREFIX = "$HOME\\.local"
+./make.ps1 install
 ```
 
 If you use a user-local prefix, make sure `"$HOME/.local/bin"` is in your
@@ -96,6 +149,12 @@ Run the MCP server directly:
 ./bin/agent-mailbox mcp
 ```
 
+Windows:
+
+```powershell
+.\bin\agent-mailbox.exe mcp
+```
+
 Or use the convenience target:
 
 ```bash
@@ -107,6 +166,14 @@ Example MCP config:
 ```toml
 [mcp_servers.agent_mailbox]
 command = "/absolute/path/to/agent-mailbox/bin/agent-mailbox"
+args = ["mcp"]
+```
+
+Windows example:
+
+```toml
+[mcp_servers.agent_mailbox]
+command = "C:\\absolute\\path\\to\\agent-mailbox\\bin\\agent-mailbox.exe"
 args = ["mcp"]
 ```
 
