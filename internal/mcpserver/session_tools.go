@@ -44,7 +44,7 @@ func (s *Service) registerSessionTools(server *mcp.Server) {
 	}, s.agentDeckCreateSession)
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "agent_deck_require_session",
-		Description: "Require an existing agent-deck session in an explicit workdir. Resolves session_id or session_ref, verifies the existing session already matches the requested workdir, and starts it if it is inactive. Optional startup_instruction is passed only when an inactive session must be started. Does not create sessions or accept create-only lifecycle parameters.",
+		Description: "Require an existing agent-deck session in an explicit workdir. Resolves session_id or session_ref, verifies the existing session already matches the requested workdir, and starts it if it is inactive. Optional startup_instruction is passed only when an inactive session must be started. Does not create sessions.",
 	}, s.agentDeckRequireSession)
 }
 
