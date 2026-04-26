@@ -40,7 +40,7 @@ func (s *Service) registerSessionTools(server *mcp.Server) {
 	}, s.agentDeckResolveSession)
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "agent_deck_create_session",
-		Description: "Create a new agent-deck session in an explicit workdir. The target must not already exist. Accepts create-only lifecycle parameters such as ensure_title, ensure_cmd, parent_session_id, group_path, group_parent_session_id, child_group_name, no_parent_link, and startup_instruction. Optional startup_instruction is passed only to agent-deck launch --message; do not use it for task payloads or normal wakeups.",
+		Description: "Create a new agent-deck session in an explicit workdir. The target must not already exist. Supports explicit group placement, parent linkage, detached sessions, and optional startup_instruction passed only to agent-deck launch --message.",
 	}, s.agentDeckCreateSession)
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "agent_deck_require_session",
