@@ -440,13 +440,13 @@ func (m *sessionManager) createSession(ctx context.Context, input agentDeckCreat
 	}
 
 	launchArgs := buildCreateSessionLaunchArgs(createSessionLaunchInput{
-		EnsureTitle:     input.EnsureTitle,
-		EnsureCmd:       input.EnsureCmd,
-		Workdir:         workdir,
-		ParentSessionID: launchParentSessionID,
-		NoParentLink:    launchNoParentLink,
-		ListenerMessage: strings.TrimSpace(input.ListenerMessage),
-		GroupPath:       targetGroupPath,
+		EnsureTitle:        input.EnsureTitle,
+		EnsureCmd:          input.EnsureCmd,
+		Workdir:            workdir,
+		ParentSessionID:    launchParentSessionID,
+		NoParentLink:       launchNoParentLink,
+		StartupInstruction: strings.TrimSpace(input.StartupInstruction),
+		GroupPath:          targetGroupPath,
 	})
 	launchResult, err := runCommand(ctx, m.runner, launchArgs, runOptions{})
 	if err != nil {
@@ -462,7 +462,11 @@ func (m *sessionManager) createSession(ctx context.Context, input agentDeckCreat
 	out["created_target"] = true
 	out["started_session"] = true
 	out["notify_needed"] = false
-	out["listener_status"] = "started_waiting"
+	if strings.TrimSpace(input.StartupInstruction) != "" {
+		out["startup_instruction_status"] = "started_waiting"
+	} else {
+		out["startup_instruction_status"] = "started"
+	}
 	return out, nil
 }
 
@@ -488,7 +492,7 @@ func (m *sessionManager) requireSession(ctx context.Context, input agentDeckRequ
 		return nil, err
 	}
 
-	data, startedSession, notifyNeeded, listenerStatus, err := m.startSessionIfNeeded(ctx, data, strings.TrimSpace(input.ListenerMessage))
+	data, startedSession, notifyNeeded, startupInstructionStatus, err := m.startSessionIfNeeded(ctx, data, strings.TrimSpace(input.StartupInstruction))
 	if err != nil {
 		return nil, err
 	}
@@ -498,7 +502,7 @@ func (m *sessionManager) requireSession(ctx context.Context, input agentDeckRequ
 	out["created_target"] = false
 	out["started_session"] = startedSession
 	out["notify_needed"] = notifyNeeded
-	out["listener_status"] = listenerStatus
+	out["startup_instruction_status"] = startupInstructionStatus
 	return out, nil
 }
 
@@ -579,14 +583,14 @@ func (m *sessionManager) prepareCreateSessionLaunch(ctx context.Context, input a
 	return targetGroupPath, "", true, nil
 }
 
-func (m *sessionManager) startSessionIfNeeded(ctx context.Context, data *sessionData, listenerMessage string) (*sessionData, bool, bool, string, error) {
+func (m *sessionManager) startSessionIfNeeded(ctx context.Context, data *sessionData, startupInstruction string) (*sessionData, bool, bool, string, error) {
 	if activeSessionStatuses[strings.TrimSpace(data.Status)] {
 		return data, false, true, "not_needed_existing_session", nil
 	}
 
 	startArgs := []string{"agent-deck", "session", "start", "--json"}
-	if listenerMessage != "" {
-		startArgs = append(startArgs, "-m", listenerMessage)
+	if startupInstruction != "" {
+		startArgs = append(startArgs, "-m", startupInstruction)
 	}
 	startArgs = append(startArgs, data.ID)
 	if _, err := runCommand(ctx, m.runner, startArgs, runOptions{}); err != nil {
@@ -601,11 +605,11 @@ func (m *sessionManager) startSessionIfNeeded(ctx context.Context, data *session
 		data = refreshed
 	}
 
-	listenerStatus := "started"
-	if listenerMessage != "" {
-		listenerStatus = "started_waiting"
+	startupInstructionStatus := "started"
+	if startupInstruction != "" {
+		startupInstructionStatus = "started_waiting"
 	}
-	return data, true, false, listenerStatus, nil
+	return data, true, false, startupInstructionStatus, nil
 }
 
 func (m *sessionManager) listGroupPaths(ctx context.Context) (map[string]bool, error) {

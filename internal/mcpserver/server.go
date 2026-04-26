@@ -31,7 +31,7 @@ const (
 	defaultMCPHintCooldown       = 2 * time.Minute
 	defaultAgentDeckInitialDelay = 3 * time.Minute
 	defaultAgentDeckCooldown     = 5 * time.Minute
-	defaultListenerMessage       = ""
+	defaultStartupInstruction    = ""
 	defaultNotifyMessage         = "Use the check-agent-mail skill now. Receive the pending message and execute its requested action."
 	defaultMailHint              = "mailbox_recv"
 	mailboxRecoveryHint          = "If you forget the mailbox details or next action after ack, use `mailbox_read` on the latest `acked` delivery for this session. For older mail, use `mailbox_list` with `state: acked` and then `mailbox_read` by delivery id."

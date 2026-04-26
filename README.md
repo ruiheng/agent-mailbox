@@ -139,11 +139,15 @@ reuses the original body, `content_type`, and `schema_version`.
 `agent_deck_create_session` is for lifecycle allocation only. It creates a new
 session, errors if the target already exists, supports explicit group placement
 through `group_path` or `group_parent_session_id` plus `child_group_name`, and
-can launch detached sessions with `no_parent_link = true`.
+can launch detached sessions with `no_parent_link = true`. `startup_instruction`
+is optional startup-only input passed to `agent-deck launch --message`; do not
+use it for task payloads or normal wakeups.
 
 `agent_deck_require_session` is the send-time guard. It never creates a
 session; it resolves `session_id` or `session_ref`, verifies the existing
 session already belongs to the explicit `workdir`, and starts it if needed.
+`startup_instruction` is optional startup-only input passed to
+`agent-deck session start -m` only when an inactive session is started.
 `mailbox_send` remains transport-only and does not create downstream sessions.
 
 ## Quick Start

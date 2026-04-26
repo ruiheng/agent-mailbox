@@ -1356,8 +1356,8 @@ func TestAgentDeckRequireSessionReturnsActiveTargetWithoutStart(t *testing.T) {
 	if got := output["notify_needed"]; got != true {
 		t.Fatalf("notify_needed = %v, want true", got)
 	}
-	if got := output["listener_status"]; got != "not_needed_existing_session" {
-		t.Fatalf("listener_status = %v, want not_needed_existing_session", got)
+	if got := output["startup_instruction_status"]; got != "not_needed_existing_session" {
+		t.Fatalf("startup_instruction_status = %v, want not_needed_existing_session", got)
 	}
 }
 
@@ -1399,12 +1399,12 @@ func TestAgentDeckRequireSessionStartsInactiveTarget(t *testing.T) {
 	if got := output["notify_needed"]; got != false {
 		t.Fatalf("notify_needed = %v, want false", got)
 	}
-	if got := output["listener_status"]; got != "started" {
-		t.Fatalf("listener_status = %v, want started", got)
+	if got := output["startup_instruction_status"]; got != "started" {
+		t.Fatalf("startup_instruction_status = %v, want started", got)
 	}
 }
 
-func TestAgentDeckRequireSessionStartsInactiveTargetWithExplicitListenerMessage(t *testing.T) {
+func TestAgentDeckRequireSessionStartsInactiveTargetWithExplicitStartupInstruction(t *testing.T) {
 	commandRunner := &fakeRunner{t: t, handler: func(args []string, input string) (RunResult, error) {
 		switch {
 		case strings.Join(args, "\x00") == strings.Join([]string{"agent-deck", "session", "show", "coder-ref", "--json"}, "\x00"):
@@ -1426,13 +1426,13 @@ func TestAgentDeckRequireSessionStartsInactiveTargetWithExplicitListenerMessage(
 	service.state.autoBindAttempted = true
 
 	output := callTool(t, service.Server(), "agent_deck_require_session", map[string]any{
-		"session_ref":      "coder-ref",
-		"listener_message": "listen now",
-		"workdir":          "/tmp",
+		"session_ref":         "coder-ref",
+		"startup_instruction": "listen now",
+		"workdir":             "/tmp",
 	})
 
-	if got := output["listener_status"]; got != "started_waiting" {
-		t.Fatalf("listener_status = %v, want started_waiting", got)
+	if got := output["startup_instruction_status"]; got != "started_waiting" {
+		t.Fatalf("startup_instruction_status = %v, want started_waiting", got)
 	}
 }
 
@@ -1527,7 +1527,7 @@ func TestAgentDeckRequireSessionRejectsExtraFields(t *testing.T) {
 	}
 }
 
-func TestAgentDeckCreateSessionCreatesTargetWithoutDefaultListenerMessage(t *testing.T) {
+func TestAgentDeckCreateSessionCreatesTargetWithoutDefaultStartupInstruction(t *testing.T) {
 	commandRunner := &fakeRunner{t: t, handler: func(args []string, input string) (RunResult, error) {
 		switch {
 		case strings.Join(args, "\x00") == strings.Join([]string{"agent-deck", "session", "show", "coder-ref", "--json"}, "\x00"):
@@ -1561,8 +1561,8 @@ func TestAgentDeckCreateSessionCreatesTargetWithoutDefaultListenerMessage(t *tes
 	if got := output["status"]; got != "created" {
 		t.Fatalf("status = %v, want created", got)
 	}
-	if got := output["listener_status"]; got != "started_waiting" {
-		t.Fatalf("listener_status = %v, want started_waiting", got)
+	if got := output["startup_instruction_status"]; got != "started" {
+		t.Fatalf("startup_instruction_status = %v, want started", got)
 	}
 }
 

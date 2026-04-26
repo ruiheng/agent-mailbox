@@ -38,13 +38,13 @@ func deriveGroupPathFromParentGroup(parentGroup, childGroupName string) (string,
 }
 
 type createSessionLaunchInput struct {
-	EnsureTitle     string
-	EnsureCmd       string
-	Workdir         string
-	ParentSessionID string
-	NoParentLink    bool
-	ListenerMessage string
-	GroupPath       string
+	EnsureTitle        string
+	EnsureCmd          string
+	Workdir            string
+	ParentSessionID    string
+	NoParentLink       bool
+	StartupInstruction string
+	GroupPath          string
 }
 
 func buildCreateSessionLaunchArgs(input createSessionLaunchInput) []string {
@@ -61,8 +61,8 @@ func buildCreateSessionLaunchArgs(input createSessionLaunchInput) []string {
 	} else if strings.TrimSpace(input.ParentSessionID) != "" {
 		launchArgs = append(launchArgs, "--parent", input.ParentSessionID)
 	}
-	if strings.TrimSpace(input.ListenerMessage) != "" {
-		launchArgs = append(launchArgs, "--message", input.ListenerMessage)
+	if strings.TrimSpace(input.StartupInstruction) != "" {
+		launchArgs = append(launchArgs, "--message", input.StartupInstruction)
 	}
 	return append(launchArgs, input.Workdir)
 }
