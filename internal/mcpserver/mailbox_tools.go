@@ -508,7 +508,7 @@ func (s *Service) mailboxRead(ctx context.Context, _ *mcp.CallToolRequest, input
 }
 
 func (s *Service) mailboxAck(ctx context.Context, _ *mcp.CallToolRequest, input mailboxAckInput) (*mcp.CallToolResult, map[string]any, error) {
-	if err := s.activeLeases.terminalMutationAllowed(s.now().UTC(), input.DeliveryID); err != nil {
+	if err := s.activeLeases.terminalMutationAllowed(input.DeliveryID); err != nil {
 		return nil, nil, err
 	}
 	_, err := withMailboxService(ctx, s.mailboxServices, func(service mailboxService) (mailbox.DeliveryTransitionResult, error) {
@@ -522,7 +522,7 @@ func (s *Service) mailboxAck(ctx context.Context, _ *mcp.CallToolRequest, input 
 }
 
 func (s *Service) mailboxRelease(ctx context.Context, _ *mcp.CallToolRequest, input mailboxAckInput) (*mcp.CallToolResult, map[string]any, error) {
-	if err := s.activeLeases.terminalMutationAllowed(s.now().UTC(), input.DeliveryID); err != nil {
+	if err := s.activeLeases.terminalMutationAllowed(input.DeliveryID); err != nil {
 		return nil, nil, err
 	}
 	_, err := withMailboxService(ctx, s.mailboxServices, func(service mailboxService) (mailbox.DeliveryTransitionResult, error) {
@@ -536,7 +536,7 @@ func (s *Service) mailboxRelease(ctx context.Context, _ *mcp.CallToolRequest, in
 }
 
 func (s *Service) mailboxDefer(ctx context.Context, _ *mcp.CallToolRequest, input mailboxDeferInput) (*mcp.CallToolResult, map[string]any, error) {
-	if err := s.activeLeases.terminalMutationAllowed(s.now().UTC(), input.DeliveryID); err != nil {
+	if err := s.activeLeases.terminalMutationAllowed(input.DeliveryID); err != nil {
 		return nil, nil, err
 	}
 	until, err := time.Parse(time.RFC3339Nano, input.Until)
@@ -554,7 +554,7 @@ func (s *Service) mailboxDefer(ctx context.Context, _ *mcp.CallToolRequest, inpu
 }
 
 func (s *Service) mailboxFail(ctx context.Context, _ *mcp.CallToolRequest, input mailboxFailInput) (*mcp.CallToolResult, map[string]any, error) {
-	if err := s.activeLeases.terminalMutationAllowed(s.now().UTC(), input.DeliveryID); err != nil {
+	if err := s.activeLeases.terminalMutationAllowed(input.DeliveryID); err != nil {
 		return nil, nil, err
 	}
 	_, err := withMailboxService(ctx, s.mailboxServices, func(service mailboxService) (mailbox.DeliveryTransitionResult, error) {

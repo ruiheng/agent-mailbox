@@ -4,7 +4,6 @@ import (
 	"errors"
 	"strings"
 	"sync"
-	"time"
 
 	"github.com/ruiheng/agent-mailbox/internal/mailbox"
 )
@@ -18,7 +17,6 @@ type activeLease struct {
 type leaseRenewalFailure struct {
 	DeliveryID string
 	Cause      error
-	ExpiresAt  string
 	Definitive bool
 }
 
@@ -110,7 +108,6 @@ func (m *activeLeaseManager) markRenewalFailure(lease activeLease, cause error) 
 	failure := &leaseRenewalFailure{
 		DeliveryID: lease.DeliveryID,
 		Cause:      cause,
-		ExpiresAt:  lease.LeaseExpiresAt,
 		Definitive: definitive,
 	}
 	m.failures[lease.DeliveryID] = *failure
@@ -118,7 +115,7 @@ func (m *activeLeaseManager) markRenewalFailure(lease activeLease, cause error) 
 	return failure
 }
 
-func (m *activeLeaseManager) terminalMutationAllowed(now time.Time, deliveryID string) error {
+func (m *activeLeaseManager) terminalMutationAllowed(deliveryID string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -127,9 +124,6 @@ func (m *activeLeaseManager) terminalMutationAllowed(now time.Time, deliveryID s
 		return nil
 	}
 	if failure.Definitive {
-		return &failure
-	}
-	if leaseExpiredAtOrBefore(failure.ExpiresAt, now) {
 		return &failure
 	}
 	return nil
@@ -157,12 +151,4 @@ func renewalFailureDefinitive(err error) bool {
 	return strings.Contains(text, "not found") ||
 		strings.Contains(text, "want leased") ||
 		strings.Contains(text, "changed while renewing")
-}
-
-func leaseExpiredAtOrBefore(expiresAt string, now time.Time) bool {
-	parsed, err := time.Parse(time.RFC3339Nano, strings.TrimSpace(expiresAt))
-	if err != nil {
-		return true
-	}
-	return !parsed.After(now.UTC())
 }

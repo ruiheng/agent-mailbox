@@ -139,7 +139,7 @@ func TestRenewExtendsActiveLeaseAndLogsEvent(t *testing.T) {
 	}
 }
 
-func TestRenewRejectsExpiredLease(t *testing.T) {
+func TestRenewExtendsExpiredLeaseWhenTokenIsStillCurrent(t *testing.T) {
 	t.Parallel()
 
 	_, store := newLeaseTestStore(t)
@@ -157,8 +157,42 @@ func TestRenewRejectsExpiredLease(t *testing.T) {
 	}
 
 	current = current.Add(defaultLeaseTimeout + time.Second)
-	if _, err := store.Renew(context.Background(), received.DeliveryID, received.LeaseToken, time.Minute); !errors.Is(err, ErrLeaseExpired) {
-		t.Fatalf("Renew(expired lease) error = %v, want ErrLeaseExpired", err)
+	renewed, err := store.Renew(context.Background(), received.DeliveryID, received.LeaseToken, time.Minute)
+	if err != nil {
+		t.Fatalf("Renew(expired current lease) error = %v", err)
+	}
+	if renewed.LeaseToken != received.LeaseToken {
+		t.Fatalf("Renew(expired current lease) token = %q, want %q", renewed.LeaseToken, received.LeaseToken)
+	}
+	if renewed.LeaseExpiresAt != formatTimestamp(current.Add(time.Minute)) {
+		t.Fatalf("Renew(expired current lease) expiry = %q, want %q", renewed.LeaseExpiresAt, formatTimestamp(current.Add(time.Minute)))
+	}
+}
+
+func TestAckAcceptsExpiredLeaseWhenTokenIsStillCurrent(t *testing.T) {
+	t.Parallel()
+
+	_, store := newLeaseTestStore(t)
+
+	current := time.Date(2026, 4, 2, 12, 0, 0, 0, time.UTC)
+	store.now = func() time.Time {
+		return current
+	}
+
+	mustSendMessage(t, store, "workflow/reviewer/task-123", "agent/sender", "review request", "hello reviewer")
+
+	received, err := store.Receive(context.Background(), ReceiveParams{Address: "workflow/reviewer/task-123"})
+	if err != nil {
+		t.Fatalf("Receive() error = %v", err)
+	}
+
+	current = current.Add(defaultLeaseTimeout + time.Second)
+	acked, err := store.Ack(context.Background(), received.DeliveryID, received.LeaseToken)
+	if err != nil {
+		t.Fatalf("Ack(expired current lease) error = %v", err)
+	}
+	if acked.State != "acked" {
+		t.Fatalf("Ack(expired current lease) state = %q, want acked", acked.State)
 	}
 }
 
@@ -580,10 +614,14 @@ func TestReceiveBatchReturnsRecoveryFailureAndReleasesEarlierClaims(t *testing.T
 	}
 
 	nowCalls := 0
+	replacedSecondLeaseToken := false
 	store.now = func() time.Time {
 		nowCalls++
 		if nowCalls == 5 {
-			return current.Add(defaultLeaseTimeout + time.Second)
+			if !replacedSecondLeaseToken {
+				replaceDeliveryLeaseToken(t, runtime, secondSent.DeliveryID, "lease_replaced_by_other_receiver")
+				replacedSecondLeaseToken = true
+			}
 		}
 		return current
 	}
@@ -877,10 +915,14 @@ func TestReceiveCorruptBodyReportsRecoveryFailureWhenFailTransitionFails(t *test
 	}
 
 	nowCalls := 0
+	replacedLeaseToken := false
 	store.now = func() time.Time {
 		nowCalls++
 		if nowCalls >= 3 {
-			return current.Add(defaultLeaseTimeout + time.Second)
+			if !replacedLeaseToken {
+				replaceDeliveryLeaseToken(t, runtime, sent.DeliveryID, "lease_replaced_by_other_receiver")
+				replacedLeaseToken = true
+			}
 		}
 		return current
 	}
@@ -1246,6 +1288,26 @@ WHERE delivery_id = ?
 		t.Fatalf("QueryRow(delivery visible_at) error = %v", err)
 	}
 	return visibleAt
+}
+
+func replaceDeliveryLeaseToken(t *testing.T, runtime *Runtime, deliveryID, leaseToken string) {
+	t.Helper()
+
+	result, err := runtime.DB().Exec(`
+UPDATE deliveries
+SET lease_token = ?
+WHERE delivery_id = ?
+`, leaseToken, deliveryID)
+	if err != nil {
+		t.Fatalf("Exec(replace delivery lease token) error = %v", err)
+	}
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		t.Fatalf("RowsAffected(replace delivery lease token) error = %v", err)
+	}
+	if rowsAffected != 1 {
+		t.Fatalf("replace delivery lease token rows affected = %d, want 1", rowsAffected)
+	}
 }
 
 func assertStringSlicesEqual(t *testing.T, got, want []string) {

@@ -61,7 +61,7 @@ func (s *Service) renewLeaseWithRetry(ctx context.Context, lease activeLease) (m
 			return renewed, nil
 		}
 		lastErr = err
-		if renewalFailureDefinitive(err) || leaseExpiredAtOrBefore(lease.LeaseExpiresAt, s.now().UTC()) || attempt == leaseRenewRetryAttempts-1 {
+		if renewalFailureDefinitive(err) || attempt == leaseRenewRetryAttempts-1 {
 			break
 		}
 		if err := waitForLeaseRenewRetry(ctx, leaseRenewRetryDelay); err != nil {

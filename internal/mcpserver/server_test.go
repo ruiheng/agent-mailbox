@@ -2393,7 +2393,7 @@ func TestProcessLeaseRenewalsAllowsTerminalMutationBeforeExpiryAfterTransientFai
 	}
 }
 
-func TestProcessLeaseRenewalsBlocksTerminalMutationAfterExpiryFollowingTransientFailure(t *testing.T) {
+func TestProcessLeaseRenewalsAllowsTerminalMutationAfterExpiryFollowingTransientFailure(t *testing.T) {
 	current := time.Date(2026, 4, 3, 6, 45, 0, 0, time.UTC)
 
 	mailboxService := &fakeMailboxService{t: t}
@@ -2412,9 +2412,10 @@ func TestProcessLeaseRenewalsBlocksTerminalMutationAfterExpiryFollowingTransient
 	mailboxService.renewFunc = func(_ context.Context, deliveryID, leaseToken string, extendBy time.Duration) (mailbox.LeaseRenewResult, error) {
 		return mailbox.LeaseRenewResult{}, context.DeadlineExceeded
 	}
+	ackCalled := false
 	mailboxService.ackFunc = func(_ context.Context, deliveryID, leaseToken string) (mailbox.DeliveryTransitionResult, error) {
-		t.Fatalf("Ack should not be called after lease expiry")
-		return mailbox.DeliveryTransitionResult{}, nil
+		ackCalled = true
+		return mailbox.DeliveryTransitionResult{DeliveryID: deliveryID, State: "acked"}, nil
 	}
 
 	service := newService(Options{
@@ -2440,12 +2441,15 @@ func TestProcessLeaseRenewalsBlocksTerminalMutationAfterExpiryFollowingTransient
 	}
 
 	current = current.Add(defaultMCPLeaseTTL + time.Second)
-	toolErr := callToolExpectError(t, service.Server(), "mailbox_ack", map[string]any{
+	output := callTool(t, service.Server(), "mailbox_ack", map[string]any{
 		"delivery_id": "dlv_expired_failure",
 		"lease_token": "lease_expired_failure",
 	})
-	if !strings.Contains(toolErr.Error(), "lease ownership is no longer guaranteed") {
-		t.Fatalf("mailbox_ack error = %v, want lease renewal failure text", toolErr)
+	if got := output["status"]; got != "acked" {
+		t.Fatalf("mailbox_ack status = %v, want acked", got)
+	}
+	if !ackCalled {
+		t.Fatal("Ack was not forwarded after transient renew failure and local expiry")
 	}
 }
 

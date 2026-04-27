@@ -346,7 +346,7 @@ func (s *Store) Renew(ctx context.Context, deliveryID, leaseToken string, extend
 	}
 	defer tx.Rollback()
 
-	delivery, err := loadActiveLease(ctx, tx, deliveryID, leaseToken, now)
+	delivery, err := loadCurrentLease(ctx, tx, deliveryID, leaseToken)
 	if err != nil {
 		return LeaseRenewResult{}, err
 	}
@@ -631,7 +631,7 @@ func (s *Store) transitionLeasedDelivery(ctx context.Context, deliveryID, leaseT
 	}
 	defer tx.Rollback()
 
-	delivery, err := loadActiveLease(ctx, tx, deliveryID, leaseToken, now)
+	delivery, err := loadCurrentLease(ctx, tx, deliveryID, leaseToken)
 	if err != nil {
 		return DeliveryTransitionResult{}, err
 	}
@@ -705,7 +705,7 @@ func validateLeaseMutationInput(deliveryID, leaseToken string) (string, string, 
 	return deliveryID, leaseToken, nil
 }
 
-func loadActiveLease(ctx context.Context, tx *sql.Tx, deliveryID, leaseToken string, now time.Time) (leasedDeliveryRecord, error) {
+func loadCurrentLease(ctx context.Context, tx *sql.Tx, deliveryID, leaseToken string) (leasedDeliveryRecord, error) {
 	delivery, err := loadLeasedDeliveryRecord(ctx, tx, deliveryID)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -721,14 +721,6 @@ func loadActiveLease(ctx context.Context, tx *sql.Tx, deliveryID, leaseToken str
 	}
 	if !delivery.LeaseExpiresAt.Valid {
 		return leasedDeliveryRecord{}, fmt.Errorf("delivery %q is missing lease expiry", deliveryID)
-	}
-
-	expiresAt, err := time.Parse(time.RFC3339Nano, delivery.LeaseExpiresAt.String)
-	if err != nil {
-		return leasedDeliveryRecord{}, fmt.Errorf("parse lease expiry for %q: %w", deliveryID, err)
-	}
-	if !expiresAt.After(now) {
-		return leasedDeliveryRecord{}, fmt.Errorf("validate lease expiry for %q: %w", deliveryID, ErrLeaseExpired)
 	}
 
 	return delivery, nil

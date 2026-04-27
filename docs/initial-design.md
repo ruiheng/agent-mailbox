@@ -366,7 +366,7 @@ agent-mailbox ack --delivery <delivery_id> --lease-token <lease_token>
 Behavior:
 
 - mark the currently leased delivery as complete
-- require a valid unexpired lease token
+- require the current lease token
 
 ### Release
 
@@ -378,7 +378,7 @@ Behavior:
 
 - return a leased delivery to `queued`
 - set `visible_at = now`
-- require a valid unexpired lease token
+- require the current lease token
 
 ### Defer
 
@@ -390,7 +390,7 @@ Behavior:
 
 - move a leased delivery back to `queued`
 - set `visible_at` to the requested future time
-- require a valid unexpired lease token
+- require the current lease token
 
 ### Fail
 
@@ -401,7 +401,7 @@ agent-mailbox fail --delivery <delivery_id> --lease-token <lease_token> --reason
 Behavior:
 
 - record an explicit processing failure
-- require a valid unexpired lease token
+- require the current lease token
 - increment `attempt_count`
 - if `attempt_count >= 3`, move the delivery to `dead_letter`
 - otherwise return it to `queued` with `visible_at = now`
