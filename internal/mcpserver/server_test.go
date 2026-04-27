@@ -2,6 +2,7 @@ package mcpserver
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -2574,6 +2575,162 @@ func TestMailboxReleaseDeferAndFailUseDirectMailboxService(t *testing.T) {
 	}
 	if got := failResult["reason"]; got != "boom" {
 		t.Fatalf("fail reason = %v, want boom", got)
+	}
+}
+
+func TestAutoBindFindsAgentDeckSessionFromCodexStateDB(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("CODEX_SESSION_ID", "codex-session-123")
+	t.Setenv("AGENTDECK_INSTANCE_ID", "")
+	t.Setenv("AGENTDECK_PROFILE", "bad")
+	writeBrokenAgentDeckStateDB(t, home, "bad")
+	writeAgentDeckStateDB(t, home, "work", "deck-session-1", "/tmp/project", "codex-session-123")
+
+	runner := &fakeRunner{t: t}
+	runner.handler = func(args []string, _ string) (RunResult, error) {
+		switch strings.Join(args, "\x00") {
+		case strings.Join([]string{"agent-deck", "session", "current", "--json"}, "\x00"):
+			return RunResult{ExitCode: 1, Stderr: "not in an agent-deck pane"}, nil
+		case strings.Join([]string{"agent-deck", "session", "show", "deck-session-1", "--json"}, "\x00"):
+			return RunResult{ExitCode: 1, Stderr: "not found"}, nil
+		default:
+			t.Fatalf("unexpected command: %v", args)
+			return RunResult{}, nil
+		}
+	}
+
+	service := newService(Options{
+		MailboxServiceFactory: fakeMailboxServiceFactory{service: &fakeMailboxService{t: t}},
+		CommandRunner:         runner,
+		DisableWakeScheduler:  true,
+		DisableLeaseRenewLoop: true,
+	})
+	status := callTool(t, service.Server(), "mailbox_status", nil)
+
+	if got := status["default_sender"]; got != "agent-deck/deck-session-1" {
+		t.Fatalf("default_sender = %v, want agent-deck/deck-session-1", got)
+	}
+	wantAddresses := []any{"agent-deck/deck-session-1", "codex/codex-session-123"}
+	if !reflect.DeepEqual(status["bound_addresses"], wantAddresses) {
+		t.Fatalf("bound_addresses = %v, want %v", status["bound_addresses"], wantAddresses)
+	}
+}
+
+func TestAutoBindSkipsBadAgentDeckDBAndFallsBackToCodexOnly(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("CODEX_SESSION_ID", "codex-session-123")
+	t.Setenv("AGENTDECK_INSTANCE_ID", "")
+	t.Setenv("AGENTDECK_PROFILE", "bad")
+	writeBrokenAgentDeckStateDB(t, home, "bad")
+
+	runner := &fakeRunner{t: t}
+	runner.handler = func(args []string, _ string) (RunResult, error) {
+		switch strings.Join(args, "\x00") {
+		case strings.Join([]string{"agent-deck", "session", "current", "--json"}, "\x00"):
+			return RunResult{ExitCode: 1, Stderr: "not in an agent-deck pane"}, nil
+		default:
+			t.Fatalf("unexpected command: %v", args)
+			return RunResult{}, nil
+		}
+	}
+
+	service := newService(Options{
+		MailboxServiceFactory: fakeMailboxServiceFactory{service: &fakeMailboxService{t: t}},
+		CommandRunner:         runner,
+		DisableWakeScheduler:  true,
+		DisableLeaseRenewLoop: true,
+	})
+	status := callTool(t, service.Server(), "mailbox_status", nil)
+
+	if got := status["default_sender"]; got != "codex/codex-session-123" {
+		t.Fatalf("default_sender = %v, want codex/codex-session-123", got)
+	}
+	wantAddresses := []any{"codex/codex-session-123"}
+	if !reflect.DeepEqual(status["bound_addresses"], wantAddresses) {
+		t.Fatalf("bound_addresses = %v, want %v", status["bound_addresses"], wantAddresses)
+	}
+}
+
+func TestMailboxRecvWarnsWhenOnlyCodexSessionIsBound(t *testing.T) {
+	mailboxService := &fakeMailboxService{t: t}
+	mailboxService.receiveBatchFunc = func(_ context.Context, params mailbox.ReceiveBatchParams) (mailbox.ReceiveResult, error) {
+		if !reflect.DeepEqual(params.Addresses, []string{"codex/self"}) {
+			t.Fatalf("receive addresses = %v, want [codex/self]", params.Addresses)
+		}
+		return mailbox.ReceiveResult{}, mailbox.ErrNoMessage
+	}
+
+	service := newService(Options{
+		MailboxServiceFactory: fakeMailboxServiceFactory{service: mailboxService},
+		DisableWakeScheduler:  true,
+		DisableLeaseRenewLoop: true,
+	})
+	service.state.boundAddresses = []string{"codex/self"}
+	service.state.defaultSender = "codex/self"
+	service.state.detectedAgentSession = "self"
+	service.state.autoBindAttempted = true
+
+	out := callTool(t, service.Server(), "mailbox_recv", nil)
+	warnings, ok := out["warnings"].([]any)
+	if !ok || len(warnings) != 1 {
+		t.Fatalf("warnings = %#v, want one warning", out["warnings"])
+	}
+	if !strings.Contains(warnings[0].(string), "no matching agent-deck session id") {
+		t.Fatalf("warning = %v, want agent-deck detection warning", warnings[0])
+	}
+}
+
+func writeBrokenAgentDeckStateDB(t *testing.T, home, profile string) {
+	t.Helper()
+	dbPath := filepath.Join(home, ".agent-deck", "profiles", profile, "state.db")
+	if err := os.MkdirAll(filepath.Dir(dbPath), 0700); err != nil {
+		t.Fatalf("mkdir broken state db dir: %v", err)
+	}
+	db, err := sql.Open("sqlite3", dbPath)
+	if err != nil {
+		t.Fatalf("open broken state db: %v", err)
+	}
+	defer db.Close()
+	if _, err := db.Exec(`CREATE TABLE unrelated (id TEXT PRIMARY KEY)`); err != nil {
+		t.Fatalf("create broken state db table: %v", err)
+	}
+}
+
+func writeAgentDeckStateDB(t *testing.T, home, profile, id, projectPath, codexSessionID string) {
+	t.Helper()
+	dbPath := filepath.Join(home, ".agent-deck", "profiles", profile, "state.db")
+	if err := os.MkdirAll(filepath.Dir(dbPath), 0700); err != nil {
+		t.Fatalf("mkdir state db dir: %v", err)
+	}
+	db, err := sql.Open("sqlite3", dbPath)
+	if err != nil {
+		t.Fatalf("open state db: %v", err)
+	}
+	defer db.Close()
+	if _, err := db.Exec(`
+		CREATE TABLE instances (
+			id TEXT PRIMARY KEY,
+			project_path TEXT NOT NULL,
+			tool TEXT NOT NULL,
+			command TEXT NOT NULL,
+			created_at INTEGER NOT NULL,
+			last_accessed INTEGER NOT NULL,
+			tool_data TEXT NOT NULL
+		)
+	`); err != nil {
+		t.Fatalf("create instances: %v", err)
+	}
+	toolData, err := json.Marshal(map[string]string{"codex_session_id": codexSessionID})
+	if err != nil {
+		t.Fatalf("marshal tool data: %v", err)
+	}
+	if _, err := db.Exec(`
+		INSERT INTO instances (id, project_path, tool, command, created_at, last_accessed, tool_data)
+		VALUES (?, ?, 'codex', 'codex', 1, 2, ?)
+	`, id, projectPath, string(toolData)); err != nil {
+		t.Fatalf("insert instance: %v", err)
 	}
 }
 

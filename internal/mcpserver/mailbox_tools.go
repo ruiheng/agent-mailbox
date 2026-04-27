@@ -277,6 +277,7 @@ func (s *Service) mailboxWait(ctx context.Context, _ *mcp.CallToolRequest, input
 	if err != nil {
 		return nil, nil, err
 	}
+	warnings := s.mailboxReceiveWarnings(ctx, len(input.Addresses) > 0)
 
 	timeoutText := strings.TrimSpace(input.Timeout)
 	timeout := time.Duration(0)
@@ -297,6 +298,7 @@ func (s *Service) mailboxWait(ctx context.Context, _ *mcp.CallToolRequest, input
 		return s.mailboxToolResult(ctx, map[string]any{
 			"status":    "no_message",
 			"addresses": addresses,
+			"warnings":  warnings,
 		})
 	}
 	if err != nil {
@@ -306,6 +308,7 @@ func (s *Service) mailboxWait(ctx context.Context, _ *mcp.CallToolRequest, input
 		"status":    "message_available",
 		"addresses": addresses,
 		"delivery":  mailbox.CompactListedDelivery(delivery),
+		"warnings":  warnings,
 	})
 }
 
@@ -314,6 +317,7 @@ func (s *Service) mailboxRecv(ctx context.Context, _ *mcp.CallToolRequest, input
 	if err != nil {
 		return nil, nil, err
 	}
+	warnings := s.mailboxReceiveWarnings(ctx, len(input.Addresses) > 0)
 
 	delivery, err := withMailboxService(ctx, s.mailboxServices, func(service mailboxService) (mailbox.ReceiveResult, error) {
 		// MCP intentionally claims work with a short liveness window and relies on
@@ -329,6 +333,7 @@ func (s *Service) mailboxRecv(ctx context.Context, _ *mcp.CallToolRequest, input
 		return s.mailboxToolResult(ctx, map[string]any{
 			"status":    "no_message",
 			"addresses": addresses,
+			"warnings":  warnings,
 		})
 	}
 	if err != nil {
@@ -340,7 +345,22 @@ func (s *Service) mailboxRecv(ctx context.Context, _ *mcp.CallToolRequest, input
 		"status":    "received",
 		"addresses": addresses,
 		"delivery":  mailbox.CompactReceiveResult(delivery),
+		"warnings":  warnings,
 	})
+}
+
+func (s *Service) mailboxReceiveWarnings(ctx context.Context, explicitAddresses bool) []string {
+	if explicitAddresses {
+		return nil
+	}
+	bound, err := s.sessions.boundState(ctx)
+	if err != nil {
+		return []string{"unable to verify bound agent session state: " + err.Error()}
+	}
+	if bound.DetectedAgentSession == "" || bound.DetectedAgentDeckSession != "" {
+		return nil
+	}
+	return []string{"current Codex session was detected, but no matching agent-deck session id could be determined; receiving may miss agent-deck-addressed mail"}
 }
 
 func (s *Service) mailboxList(ctx context.Context, _ *mcp.CallToolRequest, input mailboxListInput) (*mcp.CallToolResult, map[string]any, error) {
