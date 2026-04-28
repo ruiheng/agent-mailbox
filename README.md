@@ -146,8 +146,6 @@ use it for task payloads or normal wakeups.
 `agent_deck_require_session` is the send-time guard. It never creates a
 session; it resolves `session_id` or `session_ref`, verifies the existing
 session already belongs to the explicit `workdir`, and starts it if needed.
-`startup_instruction` is optional startup-only input passed to
-`agent-deck session start -m` only when an inactive session is started.
 `mailbox_send` remains transport-only and does not create downstream sessions.
 
 ## Quick Start

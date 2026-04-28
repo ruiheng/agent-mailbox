@@ -76,6 +76,7 @@ func TestAgentDeckRequireSessionSchemaOmitsCreateOnlyFields(t *testing.T) {
 		"group_parent_session_id",
 		"child_group_name",
 		"no_parent_link",
+		"startup_instruction",
 	} {
 		if _, ok := schema.Properties[field]; ok {
 			t.Fatalf("schema.Properties[%q] unexpectedly present", field)
@@ -1405,35 +1406,23 @@ func TestAgentDeckRequireSessionStartsInactiveTarget(t *testing.T) {
 	}
 }
 
-func TestAgentDeckRequireSessionStartsInactiveTargetWithExplicitStartupInstruction(t *testing.T) {
-	commandRunner := &fakeRunner{t: t, handler: func(args []string, input string) (RunResult, error) {
-		switch {
-		case strings.Join(args, "\x00") == strings.Join([]string{"agent-deck", "session", "show", "coder-ref", "--json"}, "\x00"):
-			return RunResult{ExitCode: 0, Stdout: `{"id":"session-1","title":"coder-123","status":"stopped","path":"/tmp"}`}, nil
-		case strings.Join(args, "\x00") == strings.Join([]string{"agent-deck", "session", "start", "--json", "-m", "listen now", "session-1"}, "\x00"):
-			return RunResult{ExitCode: 0}, nil
-		case strings.Join(args, "\x00") == strings.Join([]string{"agent-deck", "session", "show", "session-1", "--json"}, "\x00"):
-			return RunResult{ExitCode: 0, Stdout: `{"id":"session-1","title":"coder-123","status":"waiting","path":"/tmp"}`}, nil
-		default:
-			t.Fatalf("unexpected command args: %v", args)
-			return RunResult{}, nil
-		}
-	}}
-
+func TestAgentDeckRequireSessionRejectsStartupInstruction(t *testing.T) {
 	service := newService(Options{
 		MailboxServiceFactory: fakeMailboxServiceFactory{service: &fakeMailboxService{t: t}},
-		CommandRunner:         commandRunner,
+		CommandRunner: &fakeRunner{t: t, handler: func(args []string, input string) (RunResult, error) {
+			t.Fatalf("unexpected command args: %v", args)
+			return RunResult{}, nil
+		}},
 	})
 	service.state.autoBindAttempted = true
 
-	output := callTool(t, service.Server(), "agent_deck_require_session", map[string]any{
+	err := callToolExpectError(t, service.Server(), "agent_deck_require_session", map[string]any{
 		"session_ref":         "coder-ref",
 		"startup_instruction": "listen now",
 		"workdir":             "/tmp",
 	})
-
-	if got := output["startup_instruction_status"]; got != "started_waiting" {
-		t.Fatalf("startup_instruction_status = %v, want started_waiting", got)
+	if err == nil || !strings.Contains(err.Error(), "unexpected additional properties") {
+		t.Fatalf("agent_deck_require_session error = %v, want schema-level startup_instruction validation", err)
 	}
 }
 

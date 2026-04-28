@@ -27,10 +27,9 @@ type agentDeckCreateSessionInput struct {
 }
 
 type agentDeckRequireSessionInput struct {
-	SessionID          string `json:"session_id,omitempty"`
-	SessionRef         string `json:"session_ref,omitempty"`
-	Workdir            string `json:"workdir"`
-	StartupInstruction string `json:"startup_instruction,omitempty"`
+	SessionID  string `json:"session_id,omitempty"`
+	SessionRef string `json:"session_ref,omitempty"`
+	Workdir    string `json:"workdir"`
 }
 
 func (s *Service) registerSessionTools(server *mcp.Server) {
@@ -44,7 +43,7 @@ func (s *Service) registerSessionTools(server *mcp.Server) {
 	}, s.agentDeckCreateSession)
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "agent_deck_require_session",
-		Description: "Require an existing agent-deck session in an explicit workdir. Resolves session_id or session_ref, verifies the existing session already matches the requested workdir, and starts it if it is inactive. Optional startup_instruction is passed only when an inactive session must be started. Does not create sessions.",
+		Description: "Require an existing agent-deck session in an explicit workdir. Resolves session_id or session_ref, verifies the existing session already matches the requested workdir, and starts it if it is inactive. Does not create sessions.",
 	}, s.agentDeckRequireSession)
 }
 
@@ -94,10 +93,9 @@ func validateRequireSessionArgs(req *mcp.CallToolRequest) error {
 	}
 
 	allowedFields := map[string]bool{
-		"session_id":          true,
-		"session_ref":         true,
-		"workdir":             true,
-		"startup_instruction": true,
+		"session_id":  true,
+		"session_ref": true,
+		"workdir":     true,
 	}
 	unexpected := make([]string, 0, len(rawArgs))
 	for field := range rawArgs {

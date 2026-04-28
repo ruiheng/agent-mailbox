@@ -640,7 +640,7 @@ func (m *sessionManager) requireSession(ctx context.Context, input agentDeckRequ
 		return nil, err
 	}
 
-	data, startedSession, notifyNeeded, startupInstructionStatus, err := m.startSessionIfNeeded(ctx, data, strings.TrimSpace(input.StartupInstruction))
+	data, startedSession, notifyNeeded, startupInstructionStatus, err := m.startSessionIfNeeded(ctx, data, "")
 	if err != nil {
 		return nil, err
 	}
