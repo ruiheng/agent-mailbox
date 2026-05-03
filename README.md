@@ -124,6 +124,11 @@ The Go MCP entrypoint keeps the existing tool names:
 - `mailbox_release`
 - `mailbox_defer`
 - `mailbox_fail`
+- `mailbox_group_create`
+- `mailbox_group_add_member`
+- `mailbox_group_remove_member`
+- `mailbox_group_members`
+- `mailbox_address_inspect`
 - `agent_deck_resolve_session`
 - `agent_deck_create_session`
 - `agent_deck_require_session`
@@ -135,6 +140,14 @@ notify.
 `mailbox_forward` forwards exactly one stored message selected by `message_id`
 or `delivery_id` to a new recipient through the normal `mailbox_send` path. It
 reuses the original body, `content_type`, and `schema_version`.
+
+For group mailbox flows over MCP, create a group with
+`mailbox_group_create`, manage people with `mailbox_group_add_member` and
+`mailbox_group_remove_member`, then call `mailbox_send` with `group = true`.
+Use `mailbox_wait` or `mailbox_recv` with one `group/...` address and
+`as_person` to read the group stream. Group reads return compact group message
+payloads and do not use delivery leases, `mailbox_ack`, `mailbox_release`,
+`mailbox_defer`, or `mailbox_fail`.
 
 `agent_deck_create_session` is for lifecycle allocation only. It creates a new
 session, errors if the target already exists, supports explicit group placement

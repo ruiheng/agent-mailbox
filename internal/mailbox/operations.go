@@ -28,6 +28,34 @@ func (o *Operations) ListGroupMessages(ctx context.Context, params GroupListPara
 	return o.store.ListGroupMessages(ctx, params)
 }
 
+func (o *Operations) WaitGroupMessage(ctx context.Context, params GroupWaitParams) (GroupListedMessage, error) {
+	return o.store.WaitGroupMessage(ctx, params)
+}
+
+func (o *Operations) ReceiveGroupMessage(ctx context.Context, params GroupReceiveParams) (GroupReceivedMessage, error) {
+	return o.store.ReceiveGroupMessage(ctx, params)
+}
+
+func (o *Operations) CreateGroup(ctx context.Context, groupAddress string) (GroupRecord, error) {
+	return o.store.CreateGroup(ctx, groupAddress)
+}
+
+func (o *Operations) AddGroupMember(ctx context.Context, groupAddress, person string) (GroupMembershipRecord, error) {
+	return o.store.AddGroupMember(ctx, groupAddress, person)
+}
+
+func (o *Operations) RemoveGroupMember(ctx context.Context, groupAddress, person string) (GroupMembershipRecord, error) {
+	return o.store.RemoveGroupMember(ctx, groupAddress, person)
+}
+
+func (o *Operations) ListGroupMembers(ctx context.Context, groupAddress string) ([]GroupMembershipRecord, error) {
+	return o.store.ListGroupMembers(ctx, groupAddress)
+}
+
+func (o *Operations) InspectAddress(ctx context.Context, address string) (AddressInspection, error) {
+	return o.store.InspectAddress(ctx, address)
+}
+
 func (o *Operations) ListStaleAddresses(ctx context.Context, params StaleAddressesParams) ([]StaleAddress, error) {
 	return o.store.ListStaleAddresses(ctx, params)
 }

@@ -26,6 +26,13 @@ type fakeMailboxService struct {
 	sendFunc                func(context.Context, mailbox.SendParams) (mailbox.SendResult, error)
 	listFunc                func(context.Context, mailbox.ListParams) ([]mailbox.ListedDelivery, error)
 	listGroupMessagesFunc   func(context.Context, mailbox.GroupListParams) ([]mailbox.GroupListedMessage, error)
+	waitGroupMessageFunc    func(context.Context, mailbox.GroupWaitParams) (mailbox.GroupListedMessage, error)
+	receiveGroupMessageFunc func(context.Context, mailbox.GroupReceiveParams) (mailbox.GroupReceivedMessage, error)
+	createGroupFunc         func(context.Context, string) (mailbox.GroupRecord, error)
+	addGroupMemberFunc      func(context.Context, string, string) (mailbox.GroupMembershipRecord, error)
+	removeGroupMemberFunc   func(context.Context, string, string) (mailbox.GroupMembershipRecord, error)
+	listGroupMembersFunc    func(context.Context, string) ([]mailbox.GroupMembershipRecord, error)
+	inspectAddressFunc      func(context.Context, string) (mailbox.AddressInspection, error)
 	listClaimableFunc       func(context.Context, []string) ([]mailbox.ClaimableAddress, error)
 	listStaleAddressesFunc  func(context.Context, mailbox.StaleAddressesParams) ([]mailbox.StaleAddress, error)
 	receiveBatchFunc        func(context.Context, mailbox.ReceiveBatchParams) (mailbox.ReceiveResult, error)
@@ -84,6 +91,16 @@ func TestAgentDeckRequireSessionSchemaOmitsCreateOnlyFields(t *testing.T) {
 	}
 }
 
+func TestMailboxSendSchemaExposesGroup(t *testing.T) {
+	schema, err := jsonschema.For[mailboxSendInput](nil)
+	if err != nil {
+		t.Fatalf("jsonschema.For() error = %v", err)
+	}
+	if _, ok := schema.Properties["group"]; !ok {
+		t.Fatalf("schema.Properties missing group: %v", schema.Properties)
+	}
+}
+
 func (f *fakeMailboxService) Send(ctx context.Context, params mailbox.SendParams) (mailbox.SendResult, error) {
 	if f.sendFunc == nil {
 		f.t.Fatalf("unexpected Send call: %+v", params)
@@ -103,6 +120,55 @@ func (f *fakeMailboxService) ListGroupMessages(ctx context.Context, params mailb
 		f.t.Fatalf("unexpected ListGroupMessages call: %+v", params)
 	}
 	return f.listGroupMessagesFunc(ctx, params)
+}
+
+func (f *fakeMailboxService) WaitGroupMessage(ctx context.Context, params mailbox.GroupWaitParams) (mailbox.GroupListedMessage, error) {
+	if f.waitGroupMessageFunc == nil {
+		f.t.Fatalf("unexpected WaitGroupMessage call: %+v", params)
+	}
+	return f.waitGroupMessageFunc(ctx, params)
+}
+
+func (f *fakeMailboxService) ReceiveGroupMessage(ctx context.Context, params mailbox.GroupReceiveParams) (mailbox.GroupReceivedMessage, error) {
+	if f.receiveGroupMessageFunc == nil {
+		f.t.Fatalf("unexpected ReceiveGroupMessage call: %+v", params)
+	}
+	return f.receiveGroupMessageFunc(ctx, params)
+}
+
+func (f *fakeMailboxService) CreateGroup(ctx context.Context, groupAddress string) (mailbox.GroupRecord, error) {
+	if f.createGroupFunc == nil {
+		f.t.Fatalf("unexpected CreateGroup call: %q", groupAddress)
+	}
+	return f.createGroupFunc(ctx, groupAddress)
+}
+
+func (f *fakeMailboxService) AddGroupMember(ctx context.Context, groupAddress, person string) (mailbox.GroupMembershipRecord, error) {
+	if f.addGroupMemberFunc == nil {
+		f.t.Fatalf("unexpected AddGroupMember call: group=%q person=%q", groupAddress, person)
+	}
+	return f.addGroupMemberFunc(ctx, groupAddress, person)
+}
+
+func (f *fakeMailboxService) RemoveGroupMember(ctx context.Context, groupAddress, person string) (mailbox.GroupMembershipRecord, error) {
+	if f.removeGroupMemberFunc == nil {
+		f.t.Fatalf("unexpected RemoveGroupMember call: group=%q person=%q", groupAddress, person)
+	}
+	return f.removeGroupMemberFunc(ctx, groupAddress, person)
+}
+
+func (f *fakeMailboxService) ListGroupMembers(ctx context.Context, groupAddress string) ([]mailbox.GroupMembershipRecord, error) {
+	if f.listGroupMembersFunc == nil {
+		f.t.Fatalf("unexpected ListGroupMembers call: %q", groupAddress)
+	}
+	return f.listGroupMembersFunc(ctx, groupAddress)
+}
+
+func (f *fakeMailboxService) InspectAddress(ctx context.Context, address string) (mailbox.AddressInspection, error) {
+	if f.inspectAddressFunc == nil {
+		f.t.Fatalf("unexpected InspectAddress call: %q", address)
+	}
+	return f.inspectAddressFunc(ctx, address)
 }
 
 func (f *fakeMailboxService) ListClaimableAddresses(ctx context.Context, addresses []string) ([]mailbox.ClaimableAddress, error) {
@@ -385,6 +451,64 @@ func TestMailboxSendUsesExplicitFromAddressWithoutBoundState(t *testing.T) {
 	}
 	if got := output["from_address"]; got != "agent/sender" {
 		t.Fatalf("from_address = %v, want agent/sender", got)
+	}
+}
+
+func TestMailboxSendGroupModeUsesGroupSendParams(t *testing.T) {
+	mailboxService := &fakeMailboxService{t: t}
+	mailboxService.sendFunc = func(_ context.Context, params mailbox.SendParams) (mailbox.SendResult, error) {
+		if !params.Group {
+			t.Fatal("send group = false, want true")
+		}
+		if params.ToAddress != "group/review" || params.FromAddress != "agent/sender" {
+			t.Fatalf("send params = %+v", params)
+		}
+		return mailbox.SendResult{
+			Mode:             mailbox.SendModeGroup,
+			MessageID:        "msg_group",
+			GroupID:          "grp_1",
+			GroupAddress:     "group/review",
+			EligibleCount:    2,
+			MessageCreatedAt: "2026-04-18T00:00:00Z",
+		}, nil
+	}
+
+	service := newService(Options{
+		MailboxServiceFactory: fakeMailboxServiceFactory{service: mailboxService},
+		CommandRunner: &fakeRunner{t: t, handler: func(args []string, input string) (RunResult, error) {
+			return RunResult{}, errors.New("auto-bind should not run for explicit sender")
+		}},
+		DisableWakeScheduler: true,
+	})
+
+	output := callTool(t, service.Server(), "mailbox_send", map[string]any{
+		"to_address":   "group/review",
+		"from_address": "agent/sender",
+		"subject":      "group update",
+		"body":         "body",
+		"group":        true,
+	})
+
+	if got := output["mode"]; got != mailbox.SendModeGroup {
+		t.Fatalf("mode = %v, want %q", got, mailbox.SendModeGroup)
+	}
+	if got := output["message_id"]; got != "msg_group" {
+		t.Fatalf("message_id = %v, want msg_group", got)
+	}
+	if got := output["group_id"]; got != "grp_1" {
+		t.Fatalf("group_id = %v, want grp_1", got)
+	}
+	if got := output["group_address"]; got != "group/review" {
+		t.Fatalf("group_address = %v, want group/review", got)
+	}
+	if got := output["eligible_count"]; got != float64(2) {
+		t.Fatalf("eligible_count = %v, want 2", got)
+	}
+	if got := output["message_created_at"]; got != "2026-04-18T00:00:00Z" {
+		t.Fatalf("message_created_at = %v, want timestamp", got)
+	}
+	if got := output["delivery_id"]; got != nil {
+		t.Fatalf("delivery_id = %v, want nil", got)
 	}
 }
 
@@ -2057,6 +2181,114 @@ func TestMailboxLifecycleToolsUseDirectMailboxService(t *testing.T) {
 	}
 }
 
+func TestMailboxGroupMCPRuntimeFlow(t *testing.T) {
+	t.Parallel()
+
+	stateDir := filepath.Join(t.TempDir(), "mailbox-state")
+	service := newService(Options{
+		StateDir: stateDir,
+		CommandRunner: &fakeRunner{t: t, handler: func(args []string, input string) (RunResult, error) {
+			t.Fatalf("unexpected command call: %v", args)
+			return RunResult{}, nil
+		}},
+		DisableWakeScheduler:  true,
+		DisableLeaseRenewLoop: true,
+	})
+	service.state.boundAddresses = []string{"agent/sender"}
+	service.state.defaultSender = "agent/sender"
+	service.state.autoBindAttempted = true
+
+	created := callTool(t, service.Server(), "mailbox_group_create", map[string]any{
+		"group_address": "group/review",
+	})
+	group := created["group"].(map[string]any)
+	if group["address"] != "group/review" {
+		t.Fatalf("created group address = %v, want group/review", group["address"])
+	}
+
+	callTool(t, service.Server(), "mailbox_group_add_member", map[string]any{
+		"group_address": "group/review",
+		"person":        "alice",
+	})
+	callTool(t, service.Server(), "mailbox_group_add_member", map[string]any{
+		"group_address": "group/review",
+		"person":        "bob",
+	})
+
+	send := callTool(t, service.Server(), "mailbox_send", map[string]any{
+		"to_address": "group/review",
+		"subject":    "group update",
+		"body":       "group body",
+		"group":      true,
+	})
+	if got := send["mode"]; got != mailbox.SendModeGroup {
+		t.Fatalf("send mode = %v, want group", got)
+	}
+	if got := send["delivery_id"]; got != nil {
+		t.Fatalf("group send delivery_id = %v, want nil", got)
+	}
+
+	wait := callTool(t, service.Server(), "mailbox_wait", map[string]any{
+		"addresses": []string{"group/review"},
+		"as_person": "alice",
+	})
+	if got := wait["status"]; got != "message_available" {
+		t.Fatalf("wait status = %v, want message_available", got)
+	}
+	waitMessage := wait["message"].(map[string]any)
+	if waitMessage["read"] != false {
+		t.Fatalf("wait read = %v, want false", waitMessage["read"])
+	}
+	if _, ok := waitMessage["delivery_id"]; ok {
+		t.Fatalf("group wait exposed delivery_id: %v", waitMessage)
+	}
+
+	recv := callTool(t, service.Server(), "mailbox_recv", map[string]any{
+		"addresses": []string{"group/review"},
+		"as_person": "alice",
+	})
+	if got := recv["status"]; got != "received" {
+		t.Fatalf("recv status = %v, want received", got)
+	}
+	recvMessage := recv["message"].(map[string]any)
+	if recvMessage["body"] != "group body" {
+		t.Fatalf("recv body = %v, want group body", recvMessage["body"])
+	}
+	if _, ok := recvMessage["lease_token"]; ok {
+		t.Fatalf("group recv exposed lease_token: %v", recvMessage)
+	}
+	if service.activeLeases.hasTrackedLeases() {
+		t.Fatal("group recv tracked active lease")
+	}
+
+	list := callTool(t, service.Server(), "mailbox_list", map[string]any{
+		"address":   "group/review",
+		"as_person": "alice",
+	})
+	deliveries := list["deliveries"].([]any)
+	if len(deliveries) != 1 {
+		t.Fatalf("group list deliveries = %d, want 1", len(deliveries))
+	}
+	listed := deliveries[0].(map[string]any)
+	if listed["read"] != true {
+		t.Fatalf("listed read = %v, want true after recv", listed["read"])
+	}
+
+	members := callTool(t, service.Server(), "mailbox_group_members", map[string]any{
+		"group_address": "group/review",
+	})
+	if got := len(members["memberships"].([]any)); got != 2 {
+		t.Fatalf("group members = %d, want 2", got)
+	}
+
+	inspect := callTool(t, service.Server(), "mailbox_address_inspect", map[string]any{
+		"address": "group/review",
+	})
+	if got := inspect["inspection"].(map[string]any)["kind"]; got != mailbox.AddressKindGroup {
+		t.Fatalf("inspect kind = %v, want group", got)
+	}
+}
+
 func TestMailboxRecvExposesForwardedFromAddressInCompactPayload(t *testing.T) {
 	forwardedFromAddress := "agent/source"
 	mailboxService := &fakeMailboxService{t: t}
@@ -2182,6 +2414,260 @@ func TestMailboxListAsPersonExposesForwardedFromAddress(t *testing.T) {
 		t.Fatalf("forwarded_from_address = %v, want agent/source", got)
 	}
 	assertMCPMapOmitsForwardedMessageID(t, delivery)
+}
+
+func TestMailboxWaitAsPersonUsesGroupWaitWithoutDeliveryLease(t *testing.T) {
+	mailboxService := &fakeMailboxService{t: t}
+	mailboxService.waitGroupMessageFunc = func(_ context.Context, params mailbox.GroupWaitParams) (mailbox.GroupListedMessage, error) {
+		if params.Address != "group/review" || params.Person != "alice" || params.Timeout != 25*time.Millisecond {
+			t.Fatalf("WaitGroupMessage params = %+v", params)
+		}
+		return mailbox.GroupListedMessage{
+			MessageID:        "msg_group",
+			GroupID:          "grp_1",
+			GroupAddress:     "group/review",
+			Person:           "alice",
+			MessageCreatedAt: "2026-04-18T00:00:00Z",
+			Subject:          "review",
+			ContentType:      "text/plain",
+			Read:             false,
+			ReadCount:        0,
+			EligibleCount:    1,
+		}, nil
+	}
+
+	service := newService(Options{
+		MailboxServiceFactory: fakeMailboxServiceFactory{service: mailboxService},
+		CommandRunner: &fakeRunner{t: t, handler: func(args []string, input string) (RunResult, error) {
+			t.Fatalf("unexpected command call: %v", args)
+			return RunResult{}, nil
+		}},
+		DisableWakeScheduler: true,
+	})
+	service.state.autoBindAttempted = true
+
+	wait := callTool(t, service.Server(), "mailbox_wait", map[string]any{
+		"addresses": []string{"group/review"},
+		"as_person": "alice",
+		"timeout":   "25ms",
+	})
+	if got := wait["status"]; got != "message_available" {
+		t.Fatalf("status = %v, want message_available", got)
+	}
+	message := wait["message"].(map[string]any)
+	if got := message["message_id"]; got != "msg_group" {
+		t.Fatalf("message_id = %v, want msg_group", got)
+	}
+	if _, ok := message["delivery_id"]; ok {
+		t.Fatalf("group wait exposed delivery_id: %v", message)
+	}
+	if _, ok := message["lease_token"]; ok {
+		t.Fatalf("group wait exposed lease_token: %v", message)
+	}
+}
+
+func TestMailboxRecvAsPersonUsesGroupRecvWithoutTrackingLease(t *testing.T) {
+	mailboxService := &fakeMailboxService{t: t}
+	mailboxService.receiveGroupMessageFunc = func(_ context.Context, params mailbox.GroupReceiveParams) (mailbox.GroupReceivedMessage, error) {
+		if params.Address != "group/review" || params.Person != "alice" {
+			t.Fatalf("ReceiveGroupMessage params = %+v", params)
+		}
+		return mailbox.GroupReceivedMessage{
+			MessageID:        "msg_group",
+			GroupID:          "grp_1",
+			GroupAddress:     "group/review",
+			Person:           "alice",
+			MessageCreatedAt: "2026-04-18T00:00:00Z",
+			Subject:          "review",
+			ContentType:      "text/plain",
+			Body:             "body",
+			ReadCount:        1,
+			EligibleCount:    1,
+			FirstReadAt:      "2026-04-18T00:01:00Z",
+		}, nil
+	}
+
+	service := newService(Options{
+		MailboxServiceFactory: fakeMailboxServiceFactory{service: mailboxService},
+		CommandRunner: &fakeRunner{t: t, handler: func(args []string, input string) (RunResult, error) {
+			t.Fatalf("unexpected command call: %v", args)
+			return RunResult{}, nil
+		}},
+		DisableLeaseRenewLoop: true,
+		DisableWakeScheduler:  true,
+	})
+	service.state.autoBindAttempted = true
+
+	recv := callTool(t, service.Server(), "mailbox_recv", map[string]any{
+		"addresses": []string{"group/review"},
+		"as_person": "alice",
+	})
+	if got := recv["status"]; got != "received" {
+		t.Fatalf("status = %v, want received", got)
+	}
+	message := recv["message"].(map[string]any)
+	if got := message["body"]; got != "body" {
+		t.Fatalf("body = %v, want body", got)
+	}
+	if _, ok := message["delivery_id"]; ok {
+		t.Fatalf("group recv exposed delivery_id: %v", message)
+	}
+	if _, ok := message["lease_token"]; ok {
+		t.Fatalf("group recv exposed lease_token: %v", message)
+	}
+	if service.activeLeases.hasTrackedLeases() {
+		t.Fatal("group recv tracked a personal delivery lease")
+	}
+}
+
+func TestMailboxGroupReadRequiresSingleGroupAddress(t *testing.T) {
+	service := newService(Options{
+		MailboxServiceFactory: fakeMailboxServiceFactory{service: &fakeMailboxService{t: t}},
+		CommandRunner: &fakeRunner{t: t, handler: func(args []string, input string) (RunResult, error) {
+			t.Fatalf("unexpected command call: %v", args)
+			return RunResult{}, nil
+		}},
+		DisableWakeScheduler: true,
+	})
+	service.state.autoBindAttempted = true
+
+	err := callToolExpectError(t, service.Server(), "mailbox_recv", map[string]any{
+		"addresses": []string{"group/one", "group/two"},
+		"as_person": "alice",
+	})
+	if err == nil || !strings.Contains(err.Error(), "requires exactly one group address") {
+		t.Fatalf("mailbox_recv error = %v, want single group address validation", err)
+	}
+
+	err = callToolExpectError(t, service.Server(), "mailbox_wait", map[string]any{
+		"addresses": []string{"agent/alice"},
+		"as_person": "alice",
+	})
+	if err == nil || !strings.Contains(err.Error(), "requires a group address") {
+		t.Fatalf("mailbox_wait error = %v, want group address validation", err)
+	}
+}
+
+func TestMailboxGroupControlToolsUseMailboxService(t *testing.T) {
+	mailboxService := &fakeMailboxService{t: t}
+	mailboxService.createGroupFunc = func(_ context.Context, groupAddress string) (mailbox.GroupRecord, error) {
+		if groupAddress != "group/review" {
+			t.Fatalf("CreateGroup address = %q, want group/review", groupAddress)
+		}
+		return mailbox.GroupRecord{GroupID: "grp_1", Address: groupAddress, CreatedAt: "2026-04-18T00:00:00Z"}, nil
+	}
+	mailboxService.addGroupMemberFunc = func(_ context.Context, groupAddress, person string) (mailbox.GroupMembershipRecord, error) {
+		if groupAddress != "group/review" || person != "alice" {
+			t.Fatalf("AddGroupMember args = group=%q person=%q", groupAddress, person)
+		}
+		return mailbox.GroupMembershipRecord{
+			MembershipID: "gm_1",
+			GroupID:      "grp_1",
+			GroupAddress: groupAddress,
+			PersonID:     "person_1",
+			Person:       person,
+			JoinedAt:     "2026-04-18T00:01:00Z",
+			Active:       true,
+		}, nil
+	}
+	mailboxService.listGroupMembersFunc = func(_ context.Context, groupAddress string) ([]mailbox.GroupMembershipRecord, error) {
+		if groupAddress != "group/review" {
+			t.Fatalf("ListGroupMembers address = %q, want group/review", groupAddress)
+		}
+		return []mailbox.GroupMembershipRecord{{
+			MembershipID: "gm_1",
+			GroupID:      "grp_1",
+			GroupAddress: groupAddress,
+			PersonID:     "person_1",
+			Person:       "alice",
+			JoinedAt:     "2026-04-18T00:01:00Z",
+			Active:       true,
+		}}, nil
+	}
+	mailboxService.removeGroupMemberFunc = func(_ context.Context, groupAddress, person string) (mailbox.GroupMembershipRecord, error) {
+		if groupAddress != "group/review" || person != "alice" {
+			t.Fatalf("RemoveGroupMember args = group=%q person=%q", groupAddress, person)
+		}
+		leftAt := "2026-04-18T00:02:00Z"
+		return mailbox.GroupMembershipRecord{
+			MembershipID: "gm_1",
+			GroupID:      "grp_1",
+			GroupAddress: groupAddress,
+			PersonID:     "person_1",
+			Person:       person,
+			JoinedAt:     "2026-04-18T00:01:00Z",
+			LeftAt:       &leftAt,
+			Active:       false,
+		}, nil
+	}
+	mailboxService.inspectAddressFunc = func(_ context.Context, address string) (mailbox.AddressInspection, error) {
+		if address != "group/review" {
+			t.Fatalf("InspectAddress address = %q, want group/review", address)
+		}
+		groupID := "grp_1"
+		return mailbox.AddressInspection{Address: address, Kind: mailbox.AddressKindGroup, GroupID: &groupID}, nil
+	}
+
+	service := newService(Options{
+		MailboxServiceFactory: fakeMailboxServiceFactory{service: mailboxService},
+		CommandRunner: &fakeRunner{t: t, handler: func(args []string, input string) (RunResult, error) {
+			t.Fatalf("unexpected command call: %v", args)
+			return RunResult{}, nil
+		}},
+		DisableWakeScheduler: true,
+	})
+	service.state.autoBindAttempted = true
+
+	created := callTool(t, service.Server(), "mailbox_group_create", map[string]any{
+		"group_address": "group/review",
+	})
+	if got := created["status"]; got != "created" {
+		t.Fatalf("create status = %v, want created", got)
+	}
+	if got := created["group"].(map[string]any)["group_id"]; got != "grp_1" {
+		t.Fatalf("created group_id = %v, want grp_1", got)
+	}
+
+	added := callTool(t, service.Server(), "mailbox_group_add_member", map[string]any{
+		"group_address": "group/review",
+		"person":        "alice",
+	})
+	if got := added["status"]; got != "added" {
+		t.Fatalf("add status = %v, want added", got)
+	}
+	if got := added["membership"].(map[string]any)["person"]; got != "alice" {
+		t.Fatalf("added person = %v, want alice", got)
+	}
+
+	members := callTool(t, service.Server(), "mailbox_group_members", map[string]any{
+		"group_address": "group/review",
+	})
+	memberships := members["memberships"].([]any)
+	if len(memberships) != 1 {
+		t.Fatalf("memberships = %d, want 1", len(memberships))
+	}
+
+	removed := callTool(t, service.Server(), "mailbox_group_remove_member", map[string]any{
+		"group_address": "group/review",
+		"person":        "alice",
+	})
+	if got := removed["status"]; got != "removed" {
+		t.Fatalf("remove status = %v, want removed", got)
+	}
+	if got := removed["membership"].(map[string]any)["active"]; got != false {
+		t.Fatalf("removed active = %v, want false", got)
+	}
+
+	inspected := callTool(t, service.Server(), "mailbox_address_inspect", map[string]any{
+		"address": "group/review",
+	})
+	inspection := inspected["inspection"].(map[string]any)
+	if got := inspection["kind"]; got != mailbox.AddressKindGroup {
+		t.Fatalf("kind = %v, want group", got)
+	}
+	if got := inspection["group_id"]; got != "grp_1" {
+		t.Fatalf("group_id = %v, want grp_1", got)
+	}
 }
 
 func TestMailboxRecvStartsLeaseRenewLoopWithShortTTL(t *testing.T) {
