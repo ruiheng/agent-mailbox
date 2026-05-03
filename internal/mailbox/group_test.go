@@ -99,6 +99,79 @@ func TestGroupMembershipLifecycle(t *testing.T) {
 	}
 }
 
+func TestGroupNotificationSubscriberLifecycle(t *testing.T) {
+	t.Parallel()
+
+	runtime, err := OpenRuntime(context.Background(), filepath.Join(t.TempDir(), "mailbox-state"))
+	if err != nil {
+		t.Fatalf("OpenRuntime() error = %v", err)
+	}
+	defer runtime.Close()
+
+	store := runtime.Store()
+	group, err := store.CreateGroup(context.Background(), "group/ops")
+	if err != nil {
+		t.Fatalf("CreateGroup() error = %v", err)
+	}
+
+	firstSubscriber, err := store.AddGroupNotificationSubscriber(context.Background(), group.Address, "agent-deck/moderator", "moderator")
+	if err != nil {
+		t.Fatalf("AddGroupNotificationSubscriber(first) error = %v", err)
+	}
+	if !firstSubscriber.Active {
+		t.Fatal("first subscriber active = false, want true")
+	}
+	if firstSubscriber.NotifyAddress != "agent-deck/moderator" {
+		t.Fatalf("notify_address = %q, want agent-deck/moderator", firstSubscriber.NotifyAddress)
+	}
+	if firstSubscriber.Person != "moderator" {
+		t.Fatalf("person = %q, want moderator", firstSubscriber.Person)
+	}
+
+	if _, err := store.AddGroupNotificationSubscriber(context.Background(), group.Address, "agent-deck/moderator", "moderator"); !errors.Is(err, ErrActiveSubscriberExists) {
+		t.Fatalf("AddGroupNotificationSubscriber(duplicate) error = %v, want ErrActiveSubscriberExists", err)
+	}
+
+	subscribers, err := store.ListGroupNotificationSubscribers(context.Background(), group.Address)
+	if err != nil {
+		t.Fatalf("ListGroupNotificationSubscribers(active) error = %v", err)
+	}
+	if len(subscribers) != 1 {
+		t.Fatalf("len(active subscribers) = %d, want 1", len(subscribers))
+	}
+
+	removedSubscriber, err := store.RemoveGroupNotificationSubscriber(context.Background(), group.Address, "agent-deck/moderator")
+	if err != nil {
+		t.Fatalf("RemoveGroupNotificationSubscriber() error = %v", err)
+	}
+	if removedSubscriber.Active {
+		t.Fatal("removed subscriber active = true, want false")
+	}
+	if removedSubscriber.RemovedAt == nil || strings.TrimSpace(*removedSubscriber.RemovedAt) == "" {
+		t.Fatalf("removed subscriber removed_at = %v, want non-empty timestamp", removedSubscriber.RemovedAt)
+	}
+
+	if _, err := store.RemoveGroupNotificationSubscriber(context.Background(), group.Address, "agent-deck/moderator"); !errors.Is(err, ErrActiveSubscriberMissing) {
+		t.Fatalf("RemoveGroupNotificationSubscriber(missing) error = %v, want ErrActiveSubscriberMissing", err)
+	}
+
+	subscribers, err = store.ListGroupNotificationSubscribers(context.Background(), group.Address)
+	if err != nil {
+		t.Fatalf("ListGroupNotificationSubscribers(after remove) error = %v", err)
+	}
+	if len(subscribers) != 0 {
+		t.Fatalf("len(active subscribers after remove) = %d, want 0", len(subscribers))
+	}
+
+	secondSubscriber, err := store.AddGroupNotificationSubscriber(context.Background(), group.Address, "agent-deck/moderator", "moderator")
+	if err != nil {
+		t.Fatalf("AddGroupNotificationSubscriber(readd) error = %v", err)
+	}
+	if secondSubscriber.SubscriberID == firstSubscriber.SubscriberID {
+		t.Fatalf("readd subscriber_id = %q, want a new subscriber id", secondSubscriber.SubscriberID)
+	}
+}
+
 func TestReadMessageReturnsGroupMessageBodyWithoutRecordingRead(t *testing.T) {
 	t.Parallel()
 

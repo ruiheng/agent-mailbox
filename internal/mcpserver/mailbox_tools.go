@@ -77,6 +77,12 @@ type mailboxGroupMemberInput struct {
 	Person       string `json:"person"`
 }
 
+type mailboxGroupSubscriberInput struct {
+	GroupAddress  string `json:"group_address"`
+	NotifyAddress string `json:"notify_address"`
+	Person        string `json:"person,omitempty"`
+}
+
 type mailboxAddressInspectInput struct {
 	Address string `json:"address"`
 }
@@ -169,6 +175,18 @@ func (s *Service) registerMailboxTools(server *mcp.Server) {
 		Description: "List group mailbox memberships.",
 	}, s.mailboxGroupMembers)
 	mcp.AddTool(server, &mcp.Tool{
+		Name:        "mailbox_group_add_subscriber",
+		Description: "Add a best-effort notification target for group messages.",
+	}, s.mailboxGroupAddSubscriber)
+	mcp.AddTool(server, &mcp.Tool{
+		Name:        "mailbox_group_remove_subscriber",
+		Description: "Remove a group notification target.",
+	}, s.mailboxGroupRemoveSubscriber)
+	mcp.AddTool(server, &mcp.Tool{
+		Name:        "mailbox_group_subscribers",
+		Description: "List active group notification targets.",
+	}, s.mailboxGroupSubscribers)
+	mcp.AddTool(server, &mcp.Tool{
 		Name:        "mailbox_address_inspect",
 		Description: "Inspect whether an address is an endpoint, group, or unbound.",
 	}, s.mailboxAddressInspect)
@@ -210,6 +228,7 @@ func (s *Service) sendMailboxMessage(ctx context.Context, input mailboxSendInput
 	if err != nil {
 		return nil, err
 	}
+	input.FromAddress = fromAddress
 
 	sendResult, err := withMailboxService(ctx, s.mailboxServices, func(service mailboxService) (mailbox.SendResult, error) {
 		return service.Send(ctx, mailbox.SendParams{
@@ -228,7 +247,7 @@ func (s *Service) sendMailboxMessage(ctx context.Context, input mailboxSendInput
 		return nil, err
 	}
 
-	notify := s.notifications.notifyMailboxSend(ctx, input)
+	notify := s.notifyMailboxSend(ctx, input, sendResult)
 	var notifyScheme any
 	if notify.Scheme != "" {
 		notifyScheme = notify.Scheme
@@ -259,6 +278,23 @@ func (s *Service) sendMailboxMessage(ctx context.Context, input mailboxSendInput
 		out["delivery_id"] = sendResult.DeliveryID
 	}
 	return out, nil
+}
+
+func (s *Service) notifyMailboxSend(ctx context.Context, input mailboxSendInput, sendResult mailbox.SendResult) notificationOutcome {
+	if sendResult.Mode != mailbox.SendModeGroup {
+		return s.notifications.notifyMailboxSend(ctx, input)
+	}
+	subscribers, err := withMailboxService(ctx, s.mailboxServices, func(service mailboxService) ([]mailbox.GroupNotificationSubscriberRecord, error) {
+		return service.ListGroupNotificationSubscribers(ctx, sendResult.GroupAddress)
+	})
+	if err != nil {
+		return notificationOutcome{
+			Status: "failed",
+			Scheme: "group_subscribers",
+			Err:    err,
+		}
+	}
+	return s.notifications.notifyGroupSubscribers(ctx, input, subscribers)
 }
 
 func (s *Service) mailboxSend(ctx context.Context, _ *mcp.CallToolRequest, input mailboxSendInput) (*mcp.CallToolResult, map[string]any, error) {
@@ -728,6 +764,46 @@ func (s *Service) mailboxGroupMembers(ctx context.Context, _ *mcp.CallToolReques
 		"status":      "listed",
 		"group":       input.GroupAddress,
 		"memberships": memberships,
+	})
+}
+
+func (s *Service) mailboxGroupAddSubscriber(ctx context.Context, _ *mcp.CallToolRequest, input mailboxGroupSubscriberInput) (*mcp.CallToolResult, map[string]any, error) {
+	subscriber, err := withMailboxService(ctx, s.mailboxServices, func(service mailboxService) (mailbox.GroupNotificationSubscriberRecord, error) {
+		return service.AddGroupNotificationSubscriber(ctx, input.GroupAddress, input.NotifyAddress, input.Person)
+	})
+	if err != nil {
+		return nil, nil, err
+	}
+	return s.mailboxMutationToolResult(ctx, map[string]any{
+		"status":     "added",
+		"subscriber": subscriber,
+	})
+}
+
+func (s *Service) mailboxGroupRemoveSubscriber(ctx context.Context, _ *mcp.CallToolRequest, input mailboxGroupSubscriberInput) (*mcp.CallToolResult, map[string]any, error) {
+	subscriber, err := withMailboxService(ctx, s.mailboxServices, func(service mailboxService) (mailbox.GroupNotificationSubscriberRecord, error) {
+		return service.RemoveGroupNotificationSubscriber(ctx, input.GroupAddress, input.NotifyAddress)
+	})
+	if err != nil {
+		return nil, nil, err
+	}
+	return s.mailboxMutationToolResult(ctx, map[string]any{
+		"status":     "removed",
+		"subscriber": subscriber,
+	})
+}
+
+func (s *Service) mailboxGroupSubscribers(ctx context.Context, _ *mcp.CallToolRequest, input mailboxGroupInput) (*mcp.CallToolResult, map[string]any, error) {
+	subscribers, err := withMailboxService(ctx, s.mailboxServices, func(service mailboxService) ([]mailbox.GroupNotificationSubscriberRecord, error) {
+		return service.ListGroupNotificationSubscribers(ctx, input.GroupAddress)
+	})
+	if err != nil {
+		return nil, nil, err
+	}
+	return s.mailboxToolResult(ctx, map[string]any{
+		"status":      "listed",
+		"group":       input.GroupAddress,
+		"subscribers": subscribers,
 	})
 }
 

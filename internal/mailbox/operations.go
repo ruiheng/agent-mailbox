@@ -52,6 +52,18 @@ func (o *Operations) ListGroupMembers(ctx context.Context, groupAddress string) 
 	return o.store.ListGroupMembers(ctx, groupAddress)
 }
 
+func (o *Operations) AddGroupNotificationSubscriber(ctx context.Context, groupAddress, notifyAddress, person string) (GroupNotificationSubscriberRecord, error) {
+	return o.store.AddGroupNotificationSubscriber(ctx, groupAddress, notifyAddress, person)
+}
+
+func (o *Operations) RemoveGroupNotificationSubscriber(ctx context.Context, groupAddress, notifyAddress string) (GroupNotificationSubscriberRecord, error) {
+	return o.store.RemoveGroupNotificationSubscriber(ctx, groupAddress, notifyAddress)
+}
+
+func (o *Operations) ListGroupNotificationSubscribers(ctx context.Context, groupAddress string) ([]GroupNotificationSubscriberRecord, error) {
+	return o.store.ListGroupNotificationSubscribers(ctx, groupAddress)
+}
+
 func (o *Operations) InspectAddress(ctx context.Context, address string) (AddressInspection, error) {
 	return o.store.InspectAddress(ctx, address)
 }

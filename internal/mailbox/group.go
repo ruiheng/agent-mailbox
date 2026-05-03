@@ -22,6 +22,8 @@ var (
 	ErrAddressReservedByEndpoint = errors.New("address already registered as endpoint")
 	ErrActiveMembershipExists    = errors.New("active group membership already exists")
 	ErrActiveMembershipMissing   = errors.New("active group membership not found")
+	ErrActiveSubscriberExists    = errors.New("active group notification subscriber already exists")
+	ErrActiveSubscriberMissing   = errors.New("active group notification subscriber not found")
 )
 
 type PersonRecord struct {
@@ -45,6 +47,17 @@ type GroupMembershipRecord struct {
 	JoinedAt     string  `json:"joined_at"`
 	LeftAt       *string `json:"left_at,omitempty"`
 	Active       bool    `json:"active"`
+}
+
+type GroupNotificationSubscriberRecord struct {
+	SubscriberID  string  `json:"subscriber_id"`
+	GroupID       string  `json:"group_id"`
+	GroupAddress  string  `json:"group_address"`
+	NotifyAddress string  `json:"notify_address"`
+	Person        string  `json:"person,omitempty"`
+	CreatedAt     string  `json:"created_at"`
+	RemovedAt     *string `json:"removed_at,omitempty"`
+	Active        bool    `json:"active"`
 }
 
 type AddressInspection struct {
@@ -322,6 +335,201 @@ ORDER BY gm.joined_at ASC, gm.membership_id ASC
 		return nil, fmt.Errorf("iterate members for group %q: %w", groupAddress, err)
 	}
 	return memberships, nil
+}
+
+func (s *Store) AddGroupNotificationSubscriber(ctx context.Context, groupAddress, notifyAddress, person string) (GroupNotificationSubscriberRecord, error) {
+	rawGroupAddress := groupAddress
+	groupAddress, err := NormalizeAddress(rawGroupAddress)
+	if err != nil {
+		if strings.TrimSpace(rawGroupAddress) == "" {
+			return GroupNotificationSubscriberRecord{}, errors.New("group address is required")
+		}
+		return GroupNotificationSubscriberRecord{}, err
+	}
+	rawNotifyAddress := notifyAddress
+	notifyAddress, err = NormalizeAddress(rawNotifyAddress)
+	if err != nil {
+		if strings.TrimSpace(rawNotifyAddress) == "" {
+			return GroupNotificationSubscriberRecord{}, errors.New("notify address is required")
+		}
+		return GroupNotificationSubscriberRecord{}, err
+	}
+	person = strings.TrimSpace(person)
+
+	tx, err := s.writeDB.BeginTx(ctx, nil)
+	if err != nil {
+		return GroupNotificationSubscriberRecord{}, fmt.Errorf("begin add-subscriber transaction: %w", err)
+	}
+	defer tx.Rollback()
+
+	group, found, err := lookupGroupRecord(ctx, tx, groupAddress)
+	if err != nil {
+		return GroupNotificationSubscriberRecord{}, fmt.Errorf("load group %q: %w", groupAddress, err)
+	}
+	if !found {
+		return GroupNotificationSubscriberRecord{}, fmt.Errorf("group %q: %w", groupAddress, ErrGroupNotFound)
+	}
+
+	subscriberID, err := newPrefixedID("gns")
+	if err != nil {
+		return GroupNotificationSubscriberRecord{}, err
+	}
+	createdAt := formatTimestamp(s.now())
+
+	result, err := tx.ExecContext(ctx, `
+INSERT OR IGNORE INTO group_notification_subscribers (
+  subscriber_id,
+  group_id,
+  notify_address,
+  person,
+  created_at,
+  removed_at,
+  metadata_json
+) VALUES (?, ?, ?, ?, ?, NULL, '{}')
+`, subscriberID, group.GroupID, notifyAddress, person, createdAt)
+	if err != nil {
+		return GroupNotificationSubscriberRecord{}, fmt.Errorf("insert subscriber for group %q notify %q: %w", groupAddress, notifyAddress, err)
+	}
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return GroupNotificationSubscriberRecord{}, fmt.Errorf("read add-subscriber rows affected: %w", err)
+	}
+	if rowsAffected == 0 {
+		if _, found, err := lookupActiveGroupNotificationSubscriber(ctx, tx, group.GroupID, notifyAddress); err != nil {
+			return GroupNotificationSubscriberRecord{}, fmt.Errorf("check active subscriber for group %q notify %q: %w", groupAddress, notifyAddress, err)
+		} else if found {
+			return GroupNotificationSubscriberRecord{}, fmt.Errorf("group %q notify %q: %w", groupAddress, notifyAddress, ErrActiveSubscriberExists)
+		}
+		return GroupNotificationSubscriberRecord{}, fmt.Errorf("add subscriber group %q notify %q: subscriber insert did not apply", groupAddress, notifyAddress)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return GroupNotificationSubscriberRecord{}, fmt.Errorf("commit add-subscriber transaction: %w", err)
+	}
+
+	return GroupNotificationSubscriberRecord{
+		SubscriberID:  subscriberID,
+		GroupID:       group.GroupID,
+		GroupAddress:  group.Address,
+		NotifyAddress: notifyAddress,
+		Person:        person,
+		CreatedAt:     createdAt,
+		Active:        true,
+	}, nil
+}
+
+func (s *Store) RemoveGroupNotificationSubscriber(ctx context.Context, groupAddress, notifyAddress string) (GroupNotificationSubscriberRecord, error) {
+	rawGroupAddress := groupAddress
+	groupAddress, err := NormalizeAddress(rawGroupAddress)
+	if err != nil {
+		if strings.TrimSpace(rawGroupAddress) == "" {
+			return GroupNotificationSubscriberRecord{}, errors.New("group address is required")
+		}
+		return GroupNotificationSubscriberRecord{}, err
+	}
+	rawNotifyAddress := notifyAddress
+	notifyAddress, err = NormalizeAddress(rawNotifyAddress)
+	if err != nil {
+		if strings.TrimSpace(rawNotifyAddress) == "" {
+			return GroupNotificationSubscriberRecord{}, errors.New("notify address is required")
+		}
+		return GroupNotificationSubscriberRecord{}, err
+	}
+
+	tx, err := s.writeDB.BeginTx(ctx, nil)
+	if err != nil {
+		return GroupNotificationSubscriberRecord{}, fmt.Errorf("begin remove-subscriber transaction: %w", err)
+	}
+	defer tx.Rollback()
+
+	group, found, err := lookupGroupRecord(ctx, tx, groupAddress)
+	if err != nil {
+		return GroupNotificationSubscriberRecord{}, fmt.Errorf("load group %q: %w", groupAddress, err)
+	}
+	if !found {
+		return GroupNotificationSubscriberRecord{}, fmt.Errorf("group %q: %w", groupAddress, ErrGroupNotFound)
+	}
+
+	subscriber, found, err := lookupActiveGroupNotificationSubscriber(ctx, tx, group.GroupID, notifyAddress)
+	if err != nil {
+		return GroupNotificationSubscriberRecord{}, fmt.Errorf("load active subscriber for group %q notify %q: %w", groupAddress, notifyAddress, err)
+	}
+	if !found {
+		return GroupNotificationSubscriberRecord{}, fmt.Errorf("group %q notify %q: %w", groupAddress, notifyAddress, ErrActiveSubscriberMissing)
+	}
+
+	removedAt := formatTimestamp(s.now())
+	result, err := tx.ExecContext(ctx, `
+UPDATE group_notification_subscribers
+SET removed_at = ?
+WHERE subscriber_id = ?
+  AND removed_at IS NULL
+`, removedAt, subscriber.SubscriberID)
+	if err != nil {
+		return GroupNotificationSubscriberRecord{}, fmt.Errorf("close subscriber %q: %w", subscriber.SubscriberID, err)
+	}
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return GroupNotificationSubscriberRecord{}, fmt.Errorf("read remove-subscriber rows affected: %w", err)
+	}
+	if rowsAffected != 1 {
+		return GroupNotificationSubscriberRecord{}, fmt.Errorf("close subscriber %q: changed while updating", subscriber.SubscriberID)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return GroupNotificationSubscriberRecord{}, fmt.Errorf("commit remove-subscriber transaction: %w", err)
+	}
+
+	subscriber.RemovedAt = &removedAt
+	subscriber.Active = false
+	return subscriber, nil
+}
+
+func (s *Store) ListGroupNotificationSubscribers(ctx context.Context, groupAddress string) ([]GroupNotificationSubscriberRecord, error) {
+	rawGroupAddress := groupAddress
+	groupAddress, err := NormalizeAddress(rawGroupAddress)
+	if err != nil {
+		if strings.TrimSpace(rawGroupAddress) == "" {
+			return nil, errors.New("group address is required")
+		}
+		return nil, err
+	}
+
+	group, found, err := lookupGroupRecord(ctx, s.readDB, groupAddress)
+	if err != nil {
+		return nil, fmt.Errorf("load group %q: %w", groupAddress, err)
+	}
+	if !found {
+		return nil, fmt.Errorf("group %q: %w", groupAddress, ErrGroupNotFound)
+	}
+
+	rows, err := s.readDB.QueryContext(ctx, `
+SELECT subscriber_id, notify_address, person, created_at
+FROM group_notification_subscribers
+WHERE group_id = ?
+  AND removed_at IS NULL
+ORDER BY created_at ASC, subscriber_id ASC
+`, group.GroupID)
+	if err != nil {
+		return nil, fmt.Errorf("list subscribers for group %q: %w", groupAddress, err)
+	}
+	defer rows.Close()
+
+	var subscribers []GroupNotificationSubscriberRecord
+	for rows.Next() {
+		var record GroupNotificationSubscriberRecord
+		if err := rows.Scan(&record.SubscriberID, &record.NotifyAddress, &record.Person, &record.CreatedAt); err != nil {
+			return nil, fmt.Errorf("scan subscriber for group %q: %w", groupAddress, err)
+		}
+		record.GroupID = group.GroupID
+		record.GroupAddress = group.Address
+		record.Active = true
+		subscribers = append(subscribers, record)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate subscribers for group %q: %w", groupAddress, err)
+	}
+	return subscribers, nil
 }
 
 func (s *Store) InspectAddress(ctx context.Context, address string) (AddressInspection, error) {
@@ -742,6 +950,29 @@ WHERE gm.group_id = ?
 	if leftAt.Valid {
 		record.LeftAt = &leftAt.String
 	}
+	return record, true, nil
+}
+
+func lookupActiveGroupNotificationSubscriber(ctx context.Context, querier interface {
+	QueryRowContext(context.Context, string, ...any) *sql.Row
+}, groupID, notifyAddress string) (GroupNotificationSubscriberRecord, bool, error) {
+	var record GroupNotificationSubscriberRecord
+	err := querier.QueryRowContext(ctx, `
+SELECT gns.subscriber_id, gns.notify_address, gns.person, gns.created_at, g.address
+FROM group_notification_subscribers AS gns
+JOIN groups AS g ON g.group_id = gns.group_id
+WHERE gns.group_id = ?
+  AND gns.notify_address = ?
+  AND gns.removed_at IS NULL
+`, groupID, notifyAddress).Scan(&record.SubscriberID, &record.NotifyAddress, &record.Person, &record.CreatedAt, &record.GroupAddress)
+	if errors.Is(err, sql.ErrNoRows) {
+		return GroupNotificationSubscriberRecord{}, false, nil
+	}
+	if err != nil {
+		return GroupNotificationSubscriberRecord{}, false, err
+	}
+	record.GroupID = groupID
+	record.Active = true
 	return record, true, nil
 }
 

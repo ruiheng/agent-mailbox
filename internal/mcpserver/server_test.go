@@ -23,30 +23,33 @@ import (
 type fakeMailboxService struct {
 	t *testing.T
 
-	sendFunc                func(context.Context, mailbox.SendParams) (mailbox.SendResult, error)
-	listFunc                func(context.Context, mailbox.ListParams) ([]mailbox.ListedDelivery, error)
-	listGroupMessagesFunc   func(context.Context, mailbox.GroupListParams) ([]mailbox.GroupListedMessage, error)
-	waitGroupMessageFunc    func(context.Context, mailbox.GroupWaitParams) (mailbox.GroupListedMessage, error)
-	receiveGroupMessageFunc func(context.Context, mailbox.GroupReceiveParams) (mailbox.GroupReceivedMessage, error)
-	createGroupFunc         func(context.Context, string) (mailbox.GroupRecord, error)
-	addGroupMemberFunc      func(context.Context, string, string) (mailbox.GroupMembershipRecord, error)
-	removeGroupMemberFunc   func(context.Context, string, string) (mailbox.GroupMembershipRecord, error)
-	listGroupMembersFunc    func(context.Context, string) ([]mailbox.GroupMembershipRecord, error)
-	inspectAddressFunc      func(context.Context, string) (mailbox.AddressInspection, error)
-	listClaimableFunc       func(context.Context, []string) ([]mailbox.ClaimableAddress, error)
-	listStaleAddressesFunc  func(context.Context, mailbox.StaleAddressesParams) ([]mailbox.StaleAddress, error)
-	receiveBatchFunc        func(context.Context, mailbox.ReceiveBatchParams) (mailbox.ReceiveResult, error)
-	receiveBatchWithTTLFunc func(context.Context, mailbox.ReceiveBatchParams, time.Duration) (mailbox.ReceiveResult, error)
-	waitFunc                func(context.Context, mailbox.WaitParams) (mailbox.ListedDelivery, error)
-	hasVisibleDeliveryFunc  func(context.Context, mailbox.WaitParams) (bool, error)
-	readMessagesFunc        func(context.Context, []string) ([]mailbox.ReadMessage, error)
-	readLatestFunc          func(context.Context, []string, string, int) ([]mailbox.ReadDelivery, bool, error)
-	readDeliveriesFunc      func(context.Context, []string) ([]mailbox.ReadDelivery, error)
-	ackFunc                 func(context.Context, string, string) (mailbox.DeliveryTransitionResult, error)
-	renewFunc               func(context.Context, string, string, time.Duration) (mailbox.LeaseRenewResult, error)
-	releaseFunc             func(context.Context, string, string) (mailbox.DeliveryTransitionResult, error)
-	deferFunc               func(context.Context, string, string, time.Time) (mailbox.DeliveryTransitionResult, error)
-	failFunc                func(context.Context, string, string, string) (mailbox.DeliveryTransitionResult, error)
+	sendFunc                  func(context.Context, mailbox.SendParams) (mailbox.SendResult, error)
+	listFunc                  func(context.Context, mailbox.ListParams) ([]mailbox.ListedDelivery, error)
+	listGroupMessagesFunc     func(context.Context, mailbox.GroupListParams) ([]mailbox.GroupListedMessage, error)
+	waitGroupMessageFunc      func(context.Context, mailbox.GroupWaitParams) (mailbox.GroupListedMessage, error)
+	receiveGroupMessageFunc   func(context.Context, mailbox.GroupReceiveParams) (mailbox.GroupReceivedMessage, error)
+	createGroupFunc           func(context.Context, string) (mailbox.GroupRecord, error)
+	addGroupMemberFunc        func(context.Context, string, string) (mailbox.GroupMembershipRecord, error)
+	removeGroupMemberFunc     func(context.Context, string, string) (mailbox.GroupMembershipRecord, error)
+	listGroupMembersFunc      func(context.Context, string) ([]mailbox.GroupMembershipRecord, error)
+	addGroupSubscriberFunc    func(context.Context, string, string, string) (mailbox.GroupNotificationSubscriberRecord, error)
+	removeGroupSubscriberFunc func(context.Context, string, string) (mailbox.GroupNotificationSubscriberRecord, error)
+	listGroupSubscribersFunc  func(context.Context, string) ([]mailbox.GroupNotificationSubscriberRecord, error)
+	inspectAddressFunc        func(context.Context, string) (mailbox.AddressInspection, error)
+	listClaimableFunc         func(context.Context, []string) ([]mailbox.ClaimableAddress, error)
+	listStaleAddressesFunc    func(context.Context, mailbox.StaleAddressesParams) ([]mailbox.StaleAddress, error)
+	receiveBatchFunc          func(context.Context, mailbox.ReceiveBatchParams) (mailbox.ReceiveResult, error)
+	receiveBatchWithTTLFunc   func(context.Context, mailbox.ReceiveBatchParams, time.Duration) (mailbox.ReceiveResult, error)
+	waitFunc                  func(context.Context, mailbox.WaitParams) (mailbox.ListedDelivery, error)
+	hasVisibleDeliveryFunc    func(context.Context, mailbox.WaitParams) (bool, error)
+	readMessagesFunc          func(context.Context, []string) ([]mailbox.ReadMessage, error)
+	readLatestFunc            func(context.Context, []string, string, int) ([]mailbox.ReadDelivery, bool, error)
+	readDeliveriesFunc        func(context.Context, []string) ([]mailbox.ReadDelivery, error)
+	ackFunc                   func(context.Context, string, string) (mailbox.DeliveryTransitionResult, error)
+	renewFunc                 func(context.Context, string, string, time.Duration) (mailbox.LeaseRenewResult, error)
+	releaseFunc               func(context.Context, string, string) (mailbox.DeliveryTransitionResult, error)
+	deferFunc                 func(context.Context, string, string, time.Time) (mailbox.DeliveryTransitionResult, error)
+	failFunc                  func(context.Context, string, string, string) (mailbox.DeliveryTransitionResult, error)
 }
 
 func TestAgentDeckCreateSessionSchemaRequiresWorkdir(t *testing.T) {
@@ -162,6 +165,27 @@ func (f *fakeMailboxService) ListGroupMembers(ctx context.Context, groupAddress 
 		f.t.Fatalf("unexpected ListGroupMembers call: %q", groupAddress)
 	}
 	return f.listGroupMembersFunc(ctx, groupAddress)
+}
+
+func (f *fakeMailboxService) AddGroupNotificationSubscriber(ctx context.Context, groupAddress, notifyAddress, person string) (mailbox.GroupNotificationSubscriberRecord, error) {
+	if f.addGroupSubscriberFunc == nil {
+		f.t.Fatalf("unexpected AddGroupNotificationSubscriber call: group=%q notify=%q person=%q", groupAddress, notifyAddress, person)
+	}
+	return f.addGroupSubscriberFunc(ctx, groupAddress, notifyAddress, person)
+}
+
+func (f *fakeMailboxService) RemoveGroupNotificationSubscriber(ctx context.Context, groupAddress, notifyAddress string) (mailbox.GroupNotificationSubscriberRecord, error) {
+	if f.removeGroupSubscriberFunc == nil {
+		f.t.Fatalf("unexpected RemoveGroupNotificationSubscriber call: group=%q notify=%q", groupAddress, notifyAddress)
+	}
+	return f.removeGroupSubscriberFunc(ctx, groupAddress, notifyAddress)
+}
+
+func (f *fakeMailboxService) ListGroupNotificationSubscribers(ctx context.Context, groupAddress string) ([]mailbox.GroupNotificationSubscriberRecord, error) {
+	if f.listGroupSubscribersFunc == nil {
+		return nil, nil
+	}
+	return f.listGroupSubscribersFunc(ctx, groupAddress)
 }
 
 func (f *fakeMailboxService) InspectAddress(ctx context.Context, address string) (mailbox.AddressInspection, error) {
@@ -509,6 +533,255 @@ func TestMailboxSendGroupModeUsesGroupSendParams(t *testing.T) {
 	}
 	if got := output["delivery_id"]; got != nil {
 		t.Fatalf("delivery_id = %v, want nil", got)
+	}
+}
+
+func TestMailboxSendGroupModeNotifiesSubscriber(t *testing.T) {
+	mailboxService := &fakeMailboxService{t: t}
+	mailboxService.sendFunc = func(_ context.Context, params mailbox.SendParams) (mailbox.SendResult, error) {
+		if !params.Group {
+			t.Fatal("send group = false, want true")
+		}
+		return mailbox.SendResult{
+			Mode:             mailbox.SendModeGroup,
+			MessageID:        "msg_group",
+			GroupID:          "grp_1",
+			GroupAddress:     "group/review",
+			EligibleCount:    1,
+			MessageCreatedAt: "2026-04-18T00:00:00Z",
+		}, nil
+	}
+	mailboxService.listGroupSubscribersFunc = func(_ context.Context, groupAddress string) ([]mailbox.GroupNotificationSubscriberRecord, error) {
+		if groupAddress != "group/review" {
+			t.Fatalf("ListGroupNotificationSubscribers address = %q, want group/review", groupAddress)
+		}
+		return []mailbox.GroupNotificationSubscriberRecord{{
+			SubscriberID:  "gns_1",
+			GroupID:       "grp_1",
+			GroupAddress:  "group/review",
+			NotifyAddress: "agent-deck/moderator",
+			Person:        "moderator",
+			CreatedAt:     "2026-04-18T00:00:00Z",
+			Active:        true,
+		}, {
+			SubscriberID:  "gns_2",
+			GroupID:       "grp_1",
+			GroupAddress:  "group/review",
+			NotifyAddress: "agent-deck/observer",
+			Person:        "observer",
+			CreatedAt:     "2026-04-18T00:01:00Z",
+			Active:        true,
+		}}, nil
+	}
+
+	commandRunner := &fakeRunner{t: t, handler: func(args []string, input string) (RunResult, error) {
+		switch {
+		case strings.Join(args, "\x00") == strings.Join([]string{"agent-deck", "session", "show", "moderator", "--json"}, "\x00"):
+			return RunResult{ExitCode: 0, Stdout: `{"id":"moderator","title":"moderator","status":"waiting"}`}, nil
+		case strings.Join(args, "\x00") == strings.Join([]string{"agent-deck", "session", "show", "observer", "--json"}, "\x00"):
+			return RunResult{ExitCode: 0, Stdout: `{"id":"observer","title":"observer","status":"waiting"}`}, nil
+		case len(args) == 6 && args[0] == "agent-deck" && args[1] == "session" && args[2] == "send":
+			if args[4] != "moderator" && args[4] != "observer" {
+				t.Fatalf("notify target = %q, want moderator or observer", args[4])
+			}
+			return RunResult{ExitCode: 0}, nil
+		default:
+			t.Fatalf("unexpected command args: %v", args)
+			return RunResult{}, nil
+		}
+	}}
+
+	service := newService(Options{
+		MailboxServiceFactory: fakeMailboxServiceFactory{service: mailboxService},
+		CommandRunner:         commandRunner,
+		DisableWakeScheduler:  true,
+	})
+
+	output := callTool(t, service.Server(), "mailbox_send", map[string]any{
+		"to_address":   "group/review",
+		"from_address": "agent-deck/expert",
+		"subject":      "expert post",
+		"body":         "body",
+		"group":        true,
+	})
+
+	if got := output["message_id"]; got != "msg_group" {
+		t.Fatalf("message_id = %v, want msg_group", got)
+	}
+	if got := output["notify_status"]; got != "sent" {
+		t.Fatalf("notify_status = %v, want sent", got)
+	}
+	if got := output["notify_scheme"]; got != "agent-deck" {
+		t.Fatalf("notify_scheme = %v, want agent-deck", got)
+	}
+	if got := output["notify_error"]; got != nil {
+		t.Fatalf("notify_error = %v, want nil", got)
+	}
+
+	sentTargets := map[string]int{}
+	for _, call := range commandRunner.Calls() {
+		if len(call.Args) == 6 && call.Args[0] == "agent-deck" && call.Args[1] == "session" && call.Args[2] == "send" {
+			sentTargets[call.Args[4]]++
+		}
+	}
+	if sentTargets["moderator"] != 1 || sentTargets["observer"] != 1 {
+		t.Fatalf("sent targets = %v, want moderator and observer once", sentTargets)
+	}
+}
+
+func TestMailboxSendGroupModeSkipsSenderSubscriber(t *testing.T) {
+	mailboxService := &fakeMailboxService{t: t}
+	mailboxService.sendFunc = func(_ context.Context, params mailbox.SendParams) (mailbox.SendResult, error) {
+		return mailbox.SendResult{
+			Mode:             mailbox.SendModeGroup,
+			MessageID:        "msg_group",
+			GroupID:          "grp_1",
+			GroupAddress:     "group/review",
+			MessageCreatedAt: "2026-04-18T00:00:00Z",
+		}, nil
+	}
+	mailboxService.listGroupSubscribersFunc = func(_ context.Context, groupAddress string) ([]mailbox.GroupNotificationSubscriberRecord, error) {
+		return []mailbox.GroupNotificationSubscriberRecord{{
+			SubscriberID:  "gns_1",
+			GroupID:       "grp_1",
+			GroupAddress:  groupAddress,
+			NotifyAddress: "agent-deck/moderator",
+			Active:        true,
+		}}, nil
+	}
+
+	service := newService(Options{
+		MailboxServiceFactory: fakeMailboxServiceFactory{service: mailboxService},
+		CommandRunner: &fakeRunner{t: t, handler: func(args []string, input string) (RunResult, error) {
+			t.Fatalf("unexpected command call: %v", args)
+			return RunResult{}, nil
+		}},
+		DisableWakeScheduler: true,
+	})
+
+	output := callTool(t, service.Server(), "mailbox_send", map[string]any{
+		"to_address":   "group/review",
+		"from_address": "agent-deck/moderator",
+		"subject":      "moderator post",
+		"body":         "body",
+		"group":        true,
+	})
+	if got := output["message_id"]; got != "msg_group" {
+		t.Fatalf("message_id = %v, want msg_group", got)
+	}
+	if got := output["notify_status"]; got != "skipped_sender" {
+		t.Fatalf("notify_status = %v, want skipped_sender", got)
+	}
+}
+
+func TestMailboxSendGroupModeSkipsResolvedDefaultSenderSubscriber(t *testing.T) {
+	mailboxService := &fakeMailboxService{t: t}
+	mailboxService.sendFunc = func(_ context.Context, params mailbox.SendParams) (mailbox.SendResult, error) {
+		if params.FromAddress != "agent-deck/moderator" {
+			t.Fatalf("send from_address = %q, want resolved default sender", params.FromAddress)
+		}
+		return mailbox.SendResult{
+			Mode:             mailbox.SendModeGroup,
+			MessageID:        "msg_group",
+			GroupID:          "grp_1",
+			GroupAddress:     "group/review",
+			MessageCreatedAt: "2026-04-18T00:00:00Z",
+		}, nil
+	}
+	mailboxService.listGroupSubscribersFunc = func(_ context.Context, groupAddress string) ([]mailbox.GroupNotificationSubscriberRecord, error) {
+		return []mailbox.GroupNotificationSubscriberRecord{{
+			SubscriberID:  "gns_1",
+			GroupID:       "grp_1",
+			GroupAddress:  groupAddress,
+			NotifyAddress: "agent-deck/moderator",
+			Active:        true,
+		}}, nil
+	}
+
+	service := newService(Options{
+		MailboxServiceFactory: fakeMailboxServiceFactory{service: mailboxService},
+		CommandRunner: &fakeRunner{t: t, handler: func(args []string, input string) (RunResult, error) {
+			t.Fatalf("unexpected command call: %v", args)
+			return RunResult{}, nil
+		}},
+		DisableWakeScheduler: true,
+	})
+	service.state.boundAddresses = []string{"agent-deck/moderator"}
+	service.state.defaultSender = "agent-deck/moderator"
+	service.state.autoBindAttempted = true
+
+	output := callTool(t, service.Server(), "mailbox_send", map[string]any{
+		"to_address": "group/review",
+		"subject":    "moderator post",
+		"body":       "body",
+		"group":      true,
+	})
+	if got := output["from_address"]; got != "agent-deck/moderator" {
+		t.Fatalf("from_address = %v, want agent-deck/moderator", got)
+	}
+	if got := output["notify_status"]; got != "skipped_sender" {
+		t.Fatalf("notify_status = %v, want skipped_sender", got)
+	}
+}
+
+func TestMailboxSendGroupModeKeepsReceiptWhenSubscriberNotifyFails(t *testing.T) {
+	mailboxService := &fakeMailboxService{t: t}
+	mailboxService.sendFunc = func(_ context.Context, params mailbox.SendParams) (mailbox.SendResult, error) {
+		return mailbox.SendResult{
+			Mode:             mailbox.SendModeGroup,
+			MessageID:        "msg_group",
+			GroupID:          "grp_1",
+			GroupAddress:     "group/review",
+			MessageCreatedAt: "2026-04-18T00:00:00Z",
+		}, nil
+	}
+	mailboxService.listGroupSubscribersFunc = func(_ context.Context, groupAddress string) ([]mailbox.GroupNotificationSubscriberRecord, error) {
+		return []mailbox.GroupNotificationSubscriberRecord{{
+			SubscriberID:  "gns_1",
+			GroupID:       "grp_1",
+			GroupAddress:  groupAddress,
+			NotifyAddress: "agent-deck/moderator",
+			Active:        true,
+		}}, nil
+	}
+
+	commandRunner := &fakeRunner{t: t, handler: func(args []string, input string) (RunResult, error) {
+		switch {
+		case strings.Join(args, "\x00") == strings.Join([]string{"agent-deck", "session", "show", "moderator", "--json"}, "\x00"):
+			return RunResult{ExitCode: 0, Stdout: `{"id":"moderator","title":"moderator","status":"waiting"}`}, nil
+		case len(args) == 6 && args[0] == "agent-deck" && args[1] == "session" && args[2] == "send":
+			return RunResult{ExitCode: 1, Stderr: "notify failed"}, nil
+		default:
+			t.Fatalf("unexpected command args: %v", args)
+			return RunResult{}, nil
+		}
+	}}
+
+	service := newService(Options{
+		MailboxServiceFactory: fakeMailboxServiceFactory{service: mailboxService},
+		CommandRunner:         commandRunner,
+		DisableWakeScheduler:  true,
+	})
+
+	output := callTool(t, service.Server(), "mailbox_send", map[string]any{
+		"to_address":   "group/review",
+		"from_address": "agent-deck/expert",
+		"subject":      "expert post",
+		"body":         "body",
+		"group":        true,
+	})
+
+	if got := output["status"]; got != "sent" {
+		t.Fatalf("status = %v, want sent", got)
+	}
+	if got := output["message_id"]; got != "msg_group" {
+		t.Fatalf("message_id = %v, want msg_group", got)
+	}
+	if got := output["notify_status"]; got != "failed" {
+		t.Fatalf("notify_status = %v, want failed", got)
+	}
+	if got := output["notify_error"]; got == nil || !strings.Contains(got.(string), "notify failed") {
+		t.Fatalf("notify_error = %v, want notify failure detail", got)
 	}
 }
 
@@ -2289,6 +2562,68 @@ func TestMailboxGroupMCPRuntimeFlow(t *testing.T) {
 	}
 }
 
+func TestMailboxGroupSendRuntimeKeepsMessageWhenSubscriberNotifyFails(t *testing.T) {
+	t.Parallel()
+
+	stateDir := filepath.Join(t.TempDir(), "mailbox-state")
+	service := newService(Options{
+		StateDir: stateDir,
+		CommandRunner: &fakeRunner{t: t, handler: func(args []string, input string) (RunResult, error) {
+			switch {
+			case strings.Join(args, "\x00") == strings.Join([]string{"agent-deck", "session", "show", "moderator", "--json"}, "\x00"):
+				return RunResult{ExitCode: 0, Stdout: `{"id":"moderator","title":"moderator","status":"waiting"}`}, nil
+			case len(args) == 6 && args[0] == "agent-deck" && args[1] == "session" && args[2] == "send":
+				return RunResult{ExitCode: 1, Stderr: "notify failed"}, nil
+			default:
+				t.Fatalf("unexpected command call: %v", args)
+				return RunResult{}, nil
+			}
+		}},
+		DisableWakeScheduler:  true,
+		DisableLeaseRenewLoop: true,
+	})
+	service.state.autoBindAttempted = true
+
+	callTool(t, service.Server(), "mailbox_group_create", map[string]any{
+		"group_address": "group/review",
+	})
+	callTool(t, service.Server(), "mailbox_group_add_member", map[string]any{
+		"group_address": "group/review",
+		"person":        "alice",
+	})
+	callTool(t, service.Server(), "mailbox_group_add_subscriber", map[string]any{
+		"group_address":  "group/review",
+		"notify_address": "agent-deck/moderator",
+		"person":         "moderator",
+	})
+
+	send := callTool(t, service.Server(), "mailbox_send", map[string]any{
+		"to_address":   "group/review",
+		"from_address": "agent-deck/expert",
+		"subject":      "expert post",
+		"body":         "group body",
+		"group":        true,
+	})
+	if got := send["status"]; got != "sent" {
+		t.Fatalf("send status = %v, want sent", got)
+	}
+	if got := send["notify_status"]; got != "failed" {
+		t.Fatalf("notify_status = %v, want failed", got)
+	}
+
+	recv := callTool(t, service.Server(), "mailbox_recv", map[string]any{
+		"addresses": []string{"group/review"},
+		"as_person": "alice",
+	})
+	message := recv["message"].(map[string]any)
+	if message["message_id"] != send["message_id"] {
+		t.Fatalf("recv message_id = %v, want %v", message["message_id"], send["message_id"])
+	}
+	if message["body"] != "group body" {
+		t.Fatalf("recv body = %v, want group body", message["body"])
+	}
+}
+
 func TestMailboxRecvExposesForwardedFromAddressInCompactPayload(t *testing.T) {
 	forwardedFromAddress := "agent/source"
 	mailboxService := &fakeMailboxService{t: t}
@@ -2600,6 +2935,50 @@ func TestMailboxGroupControlToolsUseMailboxService(t *testing.T) {
 			Active:       false,
 		}, nil
 	}
+	mailboxService.addGroupSubscriberFunc = func(_ context.Context, groupAddress, notifyAddress, person string) (mailbox.GroupNotificationSubscriberRecord, error) {
+		if groupAddress != "group/review" || notifyAddress != "agent-deck/moderator" || person != "moderator" {
+			t.Fatalf("AddGroupNotificationSubscriber args = group=%q notify=%q person=%q", groupAddress, notifyAddress, person)
+		}
+		return mailbox.GroupNotificationSubscriberRecord{
+			SubscriberID:  "gns_1",
+			GroupID:       "grp_1",
+			GroupAddress:  groupAddress,
+			NotifyAddress: notifyAddress,
+			Person:        person,
+			CreatedAt:     "2026-04-18T00:01:30Z",
+			Active:        true,
+		}, nil
+	}
+	mailboxService.listGroupSubscribersFunc = func(_ context.Context, groupAddress string) ([]mailbox.GroupNotificationSubscriberRecord, error) {
+		if groupAddress != "group/review" {
+			t.Fatalf("ListGroupNotificationSubscribers address = %q, want group/review", groupAddress)
+		}
+		return []mailbox.GroupNotificationSubscriberRecord{{
+			SubscriberID:  "gns_1",
+			GroupID:       "grp_1",
+			GroupAddress:  groupAddress,
+			NotifyAddress: "agent-deck/moderator",
+			Person:        "moderator",
+			CreatedAt:     "2026-04-18T00:01:30Z",
+			Active:        true,
+		}}, nil
+	}
+	mailboxService.removeGroupSubscriberFunc = func(_ context.Context, groupAddress, notifyAddress string) (mailbox.GroupNotificationSubscriberRecord, error) {
+		if groupAddress != "group/review" || notifyAddress != "agent-deck/moderator" {
+			t.Fatalf("RemoveGroupNotificationSubscriber args = group=%q notify=%q", groupAddress, notifyAddress)
+		}
+		removedAt := "2026-04-18T00:02:30Z"
+		return mailbox.GroupNotificationSubscriberRecord{
+			SubscriberID:  "gns_1",
+			GroupID:       "grp_1",
+			GroupAddress:  groupAddress,
+			NotifyAddress: notifyAddress,
+			Person:        "moderator",
+			CreatedAt:     "2026-04-18T00:01:30Z",
+			RemovedAt:     &removedAt,
+			Active:        false,
+		}, nil
+	}
 	mailboxService.inspectAddressFunc = func(_ context.Context, address string) (mailbox.AddressInspection, error) {
 		if address != "group/review" {
 			t.Fatalf("InspectAddress address = %q, want group/review", address)
@@ -2656,6 +3035,37 @@ func TestMailboxGroupControlToolsUseMailboxService(t *testing.T) {
 	}
 	if got := removed["membership"].(map[string]any)["active"]; got != false {
 		t.Fatalf("removed active = %v, want false", got)
+	}
+
+	addedSubscriber := callTool(t, service.Server(), "mailbox_group_add_subscriber", map[string]any{
+		"group_address":  "group/review",
+		"notify_address": "agent-deck/moderator",
+		"person":         "moderator",
+	})
+	if got := addedSubscriber["status"]; got != "added" {
+		t.Fatalf("add subscriber status = %v, want added", got)
+	}
+	if got := addedSubscriber["subscriber"].(map[string]any)["notify_address"]; got != "agent-deck/moderator" {
+		t.Fatalf("subscriber notify_address = %v, want agent-deck/moderator", got)
+	}
+
+	subscribers := callTool(t, service.Server(), "mailbox_group_subscribers", map[string]any{
+		"group_address": "group/review",
+	})
+	subscriptions := subscribers["subscribers"].([]any)
+	if len(subscriptions) != 1 {
+		t.Fatalf("subscribers = %d, want 1", len(subscriptions))
+	}
+
+	removedSubscriber := callTool(t, service.Server(), "mailbox_group_remove_subscriber", map[string]any{
+		"group_address":  "group/review",
+		"notify_address": "agent-deck/moderator",
+	})
+	if got := removedSubscriber["status"]; got != "removed" {
+		t.Fatalf("remove subscriber status = %v, want removed", got)
+	}
+	if got := removedSubscriber["subscriber"].(map[string]any)["active"]; got != false {
+		t.Fatalf("removed subscriber active = %v, want false", got)
 	}
 
 	inspected := callTool(t, service.Server(), "mailbox_address_inspect", map[string]any{

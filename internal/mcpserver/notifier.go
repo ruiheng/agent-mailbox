@@ -2,7 +2,10 @@ package mcpserver
 
 import (
 	"context"
+	"errors"
 	"strings"
+
+	"github.com/ruiheng/agent-mailbox/internal/mailbox"
 )
 
 type notificationRoute struct {
@@ -72,6 +75,51 @@ func (m *notificationManager) notifyMailboxSend(ctx context.Context, input mailb
 	}
 
 	return m.notifyDirectWakeScope(ctx, *scope, input)
+}
+
+func (m *notificationManager) notifyGroupSubscribers(ctx context.Context, input mailboxSendInput, subscribers []mailbox.GroupNotificationSubscriberRecord) notificationOutcome {
+	if len(subscribers) == 0 {
+		return notificationOutcome{Status: "no_subscribers"}
+	}
+	if wakeNotifyDisabled(input.DisableNotifyMessage) {
+		return notificationOutcome{
+			Status: "skipped_disabled",
+			Scheme: "agent-deck",
+		}
+	}
+
+	outcome := notificationOutcome{Status: "skipped_sender"}
+	attemptedCount := 0
+	sentCount := 0
+	var failures []error
+	for _, subscriber := range subscribers {
+		if strings.TrimSpace(subscriber.NotifyAddress) == strings.TrimSpace(input.FromAddress) {
+			continue
+		}
+		attemptedCount++
+		scope, scheme, err := directWakeScopeForAddress(subscriber.NotifyAddress)
+		if err != nil {
+			outcome = notificationOutcome{Status: "failed", Err: err}
+			failures = append(failures, err)
+			continue
+		}
+		if scope == nil {
+			outcome = notificationOutcome{Status: "unsupported", Scheme: scheme}
+			continue
+		}
+		candidate := m.notifyDirectWakeScope(ctx, *scope, input)
+		outcome = candidate
+		if notificationOutcomeDelivered(candidate) {
+			sentCount++
+		}
+	}
+	if attemptedCount > 0 && sentCount == attemptedCount {
+		return notificationOutcome{Status: "sent", Scheme: "agent-deck"}
+	}
+	if sentCount > 0 {
+		return notificationOutcome{Status: "partial_failed", Scheme: "agent-deck", Err: errors.Join(failures...)}
+	}
+	return outcome
 }
 
 func (m *notificationManager) notifyDirectWakeScope(ctx context.Context, scope wakeScope, input mailboxSendInput) notificationOutcome {
