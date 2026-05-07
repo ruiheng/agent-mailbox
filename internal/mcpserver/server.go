@@ -31,6 +31,7 @@ const (
 	defaultMCPHintCooldown       = 2 * time.Minute
 	defaultAgentDeckInitialDelay = 3 * time.Minute
 	defaultAgentDeckCooldown     = 5 * time.Minute
+	defaultNotifyDelay           = 2 * time.Second
 	defaultStartupInstruction    = ""
 	defaultNotifyMessage         = "Use the check-agent-mail skill now. Receive the pending message and execute its requested action."
 	defaultMailHint              = "mailbox_recv"
@@ -106,6 +107,7 @@ type Options struct {
 	LeaseRenewInterval    time.Duration
 	DisableLeaseRenewLoop bool
 	WakePollInterval      time.Duration
+	NotifyDelay           time.Duration
 	DisableWakeScheduler  bool
 }
 
@@ -121,6 +123,7 @@ type Service struct {
 	leaseRenewInterval     time.Duration
 	disableLeaseRenewLoop  bool
 	wakePollInterval       time.Duration
+	notifyDelay            time.Duration
 	disableWakeScheduler   bool
 	wakeSchedulerState     *wakeSchedulerState
 	overviewSubscriptions  *resourceSubscriptionState
@@ -142,6 +145,9 @@ type osCommandRunner struct {
 }
 
 func New(opts Options) *mcp.Server {
+	if opts.NotifyDelay == 0 {
+		opts.NotifyDelay = defaultNotifyDelay
+	}
 	return newService(opts).Server()
 }
 
@@ -167,6 +173,7 @@ func newService(opts Options) *Service {
 		leaseRenewInterval:    opts.LeaseRenewInterval,
 		disableLeaseRenewLoop: opts.DisableLeaseRenewLoop,
 		wakePollInterval:      opts.WakePollInterval,
+		notifyDelay:           opts.NotifyDelay,
 		disableWakeScheduler:  opts.DisableWakeScheduler,
 	}
 	if service.now == nil {
@@ -182,6 +189,9 @@ func newService(opts Options) *Service {
 	}
 	if service.wakePollInterval <= 0 {
 		service.wakePollInterval = defaultWakePollInterval
+	}
+	if service.notifyDelay < 0 {
+		service.notifyDelay = 0
 	}
 	service.notifications = newNotificationManager(service.commandRunner, service.sessions)
 	service.activeLeases = newActiveLeaseManager()

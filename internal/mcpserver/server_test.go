@@ -256,7 +256,14 @@ func (f *fakeMailboxService) ReadLatestDeliveries(ctx context.Context, addresses
 
 func (f *fakeMailboxService) ReadDeliveries(ctx context.Context, deliveryIDs []string) ([]mailbox.ReadDelivery, error) {
 	if f.readDeliveriesFunc == nil {
-		f.t.Fatalf("unexpected ReadDeliveries call: %v", deliveryIDs)
+		deliveries := make([]mailbox.ReadDelivery, 0, len(deliveryIDs))
+		for _, deliveryID := range deliveryIDs {
+			deliveries = append(deliveries, mailbox.ReadDelivery{
+				DeliveryID: deliveryID,
+				State:      "queued",
+			})
+		}
+		return deliveries, nil
 	}
 	return f.readDeliveriesFunc(ctx, deliveryIDs)
 }
@@ -379,6 +386,7 @@ func TestMailboxSendNotifiesWorkerTarget(t *testing.T) {
 	service := newService(Options{
 		MailboxServiceFactory: fakeMailboxServiceFactory{service: mailboxService},
 		CommandRunner:         commandRunner,
+		NotifyDelay:           -1,
 	})
 	service.state.boundAddresses = []string{"agent-deck/self"}
 	service.state.defaultSender = "agent-deck/self"
@@ -401,6 +409,109 @@ func TestMailboxSendNotifiesWorkerTarget(t *testing.T) {
 	}
 	if got := output["notify_error"]; got != nil {
 		t.Fatalf("notify_error = %v, want nil", got)
+	}
+}
+
+func TestMailboxSendSkipsNotifyWhenDeliveryAlreadyClaimed(t *testing.T) {
+	mailboxService := &fakeMailboxService{t: t}
+	mailboxService.sendFunc = func(_ context.Context, params mailbox.SendParams) (mailbox.SendResult, error) {
+		return mailbox.SendResult{DeliveryID: "dlv_claimed"}, nil
+	}
+	mailboxService.readDeliveriesFunc = func(_ context.Context, deliveryIDs []string) ([]mailbox.ReadDelivery, error) {
+		if !reflect.DeepEqual(deliveryIDs, []string{"dlv_claimed"}) {
+			t.Fatalf("ReadDeliveries ids = %v, want [dlv_claimed]", deliveryIDs)
+		}
+		return []mailbox.ReadDelivery{{
+			DeliveryID: "dlv_claimed",
+			State:      "leased",
+		}}, nil
+	}
+
+	service := newService(Options{
+		MailboxServiceFactory: fakeMailboxServiceFactory{service: mailboxService},
+		CommandRunner: &fakeRunner{t: t, handler: func(args []string, input string) (RunResult, error) {
+			t.Fatalf("unexpected command call: %v", args)
+			return RunResult{}, nil
+		}},
+		NotifyDelay: -1,
+	})
+	service.state.boundAddresses = []string{"agent-deck/self"}
+	service.state.defaultSender = "agent-deck/self"
+	service.state.autoBindAttempted = true
+
+	output := callTool(t, service.Server(), "mailbox_send", map[string]any{
+		"to_address": "agent-deck/target",
+		"subject":    "delegate",
+		"body":       "body",
+	})
+
+	if got := output["delivery_id"]; got != "dlv_claimed" {
+		t.Fatalf("delivery_id = %v, want dlv_claimed", got)
+	}
+	if got := output["notify_status"]; got != "skipped_already_claimed" {
+		t.Fatalf("notify_status = %v, want skipped_already_claimed", got)
+	}
+	if got := output["notify_scheme"]; got != "mailbox" {
+		t.Fatalf("notify_scheme = %v, want mailbox", got)
+	}
+	if got := output["notify_error"]; got != nil {
+		t.Fatalf("notify_error = %v, want nil", got)
+	}
+}
+
+func TestMailboxSendNotifyIgnoresRequestCancellationAfterSend(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	mailboxService := &fakeMailboxService{t: t}
+	mailboxService.sendFunc = func(_ context.Context, params mailbox.SendParams) (mailbox.SendResult, error) {
+		cancel()
+		return mailbox.SendResult{DeliveryID: "dlv_cancelled"}, nil
+	}
+	mailboxService.readDeliveriesFunc = func(ctx context.Context, deliveryIDs []string) ([]mailbox.ReadDelivery, error) {
+		if err := ctx.Err(); err != nil {
+			t.Fatalf("ReadDeliveries context error = %v, want nil", err)
+		}
+		if !reflect.DeepEqual(deliveryIDs, []string{"dlv_cancelled"}) {
+			t.Fatalf("ReadDeliveries ids = %v, want [dlv_cancelled]", deliveryIDs)
+		}
+		return []mailbox.ReadDelivery{{
+			DeliveryID: "dlv_cancelled",
+			State:      "queued",
+		}}, nil
+	}
+
+	commandRunner := &fakeRunner{t: t, handler: func(args []string, input string) (RunResult, error) {
+		switch {
+		case strings.Join(args, "\x00") == strings.Join([]string{"agent-deck", "session", "show", "target", "--json"}, "\x00"):
+			return RunResult{ExitCode: 0, Stdout: `{"id":"target","title":"coder-123","status":"waiting"}`}, nil
+		case len(args) == 6 && args[0] == "agent-deck" && args[1] == "session" && args[2] == "send":
+			return RunResult{ExitCode: 0}, nil
+		default:
+			t.Fatalf("unexpected command args: %v", args)
+			return RunResult{}, nil
+		}
+	}}
+
+	service := newService(Options{
+		MailboxServiceFactory: fakeMailboxServiceFactory{service: mailboxService},
+		CommandRunner:         commandRunner,
+		NotifyDelay:           -1,
+	})
+	service.state.boundAddresses = []string{"agent-deck/self"}
+	service.state.defaultSender = "agent-deck/self"
+	service.state.autoBindAttempted = true
+
+	output, err := service.sendMailboxMessage(ctx, mailboxSendInput{
+		ToAddress: "agent-deck/target",
+		Subject:   "delegate",
+		Body:      "body",
+	})
+	if err != nil {
+		t.Fatalf("sendMailboxMessage error = %v", err)
+	}
+	if got := output["notify_status"]; got != "sent" {
+		t.Fatalf("notify_status = %v, want sent", got)
 	}
 }
 
@@ -1191,6 +1302,7 @@ func TestMailboxSendOmitsMailHintWhenAvailabilityCheckFails(t *testing.T) {
 			t.Fatalf("unexpected command call: %v", args)
 			return RunResult{}, nil
 		}},
+		DisableWakeScheduler: true,
 	})
 	service.state.boundAddresses = []string{"agent-deck/self"}
 	service.state.defaultSender = "agent-deck/self"
@@ -1231,6 +1343,7 @@ func TestMailboxBindIncludesMailHint(t *testing.T) {
 			t.Fatalf("unexpected command call: %v", args)
 			return RunResult{}, nil
 		}},
+		DisableWakeScheduler: true,
 	})
 	service.state.autoBindAttempted = true
 
@@ -1376,6 +1489,7 @@ func TestMailboxOverviewResourceCapabilitiesAndNotifications(t *testing.T) {
 			t.Fatalf("unexpected command call: %v", args)
 			return RunResult{}, nil
 		}},
+		DisableWakeScheduler: true,
 	})
 
 	clientSession, cleanup := connectTestClientSession(t, service.Server(), updateCh)

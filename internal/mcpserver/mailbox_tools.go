@@ -281,11 +281,32 @@ func (s *Service) sendMailboxMessage(ctx context.Context, input mailboxSendInput
 }
 
 func (s *Service) notifyMailboxSend(ctx context.Context, input mailboxSendInput, sendResult mailbox.SendResult) notificationOutcome {
+	notifyCtx := context.WithoutCancel(ctx)
 	if sendResult.Mode != mailbox.SendModeGroup {
-		return s.notifications.notifyMailboxSend(ctx, input)
+		if s.sessions.isLocalAddress(notifyCtx, input.ToAddress) || wakeNotifyDisabled(input.DisableNotifyMessage) {
+			return s.notifications.notifyMailboxSend(notifyCtx, input)
+		}
+		scope, _, err := directWakeScopeForAddress(input.ToAddress)
+		if err != nil {
+			return notificationOutcome{Status: "failed", Err: err}
+		}
+		hasAgentDeckWakeTarget := scope != nil && len(scope.targetsForChannel(WakeChannelAgentDeck)) > 0
+		if hasAgentDeckWakeTarget && strings.TrimSpace(sendResult.DeliveryID) != "" {
+			if err := s.waitBeforeNotify(notifyCtx); err != nil {
+				return notificationOutcome{Status: "failed", Scheme: "mailbox", Err: err}
+			}
+			stillQueued, err := s.deliveryStillQueued(notifyCtx, sendResult.DeliveryID)
+			if err != nil {
+				return notificationOutcome{Status: "failed", Scheme: "mailbox", Err: err}
+			}
+			if !stillQueued {
+				return notificationOutcome{Status: "skipped_already_claimed", Scheme: "mailbox"}
+			}
+		}
+		return s.notifications.notifyMailboxSend(notifyCtx, input)
 	}
-	subscribers, err := withMailboxService(ctx, s.mailboxServices, func(service mailboxService) ([]mailbox.GroupNotificationSubscriberRecord, error) {
-		return service.ListGroupNotificationSubscribers(ctx, sendResult.GroupAddress)
+	subscribers, err := withMailboxService(notifyCtx, s.mailboxServices, func(service mailboxService) ([]mailbox.GroupNotificationSubscriberRecord, error) {
+		return service.ListGroupNotificationSubscribers(notifyCtx, sendResult.GroupAddress)
 	})
 	if err != nil {
 		return notificationOutcome{
@@ -294,7 +315,34 @@ func (s *Service) notifyMailboxSend(ctx context.Context, input mailboxSendInput,
 			Err:    err,
 		}
 	}
-	return s.notifications.notifyGroupSubscribers(ctx, input, subscribers)
+	return s.notifications.notifyGroupSubscribers(notifyCtx, input, subscribers)
+}
+
+func (s *Service) waitBeforeNotify(ctx context.Context) error {
+	if s.notifyDelay <= 0 {
+		return nil
+	}
+	timer := time.NewTimer(s.notifyDelay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
+}
+
+func (s *Service) deliveryStillQueued(ctx context.Context, deliveryID string) (bool, error) {
+	deliveries, err := withMailboxService(ctx, s.mailboxServices, func(service mailboxService) ([]mailbox.ReadDelivery, error) {
+		return service.ReadDeliveries(ctx, []string{deliveryID})
+	})
+	if err != nil {
+		return false, err
+	}
+	if len(deliveries) != 1 {
+		return false, fmt.Errorf("read delivery %q: got %d deliveries, want 1", deliveryID, len(deliveries))
+	}
+	return strings.TrimSpace(deliveries[0].State) == "queued", nil
 }
 
 func (s *Service) mailboxSend(ctx context.Context, _ *mcp.CallToolRequest, input mailboxSendInput) (*mcp.CallToolResult, map[string]any, error) {
