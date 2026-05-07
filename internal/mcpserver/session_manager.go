@@ -138,7 +138,7 @@ func (m *sessionManager) boundState(ctx context.Context) (boundState, error) {
 
 	warnings := make([]string, 0, 3)
 	if snapshot.DetectedAgentDeckSession == "" {
-		warnings = append(warnings, "unable to determine current agent-deck session id")
+		warnings = append(warnings, agentDeckBindRecoveryHint)
 	}
 	if snapshot.DetectedAgentSession == "" {
 		warnings = append(warnings, "unable to determine current AI agent session id")

@@ -3566,8 +3566,9 @@ func TestMailboxRecvWarnsWhenOnlyCodexSessionIsBound(t *testing.T) {
 	if !ok || len(warnings) != 1 {
 		t.Fatalf("warnings = %#v, want one warning", out["warnings"])
 	}
-	if !strings.Contains(warnings[0].(string), "no matching agent-deck session id") {
-		t.Fatalf("warning = %v, want agent-deck detection warning", warnings[0])
+	warning := warnings[0].(string)
+	if !strings.Contains(warning, "agent-deck session current --json") || !strings.Contains(warning, "mailbox_bind") {
+		t.Fatalf("warning = %v, want manual agent-deck bind recovery hint", warning)
 	}
 }
 

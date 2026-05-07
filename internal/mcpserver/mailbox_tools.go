@@ -507,7 +507,7 @@ func (s *Service) mailboxReceiveWarnings(ctx context.Context, explicitAddresses 
 	if bound.DetectedAgentSession == "" || bound.DetectedAgentDeckSession != "" {
 		return nil
 	}
-	return []string{"current Codex session was detected, but no matching agent-deck session id could be determined; receiving may miss agent-deck-addressed mail"}
+	return []string{agentDeckBindRecoveryHint}
 }
 
 func (s *Service) mailboxList(ctx context.Context, _ *mcp.CallToolRequest, input mailboxListInput) (*mcp.CallToolResult, map[string]any, error) {
