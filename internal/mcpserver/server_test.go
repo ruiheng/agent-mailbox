@@ -3542,6 +3542,174 @@ func TestAutoBindSkipsBadAgentDeckDBAndFallsBackToCodexOnly(t *testing.T) {
 	}
 }
 
+func TestAutoBindRetriesAgentDeckAfterCodexOnlyFallback(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("CODEX_SESSION_ID", "codex-session-123")
+	t.Setenv("AGENTDECK_INSTANCE_ID", "")
+	t.Setenv("AGENTDECK_PROFILE", "")
+
+	var currentCalls int
+	runner := &fakeRunner{t: t}
+	runner.handler = func(args []string, _ string) (RunResult, error) {
+		switch strings.Join(args, "\x00") {
+		case strings.Join([]string{"agent-deck", "session", "current", "--json"}, "\x00"):
+			currentCalls++
+			if currentCalls == 1 {
+				return RunResult{ExitCode: 1, Stderr: "not in an agent-deck pane"}, nil
+			}
+			return RunResult{ExitCode: 0, Stdout: `{"id":"deck-session-1"}`}, nil
+		case strings.Join([]string{"agent-deck", "session", "show", "deck-session-1", "--json"}, "\x00"):
+			return RunResult{ExitCode: 1, Stderr: "not found"}, nil
+		default:
+			t.Fatalf("unexpected command: %v", args)
+			return RunResult{}, nil
+		}
+	}
+
+	mailboxService := &fakeMailboxService{t: t}
+	mailboxService.receiveBatchFunc = func(_ context.Context, params mailbox.ReceiveBatchParams) (mailbox.ReceiveResult, error) {
+		want := []string{"agent-deck/deck-session-1", "codex/codex-session-123"}
+		if !reflect.DeepEqual(params.Addresses, want) {
+			t.Fatalf("receive addresses = %v, want %v", params.Addresses, want)
+		}
+		return mailbox.ReceiveResult{}, mailbox.ErrNoMessage
+	}
+
+	service := newService(Options{
+		MailboxServiceFactory: fakeMailboxServiceFactory{service: mailboxService},
+		CommandRunner:         runner,
+		DisableWakeScheduler:  true,
+		DisableLeaseRenewLoop: true,
+	})
+
+	status := callTool(t, service.Server(), "mailbox_status", nil)
+	if got := status["default_sender"]; got != "codex/codex-session-123" {
+		t.Fatalf("initial default_sender = %v, want codex/codex-session-123", got)
+	}
+
+	recv := callTool(t, service.Server(), "mailbox_recv", nil)
+	if got := recv["warnings"]; got != nil {
+		t.Fatalf("recv warnings = %v, want nil after agent-deck retry succeeds", got)
+	}
+	status = callTool(t, service.Server(), "mailbox_status", nil)
+	if got := status["default_sender"]; got != "agent-deck/deck-session-1" {
+		t.Fatalf("upgraded default_sender = %v, want agent-deck/deck-session-1", got)
+	}
+}
+
+func TestMailboxBindDisablesAgentDeckRetryUpgrade(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("CODEX_SESSION_ID", "codex-session-123")
+	t.Setenv("AGENTDECK_INSTANCE_ID", "")
+	t.Setenv("AGENTDECK_PROFILE", "")
+
+	var currentCalls int
+	runner := &fakeRunner{t: t}
+	runner.handler = func(args []string, _ string) (RunResult, error) {
+		switch strings.Join(args, "\x00") {
+		case strings.Join([]string{"agent-deck", "session", "current", "--json"}, "\x00"):
+			currentCalls++
+			if currentCalls == 1 {
+				return RunResult{ExitCode: 1, Stderr: "not in an agent-deck pane"}, nil
+			}
+			return RunResult{ExitCode: 0, Stdout: `{"id":"deck-session-1"}`}, nil
+		case strings.Join([]string{"agent-deck", "session", "show", "deck-session-1", "--json"}, "\x00"):
+			return RunResult{ExitCode: 1, Stderr: "not found"}, nil
+		default:
+			t.Fatalf("unexpected command: %v", args)
+			return RunResult{}, nil
+		}
+	}
+
+	service := newService(Options{
+		MailboxServiceFactory: fakeMailboxServiceFactory{service: &fakeMailboxService{t: t}},
+		CommandRunner:         runner,
+		DisableWakeScheduler:  true,
+		DisableLeaseRenewLoop: true,
+	})
+
+	status := callTool(t, service.Server(), "mailbox_status", nil)
+	if got := status["default_sender"]; got != "codex/codex-session-123" {
+		t.Fatalf("initial default_sender = %v, want codex/codex-session-123", got)
+	}
+
+	bind := callTool(t, service.Server(), "mailbox_bind", map[string]any{
+		"addresses": []string{"codex/manual"},
+	})
+	if got := bind["default_sender"]; got != "codex/manual" {
+		t.Fatalf("mailbox_bind default_sender = %v, want codex/manual", got)
+	}
+
+	status = callTool(t, service.Server(), "mailbox_status", nil)
+	if got := status["default_sender"]; got != "codex/manual" {
+		t.Fatalf("status default_sender = %v, want codex/manual", got)
+	}
+	wantAddresses := []any{"codex/manual"}
+	if !reflect.DeepEqual(status["bound_addresses"], wantAddresses) {
+		t.Fatalf("bound_addresses = %v, want %v", status["bound_addresses"], wantAddresses)
+	}
+	if currentCalls != 1 {
+		t.Fatalf("agent-deck current calls = %d, want 1", currentCalls)
+	}
+}
+
+func TestAgentDeckRetryRechecksFallbackStateBeforeUpgrade(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("CODEX_SESSION_ID", "codex-session-123")
+	t.Setenv("AGENTDECK_INSTANCE_ID", "")
+	t.Setenv("AGENTDECK_PROFILE", "")
+
+	runner := &fakeRunner{t: t}
+	runner.handler = func(args []string, _ string) (RunResult, error) {
+		switch strings.Join(args, "\x00") {
+		case strings.Join([]string{"agent-deck", "session", "current", "--json"}, "\x00"):
+			return RunResult{ExitCode: 0, Stdout: `{"id":"deck-session-1"}`}, nil
+		case strings.Join([]string{"agent-deck", "session", "show", "deck-session-1", "--json"}, "\x00"):
+			return RunResult{ExitCode: 1, Stderr: "not found"}, nil
+		default:
+			t.Fatalf("unexpected command: %v", args)
+			return RunResult{}, nil
+		}
+	}
+
+	service := newService(Options{
+		MailboxServiceFactory: fakeMailboxServiceFactory{service: &fakeMailboxService{t: t}},
+		CommandRunner:         runner,
+		DisableWakeScheduler:  true,
+		DisableLeaseRenewLoop: true,
+	})
+
+	staleFallback := stateSnapshot{
+		BoundAddresses:           []string{"codex/codex-session-123"},
+		DefaultSender:            "codex/codex-session-123",
+		AutoBindAttempted:        true,
+		AutoBoundCodexFallback:   true,
+		DetectedAgentSession:     "codex-session-123",
+		DetectedAgentDeckSession: "",
+	}
+	service.state.boundAddresses = []string{"codex/manual"}
+	service.state.defaultSender = "codex/manual"
+	service.state.autoBindAttempted = true
+	service.state.autoBoundCodexFallback = false
+	service.state.detectedAgentSession = "codex-session-123"
+
+	if err := service.sessions.tryUpgradeAgentDeckBinding(context.Background(), staleFallback); err != nil {
+		t.Fatalf("tryUpgradeAgentDeckBinding error = %v", err)
+	}
+	if !reflect.DeepEqual(service.state.boundAddresses, []string{"codex/manual"}) {
+		t.Fatalf("boundAddresses = %v, want [codex/manual]", service.state.boundAddresses)
+	}
+	if got := service.state.defaultSender; got != "codex/manual" {
+		t.Fatalf("defaultSender = %v, want codex/manual", got)
+	}
+	if got := service.state.detectedAgentDeckSession; got != "" {
+		t.Fatalf("detectedAgentDeckSession = %v, want empty", got)
+	}
+}
+
 func TestMailboxRecvWarnsWhenOnlyCodexSessionIsBound(t *testing.T) {
 	mailboxService := &fakeMailboxService{t: t}
 	mailboxService.receiveBatchFunc = func(_ context.Context, params mailbox.ReceiveBatchParams) (mailbox.ReceiveResult, error) {

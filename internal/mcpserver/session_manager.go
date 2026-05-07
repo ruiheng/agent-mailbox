@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -35,6 +36,7 @@ type serverState struct {
 	defaultSender            string
 	defaultWorkdir           string
 	autoBindAttempted        bool
+	autoBoundCodexFallback   bool
 	detectedAgentDeckSession string
 	detectedAgentSession     string
 }
@@ -44,6 +46,7 @@ type stateSnapshot struct {
 	DefaultSender            string
 	DefaultWorkdir           string
 	AutoBindAttempted        bool
+	AutoBoundCodexFallback   bool
 	DetectedAgentDeckSession string
 	DetectedAgentSession     string
 }
@@ -125,6 +128,7 @@ func (m *sessionManager) bind(ctx context.Context, input mailboxBindInput) (boun
 	m.state.defaultSender = defaultSender
 	m.state.defaultWorkdir = strings.TrimSpace(input.DefaultWorkdir)
 	m.state.autoBindAttempted = true
+	m.state.autoBoundCodexFallback = false
 	m.state.mu.Unlock()
 
 	return m.boundState(ctx)
@@ -165,6 +169,7 @@ func (m *sessionManager) snapshotState() stateSnapshot {
 		DefaultSender:            m.state.defaultSender,
 		DefaultWorkdir:           m.state.defaultWorkdir,
 		AutoBindAttempted:        m.state.autoBindAttempted,
+		AutoBoundCodexFallback:   m.state.autoBoundCodexFallback,
 		DetectedAgentDeckSession: m.state.detectedAgentDeckSession,
 		DetectedAgentSession:     m.state.detectedAgentSession,
 	}
@@ -172,31 +177,14 @@ func (m *sessionManager) snapshotState() stateSnapshot {
 
 func (m *sessionManager) tryAutoBindCurrentSession(ctx context.Context) error {
 	snapshot := m.snapshotState()
-	if len(snapshot.BoundAddresses) > 0 || snapshot.AutoBindAttempted {
+	if len(snapshot.BoundAddresses) > 0 {
+		if snapshot.AutoBoundCodexFallback && snapshot.DetectedAgentDeckSession == "" && snapshot.DetectedAgentSession != "" {
+			return m.tryUpgradeAgentDeckBinding(ctx, snapshot)
+		}
 		return nil
 	}
-
-	envAgentDeckID := strings.TrimSpace(os.Getenv("AGENTDECK_INSTANCE_ID"))
-	agentDeckSessionID := envAgentDeckID
-	probeCompleted := envAgentDeckID != ""
-
-	if agentDeckSessionID == "" {
-		result, err := runProbe(ctx, m.runner, []string{"agent-deck", "session", "current", "--json"}, runOptions{timeout: syncCmdTimeout}, false)
-		if err != nil {
-			return err
-		}
-		if result != nil {
-			probeCompleted = true
-			if result.ExitCode == 0 {
-				var current struct {
-					ID string `json:"id"`
-				}
-				if err := json.Unmarshal([]byte(result.Stdout), &current); err != nil {
-					return fmt.Errorf("agent-deck session current returned invalid JSON: %w", err)
-				}
-				agentDeckSessionID = strings.TrimSpace(current.ID)
-			}
-		}
+	if snapshot.AutoBindAttempted {
+		return nil
 	}
 
 	codexSessionID, err := m.detectCurrentCodexSessionID(ctx)
@@ -205,17 +193,9 @@ func (m *sessionManager) tryAutoBindCurrentSession(ctx context.Context) error {
 	}
 
 	defaultWorkdir := snapshot.DefaultWorkdir
-	if agentDeckSessionID == "" && codexSessionID != "" {
-		match, err := lookupAgentDeckSessionByCodexID(ctx, codexSessionID)
-		if err != nil {
-			return err
-		}
-		if match != nil {
-			agentDeckSessionID = match.SessionID
-			if strings.TrimSpace(match.ProjectPath) != "" && defaultWorkdir == "" {
-				defaultWorkdir = strings.TrimSpace(match.ProjectPath)
-			}
-		}
+	agentDeckSessionID, defaultWorkdir, probeCompleted, err := m.detectCurrentAgentDeckSessionID(ctx, codexSessionID, defaultWorkdir)
+	if err != nil {
+		return err
 	}
 
 	addresses := make([]string, 0, 2)
@@ -251,6 +231,7 @@ func (m *sessionManager) tryAutoBindCurrentSession(ctx context.Context) error {
 	m.state.detectedAgentDeckSession = detectedAgentDeckSession
 	m.state.detectedAgentSession = detectedAgentSession
 	m.state.defaultWorkdir = defaultWorkdir
+	m.state.autoBoundCodexFallback = detectedAgentDeckSession == "" && detectedAgentSession != ""
 	switch {
 	case detectedAgentDeckSession != "":
 		m.state.defaultSender = agentDeckAddress(detectedAgentDeckSession)
@@ -259,6 +240,82 @@ func (m *sessionManager) tryAutoBindCurrentSession(ctx context.Context) error {
 	}
 	m.state.autoBindAttempted = true
 	return nil
+}
+
+func (m *sessionManager) tryUpgradeAgentDeckBinding(ctx context.Context, snapshot stateSnapshot) error {
+	defaultWorkdir := snapshot.DefaultWorkdir
+	agentDeckSessionID, defaultWorkdir, _, err := m.detectCurrentAgentDeckSessionID(ctx, snapshot.DetectedAgentSession, defaultWorkdir)
+	if err != nil {
+		return err
+	}
+	if agentDeckSessionID == "" {
+		return nil
+	}
+
+	if data, err := m.resolveSessionShowBestEffort(ctx, agentDeckSessionID); err != nil {
+		return err
+	} else if data != nil && strings.TrimSpace(data.Path) != "" {
+		defaultWorkdir = strings.TrimSpace(data.Path)
+	}
+
+	m.state.mu.Lock()
+	defer m.state.mu.Unlock()
+	if !m.state.autoBoundCodexFallback ||
+		m.state.detectedAgentDeckSession != "" ||
+		m.state.detectedAgentSession != snapshot.DetectedAgentSession ||
+		!slices.Equal(m.state.boundAddresses, []string{codexAddress(snapshot.DetectedAgentSession)}) {
+		return nil
+	}
+	addresses := append([]string{agentDeckAddress(agentDeckSessionID)}, m.state.boundAddresses...)
+	m.state.boundAddresses = dedupe(addresses)
+	m.state.detectedAgentDeckSession = agentDeckSessionID
+	m.state.defaultWorkdir = defaultWorkdir
+	m.state.autoBoundCodexFallback = false
+	if m.state.defaultSender == "" || m.state.defaultSender == codexAddress(snapshot.DetectedAgentSession) {
+		m.state.defaultSender = agentDeckAddress(agentDeckSessionID)
+	}
+	m.state.autoBindAttempted = true
+	return nil
+}
+
+func (m *sessionManager) detectCurrentAgentDeckSessionID(ctx context.Context, codexSessionID, defaultWorkdir string) (string, string, bool, error) {
+	envAgentDeckID := strings.TrimSpace(os.Getenv("AGENTDECK_INSTANCE_ID"))
+	agentDeckSessionID := envAgentDeckID
+	probeCompleted := envAgentDeckID != ""
+
+	if agentDeckSessionID == "" {
+		result, err := runProbe(ctx, m.runner, []string{"agent-deck", "session", "current", "--json"}, runOptions{timeout: syncCmdTimeout}, false)
+		if err != nil {
+			return "", defaultWorkdir, probeCompleted, err
+		}
+		if result != nil {
+			probeCompleted = true
+			if result.ExitCode == 0 {
+				var current struct {
+					ID string `json:"id"`
+				}
+				if err := json.Unmarshal([]byte(result.Stdout), &current); err != nil {
+					return "", defaultWorkdir, probeCompleted, fmt.Errorf("agent-deck session current returned invalid JSON: %w", err)
+				}
+				agentDeckSessionID = strings.TrimSpace(current.ID)
+			}
+		}
+	}
+
+	if agentDeckSessionID == "" && codexSessionID != "" {
+		match, err := lookupAgentDeckSessionByCodexID(ctx, codexSessionID)
+		if err != nil {
+			return "", defaultWorkdir, probeCompleted, err
+		}
+		if match != nil {
+			agentDeckSessionID = match.SessionID
+			if strings.TrimSpace(match.ProjectPath) != "" && defaultWorkdir == "" {
+				defaultWorkdir = strings.TrimSpace(match.ProjectPath)
+			}
+		}
+	}
+
+	return agentDeckSessionID, defaultWorkdir, probeCompleted, nil
 }
 
 func lookupAgentDeckSessionByCodexID(ctx context.Context, codexSessionID string) (*agentDeckDBMatch, error) {
