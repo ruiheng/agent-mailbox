@@ -104,6 +104,16 @@ func TestMailboxSendSchemaExposesGroup(t *testing.T) {
 	}
 }
 
+func TestMailboxRecvSchemaExposesTimeout(t *testing.T) {
+	schema, err := jsonschema.For[mailboxRecvInput](nil)
+	if err != nil {
+		t.Fatalf("jsonschema.For() error = %v", err)
+	}
+	if _, ok := schema.Properties["timeout"]; !ok {
+		t.Fatalf("schema.Properties missing timeout: %v", schema.Properties)
+	}
+}
+
 func (f *fakeMailboxService) Send(ctx context.Context, params mailbox.SendParams) (mailbox.SendResult, error) {
 	if f.sendFunc == nil {
 		f.t.Fatalf("unexpected Send call: %+v", params)
@@ -328,13 +338,41 @@ func (r *fakeRunner) Run(_ context.Context, args []string, input string) (RunRes
 	r.mu.Lock()
 	r.calls = append(r.calls, runnerCall{Args: append([]string(nil), args...), Input: input})
 	r.mu.Unlock()
-	return r.handler(args, input)
+
+	type result struct {
+		runResult RunResult
+		err       error
+		completed bool
+	}
+	resultCh := make(chan result, 1)
+	go func() {
+		out := result{}
+		defer func() {
+			resultCh <- out
+		}()
+		out.runResult, out.err = r.handler(args, input)
+		out.completed = true
+	}()
+	out := <-resultCh
+	if !out.completed {
+		return RunResult{}, fmt.Errorf("fake command handler stopped before returning for args: %v", args)
+	}
+	return out.runResult, out.err
 }
 
 func (r *fakeRunner) Calls() []runnerCall {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return append([]runnerCall(nil), r.calls...)
+}
+
+func canonicalTestWorkdir(t *testing.T, path string) string {
+	t.Helper()
+	workdir, err := canonicalizeExistingPath(path)
+	if err != nil {
+		t.Fatalf("canonicalize test workdir %q: %v", path, err)
+	}
+	return workdir
 }
 
 func TestResolveWakeNotifyMessageUsesFixedWakeText(t *testing.T) {
@@ -2029,13 +2067,14 @@ func TestAgentDeckRequireSessionRejectsExtraFields(t *testing.T) {
 }
 
 func TestAgentDeckCreateSessionCreatesTargetWithoutDefaultStartupInstruction(t *testing.T) {
+	workdir := canonicalTestWorkdir(t, "/tmp")
 	commandRunner := &fakeRunner{t: t, handler: func(args []string, input string) (RunResult, error) {
 		switch {
 		case strings.Join(args, "\x00") == strings.Join([]string{"agent-deck", "session", "show", "coder-ref", "--json"}, "\x00"):
 			return RunResult{ExitCode: 1, Stderr: "not found"}, nil
 		case strings.Join(args, "\x00") == strings.Join([]string{"agent-deck", "session", "show", "planner-1", "--json"}, "\x00"):
 			return RunResult{ExitCode: 0, Stdout: `{"id":"planner-1","title":"planner","status":"waiting","path":"/tmp"}`}, nil
-		case strings.Join(args, "\x00") == strings.Join([]string{"agent-deck", "launch", "--json", "--title", "coder-ref", "--cmd", "codex --model gpt-5.4 --ask-for-approval on-request", "--parent", "planner-1", "/tmp"}, "\x00"):
+		case strings.Join(args, "\x00") == strings.Join([]string{"agent-deck", "launch", "--json", "--title", "coder-ref", "--cmd", "codex --model gpt-5.4 --ask-for-approval on-request", "--parent", "planner-1", workdir}, "\x00"):
 			return RunResult{ExitCode: 0, Stdout: `{"id":"session-2","title":"coder-ref","status":"waiting"}`}, nil
 		default:
 			t.Fatalf("unexpected command args: %v", args)
@@ -2124,11 +2163,12 @@ func TestAgentDeckCreateSessionRejectsExistingTargetWithMismatchedWorkdir(t *tes
 }
 
 func TestAgentDeckCreateSessionAllowsDetachedCreateWithoutGroup(t *testing.T) {
+	workdir := canonicalTestWorkdir(t, "/tmp")
 	commandRunner := &fakeRunner{t: t, handler: func(args []string, input string) (RunResult, error) {
 		switch {
 		case strings.Join(args, "\x00") == strings.Join([]string{"agent-deck", "session", "show", "coder-ref", "--json"}, "\x00"):
 			return RunResult{ExitCode: 1, Stderr: "not found"}, nil
-		case strings.Join(args, "\x00") == strings.Join([]string{"agent-deck", "launch", "--json", "--title", "coder-ref", "--cmd", "codex --model gpt-5.4 --ask-for-approval on-request", "--no-parent", "/tmp"}, "\x00"):
+		case strings.Join(args, "\x00") == strings.Join([]string{"agent-deck", "launch", "--json", "--title", "coder-ref", "--cmd", "codex --model gpt-5.4 --ask-for-approval on-request", "--no-parent", workdir}, "\x00"):
 			return RunResult{ExitCode: 0, Stdout: `{"id":"session-2","title":"coder-ref","status":"waiting","path":"/tmp"}`}, nil
 		default:
 			t.Fatalf("unexpected command args: %v", args)
@@ -2160,6 +2200,7 @@ func TestAgentDeckCreateSessionAllowsDetachedCreateWithoutGroup(t *testing.T) {
 }
 
 func TestAgentDeckCreateSessionDerivesChildGroupFromChildParentSession(t *testing.T) {
+	workdir := canonicalTestWorkdir(t, "/tmp")
 	commandRunner := &fakeRunner{t: t, handler: func(args []string, input string) (RunResult, error) {
 		switch {
 		case strings.Join(args, "\x00") == strings.Join([]string{"agent-deck", "session", "show", "coder-ref", "--json"}, "\x00"):
@@ -2170,7 +2211,7 @@ func TestAgentDeckCreateSessionDerivesChildGroupFromChildParentSession(t *testin
 			return RunResult{ExitCode: 0, Stdout: `{"groups":[{"path":"planning"},{"path":"planning/active"}]}`}, nil
 		case strings.Join(args, "\x00") == strings.Join([]string{"agent-deck", "group", "create", "planner-child", "--parent", "planning/active"}, "\x00"):
 			return RunResult{ExitCode: 0}, nil
-		case strings.Join(args, "\x00") == strings.Join([]string{"agent-deck", "launch", "--json", "--title", "coder-ref", "--cmd", "codex --model gpt-5.4 --ask-for-approval on-request", "--group", "planning/active/planner-child", "--no-parent", "/tmp"}, "\x00"):
+		case strings.Join(args, "\x00") == strings.Join([]string{"agent-deck", "launch", "--json", "--title", "coder-ref", "--cmd", "codex --model gpt-5.4 --ask-for-approval on-request", "--group", "planning/active/planner-child", "--no-parent", workdir}, "\x00"):
 			return RunResult{ExitCode: 0, Stdout: `{"id":"session-2","title":"coder-ref","status":"waiting","group":"planning/active/planner-child","path":"/tmp"}`}, nil
 		default:
 			t.Fatalf("unexpected command args: %v", args)
@@ -2199,6 +2240,7 @@ func TestAgentDeckCreateSessionDerivesChildGroupFromChildParentSession(t *testin
 }
 
 func TestAgentDeckCreateSessionDerivesTopLevelGroupFromChildParentWithoutGroup(t *testing.T) {
+	workdir := canonicalTestWorkdir(t, "/tmp")
 	commandRunner := &fakeRunner{t: t, handler: func(args []string, input string) (RunResult, error) {
 		switch {
 		case strings.Join(args, "\x00") == strings.Join([]string{"agent-deck", "session", "show", "coder-ref", "--json"}, "\x00"):
@@ -2209,7 +2251,7 @@ func TestAgentDeckCreateSessionDerivesTopLevelGroupFromChildParentWithoutGroup(t
 			return RunResult{ExitCode: 0, Stdout: `{"groups":[]}`}, nil
 		case strings.Join(args, "\x00") == strings.Join([]string{"agent-deck", "group", "create", "planner-child"}, "\x00"):
 			return RunResult{ExitCode: 0}, nil
-		case strings.Join(args, "\x00") == strings.Join([]string{"agent-deck", "launch", "--json", "--title", "coder-ref", "--cmd", "codex --model gpt-5.4 --ask-for-approval on-request", "--group", "planner-child", "--no-parent", "/tmp"}, "\x00"):
+		case strings.Join(args, "\x00") == strings.Join([]string{"agent-deck", "launch", "--json", "--title", "coder-ref", "--cmd", "codex --model gpt-5.4 --ask-for-approval on-request", "--group", "planner-child", "--no-parent", workdir}, "\x00"):
 			return RunResult{ExitCode: 0, Stdout: `{"id":"session-2","title":"coder-ref","status":"waiting","group":"planner-child","path":"/tmp"}`}, nil
 		default:
 			t.Fatalf("unexpected command args: %v", args)
@@ -2238,6 +2280,7 @@ func TestAgentDeckCreateSessionDerivesTopLevelGroupFromChildParentWithoutGroup(t
 }
 
 func TestAgentDeckCreateSessionDropsChildParentLinkForExplicitGroupPath(t *testing.T) {
+	workdir := canonicalTestWorkdir(t, "/tmp")
 	commandRunner := &fakeRunner{t: t, handler: func(args []string, input string) (RunResult, error) {
 		switch {
 		case strings.Join(args, "\x00") == strings.Join([]string{"agent-deck", "session", "show", "coder-ref", "--json"}, "\x00"):
@@ -2246,7 +2289,7 @@ func TestAgentDeckCreateSessionDropsChildParentLinkForExplicitGroupPath(t *testi
 			return RunResult{ExitCode: 0, Stdout: `{"id":"child-planner","title":"planner-child","status":"waiting","path":"/tmp","group":"planning/active","parent_session_id":"root-planner"}`}, nil
 		case strings.Join(args, "\x00") == strings.Join([]string{"agent-deck", "group", "list", "--json"}, "\x00"):
 			return RunResult{ExitCode: 0, Stdout: `{"groups":[{"path":"planning"},{"path":"planning/active"},{"path":"reviews"},{"path":"reviews/ready"}]}`}, nil
-		case strings.Join(args, "\x00") == strings.Join([]string{"agent-deck", "launch", "--json", "--title", "coder-ref", "--cmd", "codex --model gpt-5.4 --ask-for-approval on-request", "--group", "reviews/ready", "--no-parent", "/tmp"}, "\x00"):
+		case strings.Join(args, "\x00") == strings.Join([]string{"agent-deck", "launch", "--json", "--title", "coder-ref", "--cmd", "codex --model gpt-5.4 --ask-for-approval on-request", "--group", "reviews/ready", "--no-parent", workdir}, "\x00"):
 			return RunResult{ExitCode: 0, Stdout: `{"id":"session-2","title":"coder-ref","status":"waiting","group":"reviews/ready","path":"/tmp"}`}, nil
 		default:
 			t.Fatalf("unexpected command args: %v", args)
@@ -2276,6 +2319,7 @@ func TestAgentDeckCreateSessionDropsChildParentLinkForExplicitGroupPath(t *testi
 }
 
 func TestAgentDeckCreateSessionDerivesGroupFromGroupParentSession(t *testing.T) {
+	workdir := canonicalTestWorkdir(t, "/tmp")
 	commandRunner := &fakeRunner{t: t, handler: func(args []string, input string) (RunResult, error) {
 		switch {
 		case strings.Join(args, "\x00") == strings.Join([]string{"agent-deck", "session", "show", "coder-ref", "--json"}, "\x00"):
@@ -2286,7 +2330,7 @@ func TestAgentDeckCreateSessionDerivesGroupFromGroupParentSession(t *testing.T) 
 			return RunResult{ExitCode: 0, Stdout: `{"groups":[{"path":"planning"}]}`}, nil
 		case strings.Join(args, "\x00") == strings.Join([]string{"agent-deck", "group", "create", "coder-review", "--parent", "planning"}, "\x00"):
 			return RunResult{ExitCode: 0}, nil
-		case strings.Join(args, "\x00") == strings.Join([]string{"agent-deck", "launch", "--json", "--title", "coder-ref", "--cmd", "codex --model gpt-5.4 --ask-for-approval on-request", "--group", "planning/coder-review", "/tmp"}, "\x00"):
+		case strings.Join(args, "\x00") == strings.Join([]string{"agent-deck", "launch", "--json", "--title", "coder-ref", "--cmd", "codex --model gpt-5.4 --ask-for-approval on-request", "--group", "planning/coder-review", workdir}, "\x00"):
 			return RunResult{ExitCode: 0, Stdout: `{"id":"session-2","title":"coder-ref","status":"waiting","group":"planning/coder-review","path":"/tmp"}`}, nil
 		default:
 			t.Fatalf("unexpected command args: %v", args)
@@ -2378,6 +2422,7 @@ func TestAgentDeckRequireSessionAcceptsSymlinkedEquivalentWorkdir(t *testing.T) 
 }
 
 func TestAgentDeckCreateSessionCreatesTargetWithGroupPathAndNoParentLink(t *testing.T) {
+	workdir := canonicalTestWorkdir(t, "/tmp")
 	commandRunner := &fakeRunner{t: t, handler: func(args []string, input string) (RunResult, error) {
 		switch {
 		case strings.Join(args, "\x00") == strings.Join([]string{"agent-deck", "session", "show", "coder-ref", "--json"}, "\x00"):
@@ -2386,7 +2431,7 @@ func TestAgentDeckCreateSessionCreatesTargetWithGroupPathAndNoParentLink(t *test
 			return RunResult{ExitCode: 0, Stdout: `{"groups":[]}`}, nil
 		case strings.Join(args, "\x00") == strings.Join([]string{"agent-deck", "group", "create", "reviews"}, "\x00"):
 			return RunResult{ExitCode: 0}, nil
-		case strings.Join(args, "\x00") == strings.Join([]string{"agent-deck", "launch", "--json", "--title", "coder-ref", "--cmd", "codex --model gpt-5.4 --ask-for-approval on-request", "--group", "reviews", "--no-parent", "/tmp"}, "\x00"):
+		case strings.Join(args, "\x00") == strings.Join([]string{"agent-deck", "launch", "--json", "--title", "coder-ref", "--cmd", "codex --model gpt-5.4 --ask-for-approval on-request", "--group", "reviews", "--no-parent", workdir}, "\x00"):
 			return RunResult{ExitCode: 0, Stdout: `{"id":"session-2","title":"coder-ref","status":"waiting","group":"reviews","path":"/tmp"}`}, nil
 		default:
 			t.Fatalf("unexpected command args: %v", args)
@@ -2565,6 +2610,244 @@ func TestMailboxLifecycleToolsUseDirectMailboxService(t *testing.T) {
 	}
 	if readDelivery["body"] != "body" {
 		t.Fatalf("read body = %v, want body", readDelivery["body"])
+	}
+}
+
+func TestMailboxRecvWithTimeoutClaimsMessageSentLater(t *testing.T) {
+	t.Parallel()
+
+	stateDir := filepath.Join(t.TempDir(), "mailbox-state")
+	service := newService(Options{
+		StateDir: stateDir,
+		CommandRunner: &fakeRunner{t: t, handler: func(args []string, input string) (RunResult, error) {
+			t.Fatalf("unexpected command call: %v", args)
+			return RunResult{}, nil
+		}},
+		DisableWakeScheduler:  true,
+		DisableLeaseRenewLoop: true,
+	})
+	service.state.boundAddresses = []string{"agent-deck/self"}
+	service.state.defaultSender = "agent-deck/self"
+	service.state.autoBindAttempted = true
+
+	type recvResult struct {
+		output map[string]any
+		err    error
+	}
+	resultCh := make(chan recvResult, 1)
+	go func() {
+		_, output, err := service.mailboxRecv(context.Background(), nil, mailboxRecvInput{
+			Addresses: []string{"agent-deck/self"},
+			Timeout:   "500ms",
+		})
+		resultCh <- recvResult{output: output, err: err}
+	}()
+
+	time.Sleep(75 * time.Millisecond)
+	send := callTool(t, service.Server(), "mailbox_send", map[string]any{
+		"to_address": "agent-deck/self",
+		"subject":    "blocking recv",
+		"body":       "body",
+	})
+	deliveryID := send["delivery_id"].(string)
+
+	result := <-resultCh
+	if result.err != nil {
+		t.Fatalf("mailboxRecv error = %v", result.err)
+	}
+	if got := result.output["status"]; got != "received" {
+		t.Fatalf("recv status = %v, want received", got)
+	}
+	encodedDelivery, err := json.Marshal(result.output["delivery"])
+	if err != nil {
+		t.Fatalf("marshal recv delivery: %v", err)
+	}
+	var received map[string]any
+	if err := json.Unmarshal(encodedDelivery, &received); err != nil {
+		t.Fatalf("unmarshal recv delivery: %v", err)
+	}
+	messages := received["messages"].([]any)
+	if len(messages) != 1 {
+		t.Fatalf("recv messages = %d, want 1", len(messages))
+	}
+	message := messages[0].(map[string]any)
+	if got := message["delivery_id"]; got != deliveryID {
+		t.Fatalf("recv delivery_id = %v, want %s", got, deliveryID)
+	}
+	if got := message["body"]; got != "body" {
+		t.Fatalf("recv body = %v, want body", got)
+	}
+	if !service.activeLeases.hasTrackedLeases() {
+		t.Fatal("recv with timeout did not track active lease")
+	}
+}
+
+func TestMailboxRecvWithTimeoutClaimsWithParentContext(t *testing.T) {
+	t.Parallel()
+
+	mailboxService := &fakeMailboxService{t: t}
+	mailboxService.hasVisibleDeliveryFunc = func(ctx context.Context, params mailbox.WaitParams) (bool, error) {
+		if _, hasDeadline := ctx.Deadline(); !hasDeadline {
+			return false, nil
+		}
+		if !reflect.DeepEqual(params.Addresses, []string{"agent-deck/self"}) {
+			t.Fatalf("HasVisibleDelivery addresses = %v, want [agent-deck/self]", params.Addresses)
+		}
+		return true, nil
+	}
+	mailboxService.receiveBatchWithTTLFunc = func(ctx context.Context, params mailbox.ReceiveBatchParams, ttl time.Duration) (mailbox.ReceiveResult, error) {
+		if _, hasDeadline := ctx.Deadline(); hasDeadline {
+			t.Fatal("ReceiveBatchWithLeaseTTL got timeout context, want parent call context")
+		}
+		if ttl <= 0 {
+			t.Fatalf("ReceiveBatchWithLeaseTTL ttl = %s, want positive", ttl)
+		}
+		return mailbox.ReceiveResult{
+			Messages: []mailbox.ReceivedMessage{{
+				DeliveryID:       "dlv_parent_ctx",
+				RecipientAddress: "agent-deck/self",
+				LeaseToken:       "lease_parent_ctx",
+				Subject:          "parent ctx",
+				Body:             "body",
+			}},
+		}, nil
+	}
+
+	service := newService(Options{
+		MailboxServiceFactory: fakeMailboxServiceFactory{service: mailboxService},
+		CommandRunner: &fakeRunner{t: t, handler: func(args []string, input string) (RunResult, error) {
+			t.Fatalf("unexpected command call: %v", args)
+			return RunResult{}, nil
+		}},
+	})
+	service.state.boundAddresses = []string{"agent-deck/self"}
+	service.state.defaultSender = "agent-deck/self"
+	service.state.autoBindAttempted = true
+
+	output := callTool(t, service.Server(), "mailbox_recv", map[string]any{
+		"addresses": []string{"agent-deck/self"},
+		"timeout":   "30s",
+	})
+	if got := output["status"]; got != "received" {
+		t.Fatalf("recv status = %v, want received", got)
+	}
+	if !service.activeLeases.hasTrackedLeases() {
+		t.Fatal("recv with timeout did not track active lease")
+	}
+}
+
+func TestMailboxRecvWithTimeoutReturnsNoMessage(t *testing.T) {
+	t.Parallel()
+
+	callCount := 0
+	mailboxService := &fakeMailboxService{t: t}
+	mailboxService.hasVisibleDeliveryFunc = func(ctx context.Context, params mailbox.WaitParams) (bool, error) {
+		callCount++
+		if !reflect.DeepEqual(params.Addresses, []string{"agent-deck/self"}) {
+			t.Fatalf("HasVisibleDelivery addresses = %v, want [agent-deck/self]", params.Addresses)
+		}
+		return false, nil
+	}
+	mailboxService.receiveBatchFunc = func(_ context.Context, params mailbox.ReceiveBatchParams) (mailbox.ReceiveResult, error) {
+		t.Fatalf("ReceiveBatch called without visible delivery: %+v", params)
+		return mailbox.ReceiveResult{}, nil
+	}
+
+	service := newService(Options{
+		MailboxServiceFactory: fakeMailboxServiceFactory{service: mailboxService},
+		CommandRunner: &fakeRunner{t: t, handler: func(args []string, input string) (RunResult, error) {
+			t.Fatalf("unexpected command call: %v", args)
+			return RunResult{}, nil
+		}},
+	})
+	service.state.boundAddresses = []string{"agent-deck/self"}
+	service.state.defaultSender = "agent-deck/self"
+	service.state.autoBindAttempted = true
+
+	output := callTool(t, service.Server(), "mailbox_recv", map[string]any{
+		"addresses": []string{"agent-deck/self"},
+		"timeout":   "25ms",
+	})
+	if got := output["status"]; got != "no_message" {
+		t.Fatalf("recv status = %v, want no_message", got)
+	}
+	if callCount == 0 {
+		t.Fatal("ReceiveBatch was not called")
+	}
+	if service.activeLeases.hasTrackedLeases() {
+		t.Fatal("no-message recv tracked active lease")
+	}
+}
+
+func TestMailboxRecvWithTimeoutBoundsAvailabilityCheck(t *testing.T) {
+	t.Parallel()
+
+	mailboxService := &fakeMailboxService{t: t}
+	mailboxService.hasVisibleDeliveryFunc = func(ctx context.Context, params mailbox.WaitParams) (bool, error) {
+		if _, hasDeadline := ctx.Deadline(); !hasDeadline {
+			return false, nil
+		}
+		<-ctx.Done()
+		return false, ctx.Err()
+	}
+	mailboxService.receiveBatchFunc = func(_ context.Context, params mailbox.ReceiveBatchParams) (mailbox.ReceiveResult, error) {
+		t.Fatalf("ReceiveBatch called after availability timeout: %+v", params)
+		return mailbox.ReceiveResult{}, nil
+	}
+
+	service := newService(Options{
+		MailboxServiceFactory: fakeMailboxServiceFactory{service: mailboxService},
+		CommandRunner: &fakeRunner{t: t, handler: func(args []string, input string) (RunResult, error) {
+			t.Fatalf("unexpected command call: %v", args)
+			return RunResult{}, nil
+		}},
+	})
+	service.state.boundAddresses = []string{"agent-deck/self"}
+	service.state.defaultSender = "agent-deck/self"
+	service.state.autoBindAttempted = true
+
+	startedAt := time.Now()
+	output := callTool(t, service.Server(), "mailbox_recv", map[string]any{
+		"addresses": []string{"agent-deck/self"},
+		"timeout":   "25ms",
+	})
+	if got := output["status"]; got != "no_message" {
+		t.Fatalf("recv status = %v, want no_message", got)
+	}
+	if elapsed := time.Since(startedAt); elapsed > 500*time.Millisecond {
+		t.Fatalf("recv timeout elapsed = %s, want bounded by availability timeout", elapsed)
+	}
+}
+
+func TestMailboxRecvWithoutTimeoutRemainsImmediate(t *testing.T) {
+	t.Parallel()
+
+	callCount := 0
+	mailboxService := &fakeMailboxService{t: t}
+	mailboxService.receiveBatchFunc = func(_ context.Context, params mailbox.ReceiveBatchParams) (mailbox.ReceiveResult, error) {
+		callCount++
+		return mailbox.ReceiveResult{}, mailbox.ErrNoMessage
+	}
+
+	service := newService(Options{
+		MailboxServiceFactory: fakeMailboxServiceFactory{service: mailboxService},
+		CommandRunner: &fakeRunner{t: t, handler: func(args []string, input string) (RunResult, error) {
+			t.Fatalf("unexpected command call: %v", args)
+			return RunResult{}, nil
+		}},
+	})
+	service.state.boundAddresses = []string{"agent-deck/self"}
+	service.state.defaultSender = "agent-deck/self"
+	service.state.autoBindAttempted = true
+
+	output := callTool(t, service.Server(), "mailbox_recv", map[string]any{
+		"addresses": []string{"agent-deck/self"},
+	})
+	if got := output["status"]; got != "no_message" {
+		t.Fatalf("recv status = %v, want no_message", got)
+	}
+	if callCount != 1 {
+		t.Fatalf("ReceiveBatch calls = %d, want 1", callCount)
 	}
 }
 
@@ -2963,6 +3246,88 @@ func TestMailboxRecvAsPersonUsesGroupRecvWithoutTrackingLease(t *testing.T) {
 	}
 	if _, ok := message["lease_token"]; ok {
 		t.Fatalf("group recv exposed lease_token: %v", message)
+	}
+	if service.activeLeases.hasTrackedLeases() {
+		t.Fatal("group recv tracked a personal delivery lease")
+	}
+}
+
+func TestMailboxRecvAsPersonWithTimeoutUsesGroupWaitThenRecv(t *testing.T) {
+	mailboxService := &fakeMailboxService{t: t}
+	waitCalled := false
+	recvCalled := false
+	mailboxService.waitGroupMessageFunc = func(ctx context.Context, params mailbox.GroupWaitParams) (mailbox.GroupListedMessage, error) {
+		waitCalled = true
+		if _, hasDeadline := ctx.Deadline(); !hasDeadline {
+			t.Fatal("WaitGroupMessage got parent context, want timeout context")
+		}
+		if params.Address != "group/review" || params.Person != "alice" || params.Timeout != 0 {
+			t.Fatalf("WaitGroupMessage params = %+v", params)
+		}
+		return mailbox.GroupListedMessage{
+			MessageID:        "msg_group",
+			GroupID:          "grp_1",
+			GroupAddress:     "group/review",
+			Person:           "alice",
+			MessageCreatedAt: "2026-04-18T00:00:00Z",
+			Subject:          "review",
+			ContentType:      "text/plain",
+			Read:             false,
+			ReadCount:        0,
+			EligibleCount:    1,
+		}, nil
+	}
+	mailboxService.receiveGroupMessageFunc = func(ctx context.Context, params mailbox.GroupReceiveParams) (mailbox.GroupReceivedMessage, error) {
+		recvCalled = true
+		if _, hasDeadline := ctx.Deadline(); hasDeadline {
+			t.Fatal("ReceiveGroupMessage got timeout context, want parent context")
+		}
+		if params.Address != "group/review" || params.Person != "alice" {
+			t.Fatalf("ReceiveGroupMessage params = %+v", params)
+		}
+		return mailbox.GroupReceivedMessage{
+			MessageID:        "msg_group",
+			GroupID:          "grp_1",
+			GroupAddress:     "group/review",
+			Person:           "alice",
+			MessageCreatedAt: "2026-04-18T00:00:00Z",
+			Subject:          "review",
+			ContentType:      "text/plain",
+			Body:             "body",
+			ReadCount:        1,
+			EligibleCount:    1,
+			FirstReadAt:      "2026-04-18T00:01:00Z",
+		}, nil
+	}
+
+	service := newService(Options{
+		MailboxServiceFactory: fakeMailboxServiceFactory{service: mailboxService},
+		CommandRunner: &fakeRunner{t: t, handler: func(args []string, input string) (RunResult, error) {
+			t.Fatalf("unexpected command call: %v", args)
+			return RunResult{}, nil
+		}},
+		DisableLeaseRenewLoop: true,
+		DisableWakeScheduler:  true,
+	})
+	service.state.autoBindAttempted = true
+
+	recv := callTool(t, service.Server(), "mailbox_recv", map[string]any{
+		"addresses": []string{"group/review"},
+		"as_person": "alice",
+		"timeout":   "30s",
+	})
+	if got := recv["status"]; got != "received" {
+		t.Fatalf("status = %v, want received", got)
+	}
+	message := recv["message"].(map[string]any)
+	if got := message["body"]; got != "body" {
+		t.Fatalf("body = %v, want body", got)
+	}
+	if !waitCalled {
+		t.Fatal("WaitGroupMessage was not called")
+	}
+	if !recvCalled {
+		t.Fatal("ReceiveGroupMessage was not called")
 	}
 	if service.activeLeases.hasTrackedLeases() {
 		t.Fatal("group recv tracked a personal delivery lease")

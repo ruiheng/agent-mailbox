@@ -140,6 +140,11 @@ The Go MCP entrypoint keeps the existing tool names:
 paths. Set `disable_notify_message = true` to skip only that immediate send-time
 notify.
 
+For MCP receivers that intend to handle work, prefer `mailbox_recv` with a
+`timeout` such as `30s`; it waits and claims in one tool call. `mailbox_wait`
+remains observe-only and should be used only when the caller needs metadata
+without claiming the delivery.
+
 `mailbox_forward` forwards exactly one stored message selected by `message_id`
 or `delivery_id` to a new recipient through the normal `mailbox_send` path. It
 reuses the original body, `content_type`, and `schema_version`.
