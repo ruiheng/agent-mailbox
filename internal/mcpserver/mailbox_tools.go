@@ -128,7 +128,7 @@ func (s *Service) registerMailboxTools(server *mcp.Server) {
 	}, s.mailboxForward)
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "mailbox_wait",
-		Description: "Observe whether mail is available without claiming it. Not recommended for normal workflow; prefer mailbox_recv. Use this only for manual diagnostics or observation. Agent-managed session inbox addresses typically look like agent-deck/<session-id> or codex/<session-id>. Optional timeout is a duration string such as 30s, 5m, 120ms, or 1m30s.",
+		Description: "Observe whether mail is available without claiming it. Agent-managed session inbox addresses typically look like agent-deck/<session-id> or codex/<session-id>. Optional timeout is a duration string such as 30s, 5m, 120ms, or 1m30s.",
 	}, s.mailboxWait)
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "mailbox_recv",
