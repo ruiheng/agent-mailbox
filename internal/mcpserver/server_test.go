@@ -1432,6 +1432,46 @@ func TestMailboxBindAcceptsGenericAddressCharacters(t *testing.T) {
 	}
 }
 
+func TestMailboxBindExcludesGroupAddresses(t *testing.T) {
+	service := newService(Options{
+		MailboxServiceFactory: fakeMailboxServiceFactory{service: &fakeMailboxService{t: t}},
+		CommandRunner: &fakeRunner{t: t, handler: func(args []string, input string) (RunResult, error) {
+			t.Fatalf("unexpected command call: %v", args)
+			return RunResult{}, nil
+		}},
+	})
+	service.state.autoBindAttempted = true
+
+	output := callTool(t, service.Server(), "mailbox_bind", map[string]any{
+		"addresses": []string{"group/review", "agent-deck/self", "group/ops"},
+	})
+	if got := output["bound_addresses"]; !reflect.DeepEqual(got, []any{"agent-deck/self"}) {
+		t.Fatalf("bound_addresses = %v, want only personal addresses", got)
+	}
+	if got := output["default_sender"]; got != "agent-deck/self" {
+		t.Fatalf("default_sender = %v, want agent-deck/self", got)
+	}
+}
+
+func TestMailboxBindRejectsGroupDefaultSender(t *testing.T) {
+	service := newService(Options{
+		MailboxServiceFactory: fakeMailboxServiceFactory{service: &fakeMailboxService{t: t}},
+		CommandRunner: &fakeRunner{t: t, handler: func(args []string, input string) (RunResult, error) {
+			t.Fatalf("unexpected command call: %v", args)
+			return RunResult{}, nil
+		}},
+	})
+	service.state.autoBindAttempted = true
+
+	err := callToolExpectError(t, service.Server(), "mailbox_bind", map[string]any{
+		"addresses":      []string{"agent-deck/self"},
+		"default_sender": "group/review",
+	})
+	if err == nil || !strings.Contains(err.Error(), "default_sender cannot be a group address") {
+		t.Fatalf("mailbox_bind error = %v, want group default sender rejection", err)
+	}
+}
+
 func TestMailboxSendRejectsInvalidOverrideSender(t *testing.T) {
 	service := newService(Options{
 		MailboxServiceFactory: fakeMailboxServiceFactory{service: &fakeMailboxService{t: t}},

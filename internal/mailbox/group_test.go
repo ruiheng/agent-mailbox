@@ -232,8 +232,27 @@ func TestGroupAndEndpointNamespaceCollision(t *testing.T) {
 		t.Fatalf("Send(endpoint) error = %v", err)
 	}
 
-	if _, err := store.CreateGroup(context.Background(), "workflow/reviewer/task-123"); !errors.Is(err, ErrAddressReservedByEndpoint) {
-		t.Fatalf("CreateGroup(endpoint collision) error = %v, want ErrAddressReservedByEndpoint", err)
+	if _, err := store.CreateGroup(context.Background(), "workflow/reviewer/task-123"); err == nil || !strings.Contains(err.Error(), "group addresses must start with group/") {
+		t.Fatalf("CreateGroup(non-group prefix) error = %v, want group prefix rejection", err)
+	}
+	if _, err := store.Send(context.Background(), SendParams{
+		ToAddress:     "group/missing-personal",
+		Subject:       "personal message",
+		ContentType:   "text/plain",
+		SchemaVersion: "v1",
+		Body:          []byte("hello"),
+	}); err == nil || !strings.Contains(err.Error(), "reserved group/ prefix") {
+		t.Fatalf("Send(personal group prefix) error = %v, want reserved group prefix rejection", err)
+	}
+	if _, err := store.Send(context.Background(), SendParams{
+		ToAddress:     "workflow/not-a-group",
+		Subject:       "group message",
+		ContentType:   "text/plain",
+		SchemaVersion: "v1",
+		Body:          []byte("hello"),
+		Group:         true,
+	}); err == nil || !strings.Contains(err.Error(), "group addresses must start with group/") {
+		t.Fatalf("Send(group non-group prefix) error = %v, want group prefix rejection", err)
 	}
 
 	group, err := store.CreateGroup(context.Background(), "group/reviewer")

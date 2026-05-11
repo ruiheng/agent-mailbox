@@ -112,6 +112,7 @@ func (m *sessionManager) bind(ctx context.Context, input mailboxBindInput) (boun
 	if err != nil {
 		return boundState{}, err
 	}
+	boundAddresses = personalAddressesOnly(boundAddresses)
 	defaultSender := strings.TrimSpace(input.DefaultSender)
 	if defaultSender == "" && len(boundAddresses) > 0 {
 		defaultSender = boundAddresses[0]
@@ -120,6 +121,9 @@ func (m *sessionManager) bind(ctx context.Context, input mailboxBindInput) (boun
 		defaultSender, err = mailbox.NormalizeAddress(defaultSender)
 		if err != nil {
 			return boundState{}, fmt.Errorf("invalid default_sender: %w", err)
+		}
+		if mailbox.IsGroupAddress(defaultSender) {
+			return boundState{}, errors.New("default_sender cannot be a group address")
 		}
 	}
 
@@ -132,6 +136,17 @@ func (m *sessionManager) bind(ctx context.Context, input mailboxBindInput) (boun
 	m.state.mu.Unlock()
 
 	return m.boundState(ctx)
+}
+
+func personalAddressesOnly(addresses []string) []string {
+	out := addresses[:0]
+	for _, address := range addresses {
+		if mailbox.IsGroupAddress(address) {
+			continue
+		}
+		out = append(out, address)
+	}
+	return out
 }
 
 func (m *sessionManager) boundState(ctx context.Context) (boundState, error) {

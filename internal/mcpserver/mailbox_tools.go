@@ -652,7 +652,7 @@ func singleGroupAddress(addresses []string, toolName string) (string, error) {
 		return "", fmt.Errorf("%s with as_person requires exactly one group address", toolName)
 	}
 	address := addresses[0]
-	if !strings.HasPrefix(address, "group/") {
+	if !mailbox.IsGroupAddress(address) {
 		return "", fmt.Errorf("%s with as_person requires a group address", toolName)
 	}
 	return address, nil

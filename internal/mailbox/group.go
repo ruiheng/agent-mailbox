@@ -69,7 +69,7 @@ type AddressInspection struct {
 
 func (s *Store) CreateGroup(ctx context.Context, address string) (GroupRecord, error) {
 	rawAddress := address
-	address, err := NormalizeAddress(rawAddress)
+	address, err := NormalizeGroupAddress(rawAddress)
 	if err != nil {
 		if strings.TrimSpace(rawAddress) == "" {
 			return GroupRecord{}, errors.New("group address is required")
@@ -137,7 +137,7 @@ WHERE NOT EXISTS (
 
 func (s *Store) AddGroupMember(ctx context.Context, groupAddress, person string) (GroupMembershipRecord, error) {
 	rawGroupAddress := groupAddress
-	groupAddress, err := NormalizeAddress(rawGroupAddress)
+	groupAddress, err := NormalizeGroupAddress(rawGroupAddress)
 	if err != nil {
 		if strings.TrimSpace(rawGroupAddress) == "" {
 			return GroupMembershipRecord{}, errors.New("group address is required")
@@ -217,7 +217,7 @@ INSERT OR IGNORE INTO group_memberships (
 
 func (s *Store) RemoveGroupMember(ctx context.Context, groupAddress, person string) (GroupMembershipRecord, error) {
 	rawGroupAddress := groupAddress
-	groupAddress, err := NormalizeAddress(rawGroupAddress)
+	groupAddress, err := NormalizeGroupAddress(rawGroupAddress)
 	if err != nil {
 		if strings.TrimSpace(rawGroupAddress) == "" {
 			return GroupMembershipRecord{}, errors.New("group address is required")
@@ -288,7 +288,7 @@ WHERE membership_id = ?
 
 func (s *Store) ListGroupMembers(ctx context.Context, groupAddress string) ([]GroupMembershipRecord, error) {
 	rawGroupAddress := groupAddress
-	groupAddress, err := NormalizeAddress(rawGroupAddress)
+	groupAddress, err := NormalizeGroupAddress(rawGroupAddress)
 	if err != nil {
 		if strings.TrimSpace(rawGroupAddress) == "" {
 			return nil, errors.New("group address is required")
@@ -339,7 +339,7 @@ ORDER BY gm.joined_at ASC, gm.membership_id ASC
 
 func (s *Store) AddGroupNotificationSubscriber(ctx context.Context, groupAddress, notifyAddress, person string) (GroupNotificationSubscriberRecord, error) {
 	rawGroupAddress := groupAddress
-	groupAddress, err := NormalizeAddress(rawGroupAddress)
+	groupAddress, err := NormalizeGroupAddress(rawGroupAddress)
 	if err != nil {
 		if strings.TrimSpace(rawGroupAddress) == "" {
 			return GroupNotificationSubscriberRecord{}, errors.New("group address is required")
@@ -420,7 +420,7 @@ INSERT OR IGNORE INTO group_notification_subscribers (
 
 func (s *Store) RemoveGroupNotificationSubscriber(ctx context.Context, groupAddress, notifyAddress string) (GroupNotificationSubscriberRecord, error) {
 	rawGroupAddress := groupAddress
-	groupAddress, err := NormalizeAddress(rawGroupAddress)
+	groupAddress, err := NormalizeGroupAddress(rawGroupAddress)
 	if err != nil {
 		if strings.TrimSpace(rawGroupAddress) == "" {
 			return GroupNotificationSubscriberRecord{}, errors.New("group address is required")
@@ -487,7 +487,7 @@ WHERE subscriber_id = ?
 
 func (s *Store) ListGroupNotificationSubscribers(ctx context.Context, groupAddress string) ([]GroupNotificationSubscriberRecord, error) {
 	rawGroupAddress := groupAddress
-	groupAddress, err := NormalizeAddress(rawGroupAddress)
+	groupAddress, err := NormalizeGroupAddress(rawGroupAddress)
 	if err != nil {
 		if strings.TrimSpace(rawGroupAddress) == "" {
 			return nil, errors.New("group address is required")

@@ -249,6 +249,9 @@ func (s *Store) Send(ctx context.Context, params SendParams) (SendResult, error)
 		}
 	}
 	if params.Group {
+		if !IsGroupAddress(toAddress) {
+			return SendResult{}, fmt.Errorf("invalid group address %q: group addresses must start with group/", params.ToAddress)
+		}
 		if _, found, err := lookupGroupRecord(ctx, s.readDB, toAddress); err != nil {
 			return SendResult{}, fmt.Errorf("resolve group address %q: %w", toAddress, err)
 		} else if !found {
@@ -828,6 +831,9 @@ func (s *Store) rejectGroupAddress(ctx context.Context, address string) error {
 	}
 	if found {
 		return fmt.Errorf("endpoint address %q is already bound to group %q: %w", address, groupRecord.GroupID, ErrAddressReservedByGroup)
+	}
+	if IsGroupAddress(address) {
+		return fmt.Errorf("endpoint address %q uses reserved group/ prefix", address)
 	}
 	return nil
 }
