@@ -2,17 +2,20 @@ package mcpserver
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
 
+	_ "github.com/mattn/go-sqlite3"
 	"github.com/ruiheng/agent-mailbox/internal/mailbox"
 )
 
@@ -33,6 +36,7 @@ type serverState struct {
 	defaultSender            string
 	defaultWorkdir           string
 	autoBindAttempted        bool
+	autoBoundCodexFallback   bool
 	detectedAgentDeckSession string
 	detectedAgentSession     string
 }
@@ -42,6 +46,7 @@ type stateSnapshot struct {
 	DefaultSender            string
 	DefaultWorkdir           string
 	AutoBindAttempted        bool
+	AutoBoundCodexFallback   bool
 	DetectedAgentDeckSession string
 	DetectedAgentSession     string
 }
@@ -53,6 +58,11 @@ type boundState struct {
 	DetectedAgentDeckSession string   `json:"detected_agent_deck_session_id"`
 	DetectedAgentSession     string   `json:"detected_agent_session_id"`
 	Warnings                 []string `json:"warnings"`
+}
+
+type agentDeckDBMatch struct {
+	SessionID   string
+	ProjectPath string
 }
 
 type sessionData struct {
@@ -102,6 +112,7 @@ func (m *sessionManager) bind(ctx context.Context, input mailboxBindInput) (boun
 	if err != nil {
 		return boundState{}, err
 	}
+	boundAddresses = personalAddressesOnly(boundAddresses)
 	defaultSender := strings.TrimSpace(input.DefaultSender)
 	if defaultSender == "" && len(boundAddresses) > 0 {
 		defaultSender = boundAddresses[0]
@@ -111,6 +122,9 @@ func (m *sessionManager) bind(ctx context.Context, input mailboxBindInput) (boun
 		if err != nil {
 			return boundState{}, fmt.Errorf("invalid default_sender: %w", err)
 		}
+		if mailbox.IsGroupAddress(defaultSender) {
+			return boundState{}, errors.New("default_sender cannot be a group address")
+		}
 	}
 
 	m.state.mu.Lock()
@@ -118,9 +132,21 @@ func (m *sessionManager) bind(ctx context.Context, input mailboxBindInput) (boun
 	m.state.defaultSender = defaultSender
 	m.state.defaultWorkdir = strings.TrimSpace(input.DefaultWorkdir)
 	m.state.autoBindAttempted = true
+	m.state.autoBoundCodexFallback = false
 	m.state.mu.Unlock()
 
 	return m.boundState(ctx)
+}
+
+func personalAddressesOnly(addresses []string) []string {
+	out := addresses[:0]
+	for _, address := range addresses {
+		if mailbox.IsGroupAddress(address) {
+			continue
+		}
+		out = append(out, address)
+	}
+	return out
 }
 
 func (m *sessionManager) boundState(ctx context.Context) (boundState, error) {
@@ -131,7 +157,7 @@ func (m *sessionManager) boundState(ctx context.Context) (boundState, error) {
 
 	warnings := make([]string, 0, 3)
 	if snapshot.DetectedAgentDeckSession == "" {
-		warnings = append(warnings, "unable to determine current agent-deck session id")
+		warnings = append(warnings, agentDeckBindRecoveryHint)
 	}
 	if snapshot.DetectedAgentSession == "" {
 		warnings = append(warnings, "unable to determine current AI agent session id")
@@ -158,6 +184,7 @@ func (m *sessionManager) snapshotState() stateSnapshot {
 		DefaultSender:            m.state.defaultSender,
 		DefaultWorkdir:           m.state.defaultWorkdir,
 		AutoBindAttempted:        m.state.autoBindAttempted,
+		AutoBoundCodexFallback:   m.state.autoBoundCodexFallback,
 		DetectedAgentDeckSession: m.state.detectedAgentDeckSession,
 		DetectedAgentSession:     m.state.detectedAgentSession,
 	}
@@ -165,36 +192,29 @@ func (m *sessionManager) snapshotState() stateSnapshot {
 
 func (m *sessionManager) tryAutoBindCurrentSession(ctx context.Context) error {
 	snapshot := m.snapshotState()
-	if len(snapshot.BoundAddresses) > 0 || snapshot.AutoBindAttempted {
+	if len(snapshot.BoundAddresses) > 0 {
+		if snapshot.AutoBoundCodexFallback && snapshot.DetectedAgentDeckSession == "" && snapshot.DetectedAgentSession != "" {
+			return m.tryUpgradeAgentDeckBinding(ctx, snapshot)
+		}
+		return nil
+	}
+	if snapshot.AutoBindAttempted {
 		return nil
 	}
 
-	envAgentDeckID := strings.TrimSpace(os.Getenv("AGENTDECK_INSTANCE_ID"))
-	agentDeckSessionID := envAgentDeckID
-	probeCompleted := envAgentDeckID != ""
+	codexSessionID, err := m.detectCurrentCodexSessionID(ctx)
+	if err != nil {
+		return err
+	}
 
-	if agentDeckSessionID == "" {
-		result, err := runProbe(ctx, m.runner, []string{"agent-deck", "session", "current", "--json"}, runOptions{timeout: syncCmdTimeout}, false)
-		if err != nil {
-			return err
-		}
-		if result != nil {
-			probeCompleted = true
-			if result.ExitCode == 0 {
-				var current struct {
-					ID string `json:"id"`
-				}
-				if err := json.Unmarshal([]byte(result.Stdout), &current); err != nil {
-					return fmt.Errorf("agent-deck session current returned invalid JSON: %w", err)
-				}
-				agentDeckSessionID = strings.TrimSpace(current.ID)
-			}
-		}
+	defaultWorkdir := snapshot.DefaultWorkdir
+	agentDeckSessionID, defaultWorkdir, probeCompleted, err := m.detectCurrentAgentDeckSessionID(ctx, codexSessionID, defaultWorkdir)
+	if err != nil {
+		return err
 	}
 
 	addresses := make([]string, 0, 2)
 	detectedAgentDeckSession := ""
-	defaultWorkdir := snapshot.DefaultWorkdir
 	if agentDeckSessionID != "" {
 		detectedAgentDeckSession = agentDeckSessionID
 		addresses = append(addresses, agentDeckAddress(agentDeckSessionID))
@@ -207,10 +227,6 @@ func (m *sessionManager) tryAutoBindCurrentSession(ctx context.Context) error {
 		}
 	}
 
-	codexSessionID, err := m.detectCurrentCodexSessionID(ctx)
-	if err != nil {
-		return err
-	}
 	detectedAgentSession := ""
 	if codexSessionID != "" {
 		detectedAgentSession = codexSessionID
@@ -230,6 +246,7 @@ func (m *sessionManager) tryAutoBindCurrentSession(ctx context.Context) error {
 	m.state.detectedAgentDeckSession = detectedAgentDeckSession
 	m.state.detectedAgentSession = detectedAgentSession
 	m.state.defaultWorkdir = defaultWorkdir
+	m.state.autoBoundCodexFallback = detectedAgentDeckSession == "" && detectedAgentSession != ""
 	switch {
 	case detectedAgentDeckSession != "":
 		m.state.defaultSender = agentDeckAddress(detectedAgentDeckSession)
@@ -238,6 +255,209 @@ func (m *sessionManager) tryAutoBindCurrentSession(ctx context.Context) error {
 	}
 	m.state.autoBindAttempted = true
 	return nil
+}
+
+func (m *sessionManager) tryUpgradeAgentDeckBinding(ctx context.Context, snapshot stateSnapshot) error {
+	defaultWorkdir := snapshot.DefaultWorkdir
+	agentDeckSessionID, defaultWorkdir, _, err := m.detectCurrentAgentDeckSessionID(ctx, snapshot.DetectedAgentSession, defaultWorkdir)
+	if err != nil {
+		return err
+	}
+	if agentDeckSessionID == "" {
+		return nil
+	}
+
+	if data, err := m.resolveSessionShowBestEffort(ctx, agentDeckSessionID); err != nil {
+		return err
+	} else if data != nil && strings.TrimSpace(data.Path) != "" {
+		defaultWorkdir = strings.TrimSpace(data.Path)
+	}
+
+	m.state.mu.Lock()
+	defer m.state.mu.Unlock()
+	if !m.state.autoBoundCodexFallback ||
+		m.state.detectedAgentDeckSession != "" ||
+		m.state.detectedAgentSession != snapshot.DetectedAgentSession ||
+		!slices.Equal(m.state.boundAddresses, []string{codexAddress(snapshot.DetectedAgentSession)}) {
+		return nil
+	}
+	addresses := append([]string{agentDeckAddress(agentDeckSessionID)}, m.state.boundAddresses...)
+	m.state.boundAddresses = dedupe(addresses)
+	m.state.detectedAgentDeckSession = agentDeckSessionID
+	m.state.defaultWorkdir = defaultWorkdir
+	m.state.autoBoundCodexFallback = false
+	if m.state.defaultSender == "" || m.state.defaultSender == codexAddress(snapshot.DetectedAgentSession) {
+		m.state.defaultSender = agentDeckAddress(agentDeckSessionID)
+	}
+	m.state.autoBindAttempted = true
+	return nil
+}
+
+func (m *sessionManager) detectCurrentAgentDeckSessionID(ctx context.Context, codexSessionID, defaultWorkdir string) (string, string, bool, error) {
+	envAgentDeckID := strings.TrimSpace(os.Getenv("AGENTDECK_INSTANCE_ID"))
+	agentDeckSessionID := envAgentDeckID
+	probeCompleted := envAgentDeckID != ""
+
+	if agentDeckSessionID == "" {
+		result, err := runProbe(ctx, m.runner, []string{"agent-deck", "session", "current", "--json"}, runOptions{timeout: syncCmdTimeout}, false)
+		if err != nil {
+			return "", defaultWorkdir, probeCompleted, err
+		}
+		if result != nil {
+			probeCompleted = true
+			if result.ExitCode == 0 {
+				var current struct {
+					ID string `json:"id"`
+				}
+				if err := json.Unmarshal([]byte(result.Stdout), &current); err != nil {
+					return "", defaultWorkdir, probeCompleted, fmt.Errorf("agent-deck session current returned invalid JSON: %w", err)
+				}
+				agentDeckSessionID = strings.TrimSpace(current.ID)
+			}
+		}
+	}
+
+	if agentDeckSessionID == "" && codexSessionID != "" {
+		match, err := lookupAgentDeckSessionByCodexID(ctx, codexSessionID)
+		if err != nil {
+			return "", defaultWorkdir, probeCompleted, err
+		}
+		if match != nil {
+			agentDeckSessionID = match.SessionID
+			if strings.TrimSpace(match.ProjectPath) != "" && defaultWorkdir == "" {
+				defaultWorkdir = strings.TrimSpace(match.ProjectPath)
+			}
+		}
+	}
+
+	return agentDeckSessionID, defaultWorkdir, probeCompleted, nil
+}
+
+func lookupAgentDeckSessionByCodexID(ctx context.Context, codexSessionID string) (*agentDeckDBMatch, error) {
+	codexSessionID = strings.TrimSpace(codexSessionID)
+	if codexSessionID == "" {
+		return nil, nil
+	}
+	for _, dbPath := range agentDeckStateDBPaths() {
+		match, err := lookupAgentDeckSessionByCodexIDInDB(ctx, dbPath, codexSessionID)
+		if err != nil {
+			continue
+		}
+		if match != nil {
+			return match, nil
+		}
+	}
+	return nil, nil
+}
+
+func lookupAgentDeckSessionByCodexIDInDB(ctx context.Context, dbPath, codexSessionID string) (*agentDeckDBMatch, error) {
+	if strings.TrimSpace(dbPath) == "" {
+		return nil, nil
+	}
+	info, err := os.Stat(dbPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("stat agent-deck state database: %w", err)
+	}
+	if info.IsDir() {
+		return nil, nil
+	}
+
+	db, err := sql.Open("sqlite3", "file:"+dbPath+"?mode=ro&_busy_timeout=5000")
+	if err != nil {
+		return nil, fmt.Errorf("open agent-deck state database: %w", err)
+	}
+	defer db.Close()
+
+	rows, err := db.QueryContext(ctx, `
+		SELECT id, project_path, tool_data
+		FROM instances
+		WHERE tool = 'codex' OR command LIKE '%codex%' OR tool_data LIKE '%codex_session_id%'
+		ORDER BY last_accessed DESC, created_at DESC
+	`)
+	if err != nil {
+		return nil, fmt.Errorf("query agent-deck state database: %w", err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var id, projectPath, rawToolData string
+		if err := rows.Scan(&id, &projectPath, &rawToolData); err != nil {
+			return nil, fmt.Errorf("scan agent-deck state database: %w", err)
+		}
+		var toolData struct {
+			CodexSessionID string `json:"codex_session_id"`
+		}
+		if err := json.Unmarshal([]byte(rawToolData), &toolData); err != nil {
+			continue
+		}
+		if strings.TrimSpace(toolData.CodexSessionID) == codexSessionID {
+			return &agentDeckDBMatch{
+				SessionID:   strings.TrimSpace(id),
+				ProjectPath: strings.TrimSpace(projectPath),
+			}, nil
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("read agent-deck state database: %w", err)
+	}
+	return nil, nil
+}
+
+func agentDeckStateDBPaths() []string {
+	homeDir, err := os.UserHomeDir()
+	if err != nil || strings.TrimSpace(homeDir) == "" {
+		return nil
+	}
+	baseDir := filepath.Join(homeDir, ".agent-deck")
+	profilesDir := filepath.Join(baseDir, "profiles")
+
+	profiles := []string{}
+	if envProfile := strings.TrimSpace(os.Getenv("AGENTDECK_PROFILE")); envProfile != "" {
+		profiles = append(profiles, filepath.Base(envProfile))
+	}
+	if configProfile := agentDeckDefaultProfile(filepath.Join(baseDir, "config.json")); configProfile != "" {
+		profiles = append(profiles, filepath.Base(configProfile))
+	}
+	profiles = append(profiles, "default")
+	if entries, err := os.ReadDir(profilesDir); err == nil {
+		for _, entry := range entries {
+			if entry.IsDir() {
+				profiles = append(profiles, entry.Name())
+			}
+		}
+	}
+
+	paths := make([]string, 0, len(profiles))
+	seen := map[string]bool{}
+	for _, profile := range profiles {
+		if profile == "" || profile == "." || profile == ".." {
+			continue
+		}
+		path := filepath.Join(profilesDir, profile, "state.db")
+		if seen[path] {
+			continue
+		}
+		seen[path] = true
+		paths = append(paths, path)
+	}
+	return paths
+}
+
+func agentDeckDefaultProfile(configPath string) string {
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		return ""
+	}
+	var config struct {
+		DefaultProfile string `json:"default_profile"`
+	}
+	if err := json.Unmarshal(data, &config); err != nil {
+		return ""
+	}
+	return strings.TrimSpace(config.DefaultProfile)
 }
 
 func (m *sessionManager) detectCurrentCodexSessionID(ctx context.Context) (string, error) {
@@ -440,13 +660,13 @@ func (m *sessionManager) createSession(ctx context.Context, input agentDeckCreat
 	}
 
 	launchArgs := buildCreateSessionLaunchArgs(createSessionLaunchInput{
-		EnsureTitle:     input.EnsureTitle,
-		EnsureCmd:       input.EnsureCmd,
-		Workdir:         workdir,
-		ParentSessionID: launchParentSessionID,
-		NoParentLink:    launchNoParentLink,
-		ListenerMessage: strings.TrimSpace(input.ListenerMessage),
-		GroupPath:       targetGroupPath,
+		EnsureTitle:        input.EnsureTitle,
+		EnsureCmd:          input.EnsureCmd,
+		Workdir:            workdir,
+		ParentSessionID:    launchParentSessionID,
+		NoParentLink:       launchNoParentLink,
+		StartupInstruction: strings.TrimSpace(input.StartupInstruction),
+		GroupPath:          targetGroupPath,
 	})
 	launchResult, err := runCommand(ctx, m.runner, launchArgs, runOptions{})
 	if err != nil {
@@ -462,7 +682,11 @@ func (m *sessionManager) createSession(ctx context.Context, input agentDeckCreat
 	out["created_target"] = true
 	out["started_session"] = true
 	out["notify_needed"] = false
-	out["listener_status"] = "started_waiting"
+	if strings.TrimSpace(input.StartupInstruction) != "" {
+		out["startup_instruction_status"] = "started_waiting"
+	} else {
+		out["startup_instruction_status"] = "started"
+	}
 	return out, nil
 }
 
@@ -488,7 +712,7 @@ func (m *sessionManager) requireSession(ctx context.Context, input agentDeckRequ
 		return nil, err
 	}
 
-	data, startedSession, notifyNeeded, listenerStatus, err := m.startSessionIfNeeded(ctx, data, strings.TrimSpace(input.ListenerMessage))
+	data, startedSession, notifyNeeded, startupInstructionStatus, err := m.startSessionIfNeeded(ctx, data, "")
 	if err != nil {
 		return nil, err
 	}
@@ -498,7 +722,7 @@ func (m *sessionManager) requireSession(ctx context.Context, input agentDeckRequ
 	out["created_target"] = false
 	out["started_session"] = startedSession
 	out["notify_needed"] = notifyNeeded
-	out["listener_status"] = listenerStatus
+	out["startup_instruction_status"] = startupInstructionStatus
 	return out, nil
 }
 
@@ -579,14 +803,14 @@ func (m *sessionManager) prepareCreateSessionLaunch(ctx context.Context, input a
 	return targetGroupPath, "", true, nil
 }
 
-func (m *sessionManager) startSessionIfNeeded(ctx context.Context, data *sessionData, listenerMessage string) (*sessionData, bool, bool, string, error) {
+func (m *sessionManager) startSessionIfNeeded(ctx context.Context, data *sessionData, startupInstruction string) (*sessionData, bool, bool, string, error) {
 	if activeSessionStatuses[strings.TrimSpace(data.Status)] {
 		return data, false, true, "not_needed_existing_session", nil
 	}
 
 	startArgs := []string{"agent-deck", "session", "start", "--json"}
-	if listenerMessage != "" {
-		startArgs = append(startArgs, "-m", listenerMessage)
+	if startupInstruction != "" {
+		startArgs = append(startArgs, "-m", startupInstruction)
 	}
 	startArgs = append(startArgs, data.ID)
 	if _, err := runCommand(ctx, m.runner, startArgs, runOptions{}); err != nil {
@@ -601,11 +825,11 @@ func (m *sessionManager) startSessionIfNeeded(ctx context.Context, data *session
 		data = refreshed
 	}
 
-	listenerStatus := "started"
-	if listenerMessage != "" {
-		listenerStatus = "started_waiting"
+	startupInstructionStatus := "started"
+	if startupInstruction != "" {
+		startupInstructionStatus = "started_waiting"
 	}
-	return data, true, false, listenerStatus, nil
+	return data, true, false, startupInstructionStatus, nil
 }
 
 func (m *sessionManager) listGroupPaths(ctx context.Context) (map[string]bool, error) {

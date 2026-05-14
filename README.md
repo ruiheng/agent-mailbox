@@ -191,6 +191,14 @@ The Go MCP entrypoint keeps the existing tool names:
 - `mailbox_release`
 - `mailbox_defer`
 - `mailbox_fail`
+- `mailbox_group_create`
+- `mailbox_group_add_member`
+- `mailbox_group_remove_member`
+- `mailbox_group_members`
+- `mailbox_group_add_subscriber`
+- `mailbox_group_remove_subscriber`
+- `mailbox_group_subscribers`
+- `mailbox_address_inspect`
 - `agent_deck_resolve_session`
 - `agent_deck_create_session`
 - `agent_deck_require_session`
@@ -199,14 +207,35 @@ The Go MCP entrypoint keeps the existing tool names:
 paths. Set `disable_notify_message = true` to skip only that immediate send-time
 notify.
 
+For MCP receivers that intend to handle work, prefer `mailbox_recv` with a
+`timeout` such as `30s`; it waits and claims in one tool call. `mailbox_wait`
+remains observe-only and should be used only when the caller needs metadata
+without claiming the delivery.
+
 `mailbox_forward` forwards exactly one stored message selected by `message_id`
 or `delivery_id` to a new recipient through the normal `mailbox_send` path. It
 reuses the original body, `content_type`, and `schema_version`.
 
+For group mailbox flows over MCP, create a group with
+`mailbox_group_create`, manage people with `mailbox_group_add_member` and
+`mailbox_group_remove_member`, then call `mailbox_send` with `group = true`.
+Use `mailbox_wait` or `mailbox_recv` with one `group/...` address and
+`as_person` to read the group stream. Group reads return compact group message
+payloads and do not use delivery leases, `mailbox_ack`, `mailbox_release`,
+`mailbox_defer`, or `mailbox_fail`.
+
+Use `mailbox_group_add_subscriber` to register a routable notify target such as
+`agent-deck/<session-id>` for group-message wakeups. Group send notifies active
+subscribers after the message is durable, skips a subscriber whose
+`notify_address` matches the sender's `from_address`, and keeps notification
+failure best-effort.
+
 `agent_deck_create_session` is for lifecycle allocation only. It creates a new
 session, errors if the target already exists, supports explicit group placement
 through `group_path` or `group_parent_session_id` plus `child_group_name`, and
-can launch detached sessions with `no_parent_link = true`.
+can launch detached sessions with `no_parent_link = true`. `startup_instruction`
+is optional startup-only input passed to `agent-deck launch --message`; do not
+use it for task payloads or normal wakeups.
 
 `agent_deck_require_session` is the send-time guard. It never creates a
 session; it resolves `session_id` or `session_ref`, verifies the existing

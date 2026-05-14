@@ -31,11 +31,13 @@ const (
 	defaultMCPHintCooldown       = 2 * time.Minute
 	defaultAgentDeckInitialDelay = 3 * time.Minute
 	defaultAgentDeckCooldown     = 5 * time.Minute
-	defaultListenerMessage       = ""
+	defaultNotifyDelay           = 2 * time.Second
+	defaultStartupInstruction    = ""
 	defaultNotifyMessage         = "Use the check-agent-mail skill now. Receive the pending message and execute its requested action."
 	defaultMailHint              = "mailbox_recv"
 	mailboxRecoveryHint          = "If you forget the mailbox details or next action after ack, use `mailbox_read` on the latest `acked` delivery for this session. For older mail, use `mailbox_list` with `state: acked` and then `mailbox_read` by delivery id."
-	serverInstructions           = "Bootstrap this MCP process once per agent-managed session. If it is not bound yet, run `agent-deck session current --json`, take the current session id, and call `mailbox_bind`. Later reuse the bound addresses until MCP state is lost. `mailbox_wait` is not recommended for normal workflow; prefer `mailbox_recv`."
+	agentDeckBindRecoveryHint    = "agent-deck address auto-bind did not find your current session; run `agent-deck session current --json` to find your `agent-deck/<session-id>` address, then call `mailbox_bind` with that address."
+	serverInstructions           = "Bootstrap this MCP process once per agent-managed session. If it is not bound yet, run `agent-deck session current --json`, take the current session id, and call `mailbox_bind`. Later reuse the bound addresses until MCP state is lost."
 	unsetValue                   = "<unset>"
 )
 
@@ -53,6 +55,16 @@ type mailboxService interface {
 	Send(context.Context, mailbox.SendParams) (mailbox.SendResult, error)
 	List(context.Context, mailbox.ListParams) ([]mailbox.ListedDelivery, error)
 	ListGroupMessages(context.Context, mailbox.GroupListParams) ([]mailbox.GroupListedMessage, error)
+	WaitGroupMessage(context.Context, mailbox.GroupWaitParams) (mailbox.GroupListedMessage, error)
+	ReceiveGroupMessage(context.Context, mailbox.GroupReceiveParams) (mailbox.GroupReceivedMessage, error)
+	CreateGroup(context.Context, string) (mailbox.GroupRecord, error)
+	AddGroupMember(context.Context, string, string) (mailbox.GroupMembershipRecord, error)
+	RemoveGroupMember(context.Context, string, string) (mailbox.GroupMembershipRecord, error)
+	ListGroupMembers(context.Context, string) ([]mailbox.GroupMembershipRecord, error)
+	AddGroupNotificationSubscriber(context.Context, string, string, string) (mailbox.GroupNotificationSubscriberRecord, error)
+	RemoveGroupNotificationSubscriber(context.Context, string, string) (mailbox.GroupNotificationSubscriberRecord, error)
+	ListGroupNotificationSubscribers(context.Context, string) ([]mailbox.GroupNotificationSubscriberRecord, error)
+	InspectAddress(context.Context, string) (mailbox.AddressInspection, error)
 	ListClaimableAddresses(context.Context, []string) ([]mailbox.ClaimableAddress, error)
 	ListStaleAddresses(context.Context, mailbox.StaleAddressesParams) ([]mailbox.StaleAddress, error)
 	ReceiveBatch(context.Context, mailbox.ReceiveBatchParams) (mailbox.ReceiveResult, error)
@@ -95,6 +107,7 @@ type Options struct {
 	LeaseRenewInterval    time.Duration
 	DisableLeaseRenewLoop bool
 	WakePollInterval      time.Duration
+	NotifyDelay           time.Duration
 	DisableWakeScheduler  bool
 }
 
@@ -110,6 +123,7 @@ type Service struct {
 	leaseRenewInterval     time.Duration
 	disableLeaseRenewLoop  bool
 	wakePollInterval       time.Duration
+	notifyDelay            time.Duration
 	disableWakeScheduler   bool
 	wakeSchedulerState     *wakeSchedulerState
 	overviewSubscriptions  *resourceSubscriptionState
@@ -131,6 +145,9 @@ type osCommandRunner struct {
 }
 
 func New(opts Options) *mcp.Server {
+	if opts.NotifyDelay == 0 {
+		opts.NotifyDelay = defaultNotifyDelay
+	}
 	return newService(opts).Server()
 }
 
@@ -156,6 +173,7 @@ func newService(opts Options) *Service {
 		leaseRenewInterval:    opts.LeaseRenewInterval,
 		disableLeaseRenewLoop: opts.DisableLeaseRenewLoop,
 		wakePollInterval:      opts.WakePollInterval,
+		notifyDelay:           opts.NotifyDelay,
 		disableWakeScheduler:  opts.DisableWakeScheduler,
 	}
 	if service.now == nil {
@@ -171,6 +189,9 @@ func newService(opts Options) *Service {
 	}
 	if service.wakePollInterval <= 0 {
 		service.wakePollInterval = defaultWakePollInterval
+	}
+	if service.notifyDelay < 0 {
+		service.notifyDelay = 0
 	}
 	service.notifications = newNotificationManager(service.commandRunner, service.sessions)
 	service.activeLeases = newActiveLeaseManager()

@@ -78,6 +78,22 @@ func NormalizeAddress(address string) (string, error) {
 	return parsed.Address, nil
 }
 
+func NormalizeGroupAddress(address string) (string, error) {
+	parsed, err := ParseAddress(address)
+	if err != nil {
+		return "", err
+	}
+	if parsed.Scheme != AddressKindGroup {
+		return "", fmt.Errorf("invalid group address %q: group addresses must start with group/", address)
+	}
+	return parsed.Address, nil
+}
+
+func IsGroupAddress(address string) bool {
+	parsed, err := ParseAddress(address)
+	return err == nil && parsed.Scheme == AddressKindGroup
+}
+
 func NormalizeOptionalAddress(address string) (string, error) {
 	if strings.TrimSpace(address) == "" {
 		return "", nil

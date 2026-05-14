@@ -453,7 +453,8 @@ agent-mailbox renew --delivery <delivery_id> --lease-token <lease_token> --for 1
 Notes:
 
 - `--for` uses Go duration syntax such as `30s`, `5m`, `10m`, or `1h`
-- renewal requires the current unexpired lease token
+- renewal requires the current lease token; expiry only allows another receiver
+  to reclaim and replace that token
 - renewal keeps the same `lease_token` and only updates `lease_expires_at`
 
 ### `release`

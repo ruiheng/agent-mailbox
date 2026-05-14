@@ -52,3 +52,19 @@ func TestParseAddressAcceptsKnownSessionSingleTarget(t *testing.T) {
 		t.Fatalf("segments = %v, want single target segment", parsed.Segments)
 	}
 }
+
+func TestNormalizeGroupAddressRequiresGroupScheme(t *testing.T) {
+	t.Parallel()
+
+	if _, err := NormalizeGroupAddress("workflow/reviewer"); err == nil {
+		t.Fatal("NormalizeGroupAddress() error = nil, want group prefix rejection")
+	}
+
+	normalized, err := NormalizeGroupAddress(" group/reviewer ")
+	if err != nil {
+		t.Fatalf("NormalizeGroupAddress(group) error = %v", err)
+	}
+	if normalized != "group/reviewer" {
+		t.Fatalf("normalized = %q, want group/reviewer", normalized)
+	}
+}

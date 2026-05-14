@@ -127,11 +127,11 @@ func (s *Store) Renew(ctx context.Context, deliveryID, leaseToken string, extend
 
 Rules:
 
-- require a valid, current, unexpired lease
+- require the current lease token for a delivery that is still in `leased`
+  state
 - require `extendBy > 0`
 - update only `lease_expires_at`
 - keep the same `lease_token`
-- fail if the lease already expired
 - fail if another claimer already replaced the lease
 - record a `delivery_lease_renewed` event
 
@@ -144,9 +144,8 @@ transitions. The exact store rule should be:
 1. load the currently leased row inside one write transaction
 2. validate `state = leased`
 3. validate `lease_token` matches
-4. validate current `lease_expires_at > now`
-5. compute `new_lease_expires_at = now + extendBy`
-6. update with a CAS predicate on the same row:
+4. compute `new_lease_expires_at = now + extendBy`
+5. update with a CAS predicate on the same row:
 
 ```sql
 UPDATE deliveries
@@ -174,8 +173,8 @@ wrong reason:
 
 The important protection is already:
 
-- only the current unexpired lease may transition
-- expired leases cannot be renewed
+- only the current lease token may transition or renew
+- expiry only makes the delivery eligible for another receiver to reclaim
 - a new claimer gets a different token when re-claim happens
 
 That is enough.
@@ -256,18 +255,17 @@ This gives the desired property:
 - if the agent dies, the local MCP dies
 - if the MCP dies, renewal stops
 - if renewal stops, the short lease expires quickly
-- if the lease expires, work returns automatically
+- if the lease expires, work becomes claimable by another receiver
 
 Recommended operating limits:
 
 - renewal attempts should start when roughly one third of the TTL has elapsed
 - renewal scheduling should include small jitter to avoid bursty writes when one
   MCP holds many leases
-- transient SQLite busy/locked renew failures may retry quickly, but only within
-  the remaining local deadline budget
-- once the remaining time budget drops below `10s` in the initial `30s`-TTL
-  rollout, the MCP should stop retrying indefinitely and treat the lease as at
-  risk
+- transient SQLite busy/locked renew failures may retry quickly; local expiry
+  alone is not proof that another receiver has replaced the token
+- definitive stale-claim errors are token mismatch, non-leased state, or a CAS
+  failure showing that the row changed under the renew attempt
 
 Required MCP observability:
 
@@ -355,17 +353,16 @@ loops.
 
 Renewal failure means one of three real things:
 
-1. the lease already expired
+1. another receiver already reclaimed the delivery and replaced the token
 2. the delivery was already transitioned by the current owner
 3. the mailbox store is temporarily unavailable
 
 MCP handling rules:
 
-- if renewal fails with lease-expired or token-mismatch semantics, drop the
+- if renewal fails with token-mismatch or non-leased-state semantics, drop the
   local claim and surface a stale-claim error if later completion is attempted
 - if renewal fails because the store is temporarily unavailable, retry quickly
-  within the remaining local deadline budget
-- if the deadline budget is exhausted, stop pretending ownership is valid
+  without treating local lease expiry alone as proof that ownership is lost
 
 Do not silently continue processing forever after renewal failure.
 

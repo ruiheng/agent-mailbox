@@ -23,14 +23,13 @@ type agentDeckCreateSessionInput struct {
 	ChildGroupName       string `json:"child_group_name,omitempty"`
 	NoParentLink         bool   `json:"no_parent_link,omitempty"`
 	Workdir              string `json:"workdir"`
-	ListenerMessage      string `json:"listener_message,omitempty"`
+	StartupInstruction   string `json:"startup_instruction,omitempty"`
 }
 
 type agentDeckRequireSessionInput struct {
-	SessionID       string `json:"session_id,omitempty"`
-	SessionRef      string `json:"session_ref,omitempty"`
-	Workdir         string `json:"workdir"`
-	ListenerMessage string `json:"listener_message,omitempty"`
+	SessionID  string `json:"session_id,omitempty"`
+	SessionRef string `json:"session_ref,omitempty"`
+	Workdir    string `json:"workdir"`
 }
 
 func (s *Service) registerSessionTools(server *mcp.Server) {
@@ -40,11 +39,11 @@ func (s *Service) registerSessionTools(server *mcp.Server) {
 	}, s.agentDeckResolveSession)
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "agent_deck_create_session",
-		Description: "Create a new agent-deck session in an explicit workdir. The target must not already exist. Accepts create-only lifecycle parameters such as ensure_title, ensure_cmd, parent_session_id, group_path, group_parent_session_id, child_group_name, and no_parent_link.",
+		Description: "Create a new agent-deck session in an explicit workdir. The target must not already exist. Supports explicit group placement, parent linkage, detached sessions, and optional startup_instruction passed only to agent-deck launch --message.",
 	}, s.agentDeckCreateSession)
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "agent_deck_require_session",
-		Description: "Require an existing agent-deck session in an explicit workdir. Resolves session_id or session_ref, verifies the existing session already matches the requested workdir, and starts it if it is inactive. Does not create sessions or accept create-only lifecycle parameters.",
+		Description: "Require an existing agent-deck session in an explicit workdir. Resolves session_id or session_ref, verifies the existing session already matches the requested workdir, and starts it if it is inactive. Does not create sessions.",
 	}, s.agentDeckRequireSession)
 }
 
@@ -94,10 +93,9 @@ func validateRequireSessionArgs(req *mcp.CallToolRequest) error {
 	}
 
 	allowedFields := map[string]bool{
-		"session_id":       true,
-		"session_ref":      true,
-		"workdir":          true,
-		"listener_message": true,
+		"session_id":  true,
+		"session_ref": true,
+		"workdir":     true,
 	}
 	unexpected := make([]string, 0, len(rawArgs))
 	for field := range rawArgs {

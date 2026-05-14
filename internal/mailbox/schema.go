@@ -114,6 +114,18 @@ CREATE TABLE IF NOT EXISTS group_reads (
   FOREIGN KEY (person_id) REFERENCES persons(person_id)
 );
 
+CREATE TABLE IF NOT EXISTS group_notification_subscribers (
+  subscriber_id TEXT PRIMARY KEY,
+  group_id TEXT NOT NULL,
+  notify_address TEXT NOT NULL,
+  person TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL,
+  removed_at TEXT,
+  metadata_json TEXT NOT NULL DEFAULT '{}',
+  FOREIGN KEY (group_id) REFERENCES groups(group_id),
+  CHECK (removed_at IS NULL OR removed_at >= created_at)
+);
+
 CREATE TABLE IF NOT EXISTS events (
   event_id TEXT PRIMARY KEY,
   created_at TEXT NOT NULL,
@@ -154,6 +166,13 @@ CREATE INDEX IF NOT EXISTS idx_group_message_eligibility_person_message
 
 CREATE INDEX IF NOT EXISTS idx_group_reads_person_message
   ON group_reads (person_id, message_id);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_group_notification_subscribers_active
+  ON group_notification_subscribers (group_id, notify_address)
+  WHERE removed_at IS NULL;
+
+CREATE INDEX IF NOT EXISTS idx_group_notification_subscribers_group_created
+  ON group_notification_subscribers (group_id, created_at, subscriber_id);
 
 CREATE INDEX IF NOT EXISTS idx_events_message_delivery
   ON events (message_id, delivery_id);
