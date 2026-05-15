@@ -526,7 +526,7 @@ func agentDeckDefaultProfile(configPath string) string {
 }
 
 func (m *sessionManager) detectCurrentCodexSessionID(ctx context.Context) (string, []string) {
-	if sessionID := strings.TrimSpace(os.Getenv("CODEX_SESSION_ID")); sessionID != "" {
+	if sessionID := strings.TrimSpace(os.Getenv("CODEX_THREAD_ID")); sessionID != "" {
 		return sessionID, nil
 	}
 

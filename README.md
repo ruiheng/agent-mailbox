@@ -138,7 +138,7 @@ The Go MCP entrypoint keeps the existing tool names:
 
 Call `mailbox_status` first after starting each MCP server process. It
 auto-binds detectable session addresses from `agent-deck session current`,
-`CODEX_SESSION_ID`, `CLAUDE_CODE_SESSION_ID`, `GEMINI_SESSION_ID`, and
+`CODEX_THREAD_ID`, `CLAUDE_CODE_SESSION_ID`, `GEMINI_SESSION_ID`, and
 `OPENCODE_SESSION_ID`, yielding addresses such as `agent-deck/<session-id>`,
 `codex/<session-id>`, `claude/<session-id>`, `gemini/<session-id>`, and
 `opencode/<session-id>`. All other tools fail until `mailbox_status` succeeds,

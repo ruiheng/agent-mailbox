@@ -4071,7 +4071,7 @@ func TestAllNonStatusToolsRequireMailboxStatus(t *testing.T) {
 }
 
 func TestMailboxStatusReportsAutoBindInvalidJSONWarningAndUnlocksManualBind(t *testing.T) {
-	t.Setenv("CODEX_SESSION_ID", "")
+	t.Setenv("CODEX_THREAD_ID", "")
 	t.Setenv("AGENTDECK_INSTANCE_ID", "")
 
 	runner := &fakeRunner{t: t}
@@ -4119,7 +4119,7 @@ func TestMailboxStatusReportsAutoBindInvalidJSONWarningAndUnlocksManualBind(t *t
 }
 
 func TestMailboxStatusReportsCodexProbeWarningAndUnlocksManualBind(t *testing.T) {
-	t.Setenv("CODEX_SESSION_ID", "")
+	t.Setenv("CODEX_THREAD_ID", "")
 	t.Setenv("AGENTDECK_INSTANCE_ID", "")
 
 	runner := &fakeRunner{t: t}
@@ -4170,7 +4170,7 @@ func TestMailboxStatusReportsCodexProbeWarningAndUnlocksManualBind(t *testing.T)
 }
 
 func TestMailboxStatusKeepsCodexProbeWarningWhenAgentDeckProbeDoesNotComplete(t *testing.T) {
-	t.Setenv("CODEX_SESSION_ID", "")
+	t.Setenv("CODEX_THREAD_ID", "")
 	t.Setenv("AGENTDECK_INSTANCE_ID", "")
 
 	runner := &fakeRunner{t: t}
@@ -4210,7 +4210,7 @@ func TestMailboxStatusKeepsCodexProbeWarningWhenAgentDeckProbeDoesNotComplete(t 
 }
 
 func TestMailboxStatusRetriesAutoBindAfterEmptyAttempt(t *testing.T) {
-	t.Setenv("CODEX_SESSION_ID", "")
+	t.Setenv("CODEX_THREAD_ID", "")
 	t.Setenv("AGENTDECK_INSTANCE_ID", "")
 	t.Setenv("CLAUDE_CODE_SESSION_ID", "")
 
@@ -4251,7 +4251,7 @@ func TestMailboxStatusRetriesAutoBindAfterEmptyAttempt(t *testing.T) {
 }
 
 func TestMailboxStatusDoesNotWarnForCodexProbeMiss(t *testing.T) {
-	t.Setenv("CODEX_SESSION_ID", "")
+	t.Setenv("CODEX_THREAD_ID", "")
 	t.Setenv("AGENTDECK_INSTANCE_ID", "")
 
 	runner := &fakeRunner{t: t}
@@ -4288,7 +4288,7 @@ func TestMailboxStatusDoesNotWarnForCodexProbeMiss(t *testing.T) {
 }
 
 func TestMailboxStatusReportsAgentDeckShowInvalidJSONWarning(t *testing.T) {
-	t.Setenv("CODEX_SESSION_ID", "")
+	t.Setenv("CODEX_THREAD_ID", "")
 	t.Setenv("AGENTDECK_INSTANCE_ID", "deck-session-1")
 
 	runner := &fakeRunner{t: t}
@@ -4331,7 +4331,7 @@ func TestMailboxStatusReportsAgentDeckShowInvalidJSONWarning(t *testing.T) {
 }
 
 func TestMailboxStatusWarnsWhenOnlyAgentDeckAddressIsBound(t *testing.T) {
-	t.Setenv("CODEX_SESSION_ID", "")
+	t.Setenv("CODEX_THREAD_ID", "")
 	t.Setenv("CLAUDE_CODE_SESSION_ID", "")
 	t.Setenv("GEMINI_SESSION_ID", "")
 	t.Setenv("OPENCODE_SESSION_ID", "")
@@ -4401,7 +4401,7 @@ func TestAutoBindFindsClaudeCodeSessionFromEnv(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			t.Setenv("CODEX_SESSION_ID", "")
+			t.Setenv("CODEX_THREAD_ID", "")
 			t.Setenv("CLAUDE_CODE_SESSION_ID", "")
 			t.Setenv("GEMINI_SESSION_ID", "")
 			t.Setenv("OPENCODE_SESSION_ID", "")
@@ -4448,7 +4448,7 @@ func TestAutoBindFindsClaudeCodeSessionFromEnv(t *testing.T) {
 func TestAutoBindFindsAgentDeckSessionFromCodexStateDB(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
-	t.Setenv("CODEX_SESSION_ID", "codex-session-123")
+	t.Setenv("CODEX_THREAD_ID", "codex-session-123")
 	t.Setenv("AGENTDECK_INSTANCE_ID", "")
 	t.Setenv("AGENTDECK_PROFILE", "bad")
 	writeBrokenAgentDeckStateDB(t, home, "bad")
@@ -4487,7 +4487,7 @@ func TestAutoBindFindsAgentDeckSessionFromCodexStateDB(t *testing.T) {
 func TestAutoBindSkipsBadAgentDeckDBAndFallsBackToCodexOnly(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
-	t.Setenv("CODEX_SESSION_ID", "codex-session-123")
+	t.Setenv("CODEX_THREAD_ID", "codex-session-123")
 	t.Setenv("AGENTDECK_INSTANCE_ID", "")
 	t.Setenv("AGENTDECK_PROFILE", "bad")
 	writeBrokenAgentDeckStateDB(t, home, "bad")
@@ -4523,7 +4523,7 @@ func TestAutoBindSkipsBadAgentDeckDBAndFallsBackToCodexOnly(t *testing.T) {
 func TestAutoBindRetriesAgentDeckAfterCodexOnlyFallback(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
-	t.Setenv("CODEX_SESSION_ID", "codex-session-123")
+	t.Setenv("CODEX_THREAD_ID", "codex-session-123")
 	t.Setenv("AGENTDECK_INSTANCE_ID", "")
 	t.Setenv("AGENTDECK_PROFILE", "")
 
@@ -4579,7 +4579,7 @@ func TestAutoBindRetriesAgentDeckAfterCodexOnlyFallback(t *testing.T) {
 func TestAutoBindRetriesAgentDeckAfterCodexFallbackWithExtraToolAddress(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
-	t.Setenv("CODEX_SESSION_ID", "codex-session-123")
+	t.Setenv("CODEX_THREAD_ID", "codex-session-123")
 	t.Setenv("CLAUDE_CODE_SESSION_ID", "claude-session-123")
 	t.Setenv("AGENTDECK_INSTANCE_ID", "")
 	t.Setenv("AGENTDECK_PROFILE", "")
@@ -4644,7 +4644,7 @@ func TestAutoBindRetriesAgentDeckAfterCodexFallbackWithExtraToolAddress(t *testi
 func TestAutoBindRetriesAgentDeckAfterClaudeOnlyFallback(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
-	t.Setenv("CODEX_SESSION_ID", "")
+	t.Setenv("CODEX_THREAD_ID", "")
 	t.Setenv("CLAUDE_CODE_SESSION_ID", "claude-session-123")
 	t.Setenv("AGENTDECK_INSTANCE_ID", "")
 	t.Setenv("AGENTDECK_PROFILE", "")
@@ -4707,7 +4707,7 @@ func TestAutoBindRetriesAgentDeckAfterClaudeOnlyFallback(t *testing.T) {
 func TestMailboxBindDisablesAgentDeckRetryUpgrade(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
-	t.Setenv("CODEX_SESSION_ID", "codex-session-123")
+	t.Setenv("CODEX_THREAD_ID", "codex-session-123")
 	t.Setenv("AGENTDECK_INSTANCE_ID", "")
 	t.Setenv("AGENTDECK_PROFILE", "")
 
@@ -4769,7 +4769,7 @@ func TestMailboxBindDisablesAgentDeckRetryUpgrade(t *testing.T) {
 }
 
 func TestMailboxBindManualOverrideWarnsWhenNoToolAddressRemains(t *testing.T) {
-	t.Setenv("CODEX_SESSION_ID", "codex-session-123")
+	t.Setenv("CODEX_THREAD_ID", "codex-session-123")
 	t.Setenv("AGENTDECK_INSTANCE_ID", "")
 	t.Setenv("AGENTDECK_PROFILE", "")
 
@@ -4814,7 +4814,7 @@ func TestMailboxBindManualOverrideWarnsWhenNoToolAddressRemains(t *testing.T) {
 func TestAgentDeckRetryRechecksFallbackStateBeforeUpgrade(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
-	t.Setenv("CODEX_SESSION_ID", "codex-session-123")
+	t.Setenv("CODEX_THREAD_ID", "codex-session-123")
 	t.Setenv("AGENTDECK_INSTANCE_ID", "")
 	t.Setenv("AGENTDECK_PROFILE", "")
 
