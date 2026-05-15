@@ -37,7 +37,8 @@ const (
 	defaultMailHint              = "mailbox_recv"
 	mailboxRecoveryHint          = "If you forget the mailbox details or next action after ack, use `mailbox_read` on the latest `acked` delivery for this session. For older mail, use `mailbox_list` with `state: acked` and then `mailbox_read` by delivery id."
 	agentDeckBindRecoveryHint    = "agent-deck address auto-bind did not find your current session; run `agent-deck session current --json` to find your `agent-deck/<session-id>` address, then call `mailbox_bind` with that address."
-	serverInstructions           = "Bootstrap this MCP process once per agent-managed session. If it is not bound yet, run `agent-deck session current --json`, take the current session id, and call `mailbox_bind`. Later reuse the bound addresses until MCP state is lost."
+	toolSessionBindRecoveryHint  = "AI tool session auto-bind did not find codex/..., claude/..., gemini/..., or opencode/...; expose CODEX_SESSION_ID, CLAUDE_CODE_SESSION_ID, GEMINI_SESSION_ID, or OPENCODE_SESSION_ID, then call `mailbox_status` again or call `mailbox_bind` manually."
+	serverInstructions           = "Bootstrap this MCP process once per agent-managed session. The first tool call must be `mailbox_status`; it auto-binds any detectable agent-deck/codex/claude/gemini/opencode address and reports warnings. All other tools fail until `mailbox_status` has been called."
 	unsetValue                   = "<unset>"
 )
 
@@ -363,14 +364,30 @@ func codexAddress(sessionID string) string {
 	return "codex/" + sessionID
 }
 
+func claudeAddress(sessionID string) string {
+	return "claude/" + sessionID
+}
+
+func geminiAddress(sessionID string) string {
+	return "gemini/" + sessionID
+}
+
+func opencodeAddress(sessionID string) string {
+	return "opencode/" + sessionID
+}
+
 func boundStateMap(bound boundState) map[string]any {
 	return map[string]any{
-		"bound_addresses":                bound.BoundAddresses,
-		"default_sender":                 nilIfEmpty(bound.DefaultSender),
-		"default_workdir":                nilIfEmpty(bound.DefaultWorkdir),
-		"detected_agent_deck_session_id": nilIfEmpty(bound.DetectedAgentDeckSession),
-		"detected_agent_session_id":      nilIfEmpty(bound.DetectedAgentSession),
-		"warnings":                       bound.Warnings,
+		"bound_addresses":                 bound.BoundAddresses,
+		"default_sender":                  nilIfEmpty(bound.DefaultSender),
+		"default_workdir":                 nilIfEmpty(bound.DefaultWorkdir),
+		"detected_agent_deck_session_id":  nilIfEmpty(bound.DetectedAgentDeckSession),
+		"detected_agent_session_id":       nilIfEmpty(bound.DetectedAgentSession),
+		"detected_claude_code_session_id": nilIfEmpty(bound.DetectedClaudeCodeSession),
+		"detected_gemini_session_id":      nilIfEmpty(bound.DetectedGeminiSession),
+		"detected_opencode_session_id":    nilIfEmpty(bound.DetectedOpencodeSession),
+		"detected_tool_session_addresses": bound.DetectedToolSessionAddresses,
+		"warnings":                        bound.Warnings,
 	}
 }
 

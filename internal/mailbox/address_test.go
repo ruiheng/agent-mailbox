@@ -36,20 +36,36 @@ func TestParseAddressRejectsEmptyIDSegment(t *testing.T) {
 func TestParseAddressRejectsNestedKnownSessionAddress(t *testing.T) {
 	t.Parallel()
 
-	if _, err := ParseAddress("agent-deck/reviewer/task"); err == nil {
-		t.Fatal("ParseAddress() error = nil, want known-session nested path rejection")
+	for _, address := range []string{
+		"agent-deck/reviewer/task",
+		"claude/session/task",
+		"codex/session/task",
+		"gemini/session/task",
+		"opencode/session/task",
+	} {
+		if _, err := ParseAddress(address); err == nil {
+			t.Fatalf("ParseAddress(%q) error = nil, want known-session nested path rejection", address)
+		}
 	}
 }
 
 func TestParseAddressAcceptsKnownSessionSingleTarget(t *testing.T) {
 	t.Parallel()
 
-	parsed, err := ParseAddress("codex/550e8400-e29b-41d4-a716-446655440000")
-	if err != nil {
-		t.Fatalf("ParseAddress() error = %v", err)
-	}
-	if len(parsed.Segments) != 1 || parsed.Segments[0] != "550e8400-e29b-41d4-a716-446655440000" {
-		t.Fatalf("segments = %v, want single target segment", parsed.Segments)
+	for _, address := range []string{
+		"agent-deck/550e8400-e29b-41d4-a716-446655440000",
+		"claude/550e8400-e29b-41d4-a716-446655440000",
+		"codex/550e8400-e29b-41d4-a716-446655440000",
+		"gemini/550e8400-e29b-41d4-a716-446655440000",
+		"opencode/550e8400-e29b-41d4-a716-446655440000",
+	} {
+		parsed, err := ParseAddress(address)
+		if err != nil {
+			t.Fatalf("ParseAddress(%q) error = %v", address, err)
+		}
+		if len(parsed.Segments) != 1 || parsed.Segments[0] != "550e8400-e29b-41d4-a716-446655440000" {
+			t.Fatalf("ParseAddress(%q) segments = %v, want single target segment", address, parsed.Segments)
+		}
 	}
 }
 

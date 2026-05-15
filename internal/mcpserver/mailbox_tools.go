@@ -111,7 +111,7 @@ type readLatestResult struct {
 }
 
 func (s *Service) registerMailboxTools(server *mcp.Server) {
-	mcp.AddTool(server, &mcp.Tool{
+	addToolRequiringMailboxStatus(server, s, &mcp.Tool{
 		Name:        "mailbox_bind",
 		Description: "Bind one or more mailbox addresses into MCP server state.",
 	}, s.mailboxBind)
@@ -119,75 +119,75 @@ func (s *Service) registerMailboxTools(server *mcp.Server) {
 		Name:        "mailbox_status",
 		Description: "Show the currently bound mailbox addresses, default sender, and default workdir stored in this MCP server.",
 	}, s.mailboxStatus)
-	mcp.AddTool(server, &mcp.Tool{
+	addToolRequiringMailboxStatus(server, s, &mcp.Tool{
 		Name:        "mailbox_send",
 		Description: "Send one mailbox message and automatically push-notify a non-local target when the address scheme supports it. Set disable_notify_message=true to skip notify for that send.",
 	}, s.mailboxSend)
-	mcp.AddTool(server, &mcp.Tool{
+	addToolRequiringMailboxStatus(server, s, &mcp.Tool{
 		Name:        "mailbox_forward",
 		Description: "Forward one stored mailbox message to a new recipient. Provide exactly one of message_id or delivery_id. The forward reuses the original body, content_type, and schema_version, and sends through the normal mailbox_send path.",
 	}, s.mailboxForward)
-	mcp.AddTool(server, &mcp.Tool{
+	addToolRequiringMailboxStatus(server, s, &mcp.Tool{
 		Name:        "mailbox_wait",
-		Description: "Observe whether mail is available without claiming it. Agent-managed session inbox addresses typically look like agent-deck/<session-id> or codex/<session-id>. Optional timeout is a duration string such as 30s, 5m, 120ms, or 1m30s.",
+		Description: "Observe whether mail is available without claiming it. Agent-managed session inbox addresses typically look like agent-deck/<session-id>, codex/<session-id>, claude/<session-id>, gemini/<session-id>, or opencode/<session-id>. Optional timeout is a duration string such as 30s, 5m, 120ms, or 1m30s.",
 	}, s.mailboxWait)
-	mcp.AddTool(server, &mcp.Tool{
+	addToolRequiringMailboxStatus(server, s, &mcp.Tool{
 		Name:        "mailbox_recv",
 		Description: "Receive mail, optionally waiting with timeout before claiming. If addresses is omitted, receive from all bound addresses; pass addresses only to override that inbox set for this call. After ack, use mailbox_read to reread persisted deliveries when context is lost.",
 	}, s.mailboxRecv)
-	mcp.AddTool(server, &mcp.Tool{
+	addToolRequiringMailboxStatus(server, s, &mcp.Tool{
 		Name:        "mailbox_list",
 		Description: "List persisted deliveries for one inbox. Use state='acked' to find deliveries that were already received and acknowledged before rereading them with mailbox_read.",
 	}, s.mailboxList)
-	mcp.AddTool(server, &mcp.Tool{
+	addToolRequiringMailboxStatus(server, s, &mcp.Tool{
 		Name:        "mailbox_read",
 		Description: "Read persisted mailbox messages or deliveries. Use latest=true with state='acked' to reread recently acknowledged mail after context loss.",
 	}, s.mailboxRead)
-	mcp.AddTool(server, &mcp.Tool{
+	addToolRequiringMailboxStatus(server, s, &mcp.Tool{
 		Name:        "mailbox_ack",
 		Description: "Acknowledge a claimed mailbox delivery. Acked deliveries remain readable later through mailbox_read.",
 	}, s.mailboxAck)
-	mcp.AddTool(server, &mcp.Tool{
+	addToolRequiringMailboxStatus(server, s, &mcp.Tool{
 		Name:        "mailbox_release",
 		Description: "Release a claimed mailbox delivery back to the queue.",
 	}, s.mailboxRelease)
-	mcp.AddTool(server, &mcp.Tool{
+	addToolRequiringMailboxStatus(server, s, &mcp.Tool{
 		Name:        "mailbox_defer",
 		Description: "Defer a claimed mailbox delivery until a later RFC3339 time.",
 	}, s.mailboxDefer)
-	mcp.AddTool(server, &mcp.Tool{
+	addToolRequiringMailboxStatus(server, s, &mcp.Tool{
 		Name:        "mailbox_fail",
 		Description: "Fail a claimed mailbox delivery with a reason.",
 	}, s.mailboxFail)
-	mcp.AddTool(server, &mcp.Tool{
+	addToolRequiringMailboxStatus(server, s, &mcp.Tool{
 		Name:        "mailbox_group_create",
 		Description: "Create a group mailbox address.",
 	}, s.mailboxGroupCreate)
-	mcp.AddTool(server, &mcp.Tool{
+	addToolRequiringMailboxStatus(server, s, &mcp.Tool{
 		Name:        "mailbox_group_add_member",
 		Description: "Add a person to a group mailbox.",
 	}, s.mailboxGroupAddMember)
-	mcp.AddTool(server, &mcp.Tool{
+	addToolRequiringMailboxStatus(server, s, &mcp.Tool{
 		Name:        "mailbox_group_remove_member",
 		Description: "Remove a person from a group mailbox.",
 	}, s.mailboxGroupRemoveMember)
-	mcp.AddTool(server, &mcp.Tool{
+	addToolRequiringMailboxStatus(server, s, &mcp.Tool{
 		Name:        "mailbox_group_members",
 		Description: "List group mailbox memberships.",
 	}, s.mailboxGroupMembers)
-	mcp.AddTool(server, &mcp.Tool{
+	addToolRequiringMailboxStatus(server, s, &mcp.Tool{
 		Name:        "mailbox_group_add_subscriber",
 		Description: "Add a best-effort notification target for group messages.",
 	}, s.mailboxGroupAddSubscriber)
-	mcp.AddTool(server, &mcp.Tool{
+	addToolRequiringMailboxStatus(server, s, &mcp.Tool{
 		Name:        "mailbox_group_remove_subscriber",
 		Description: "Remove a group notification target.",
 	}, s.mailboxGroupRemoveSubscriber)
-	mcp.AddTool(server, &mcp.Tool{
+	addToolRequiringMailboxStatus(server, s, &mcp.Tool{
 		Name:        "mailbox_group_subscribers",
 		Description: "List active group notification targets.",
 	}, s.mailboxGroupSubscribers)
-	mcp.AddTool(server, &mcp.Tool{
+	addToolRequiringMailboxStatus(server, s, &mcp.Tool{
 		Name:        "mailbox_address_inspect",
 		Description: "Inspect whether an address is an endpoint, group, or unbound.",
 	}, s.mailboxAddressInspect)
@@ -208,11 +208,11 @@ func (s *Service) mailboxStatus(ctx context.Context, _ *mcp.CallToolRequest, _ m
 	if err != nil {
 		return nil, nil, err
 	}
-	return s.mailboxToolResult(ctx, map[string]any{
-		"bound_addresses": bound.BoundAddresses,
-		"default_sender":  orUnset(bound.DefaultSender),
-		"default_workdir": orUnset(bound.DefaultWorkdir),
-	})
+	s.markMailboxStatusCalled()
+	out := boundStateMap(bound)
+	out["default_sender"] = orUnset(bound.DefaultSender)
+	out["default_workdir"] = orUnset(bound.DefaultWorkdir)
+	return s.mailboxToolResult(ctx, out)
 }
 
 func (s *Service) sendMailboxMessage(ctx context.Context, input mailboxSendInput) (map[string]any, error) {
@@ -666,7 +666,9 @@ func (s *Service) mailboxReceiveWarnings(ctx context.Context, explicitAddresses 
 	if err != nil {
 		return []string{"unable to verify bound agent session state: " + err.Error()}
 	}
-	if bound.DetectedAgentSession == "" || bound.DetectedAgentDeckSession != "" {
+	toolSessionBound := len(bound.DetectedToolSessionAddresses) > 0 || len(boundToolSessionAddresses(bound.BoundAddresses)) > 0
+	agentDeckBound := bound.DetectedAgentDeckSession != "" || len(boundAddressesByScheme(bound.BoundAddresses, "agent-deck")) > 0
+	if !toolSessionBound || agentDeckBound {
 		return nil
 	}
 	return []string{agentDeckBindRecoveryHint}

@@ -31,33 +31,49 @@ var (
 )
 
 type serverState struct {
-	mu                       sync.Mutex
-	boundAddresses           []string
-	defaultSender            string
-	defaultWorkdir           string
-	autoBindAttempted        bool
-	autoBoundCodexFallback   bool
-	detectedAgentDeckSession string
-	detectedAgentSession     string
+	mu                        sync.Mutex
+	boundAddresses            []string
+	defaultSender             string
+	defaultWorkdir            string
+	autoBindAttempted         bool
+	autoBindEmptyResult       bool
+	autoBoundToolFallback     bool
+	autoBindWarnings          []string
+	detectedAgentDeckSession  string
+	detectedAgentSession      string
+	detectedClaudeCodeSession string
+	detectedGeminiSession     string
+	detectedOpencodeSession   string
+	statusToolCalled          bool
 }
 
 type stateSnapshot struct {
-	BoundAddresses           []string
-	DefaultSender            string
-	DefaultWorkdir           string
-	AutoBindAttempted        bool
-	AutoBoundCodexFallback   bool
-	DetectedAgentDeckSession string
-	DetectedAgentSession     string
+	BoundAddresses            []string
+	DefaultSender             string
+	DefaultWorkdir            string
+	AutoBindAttempted         bool
+	AutoBindEmptyResult       bool
+	AutoBoundToolFallback     bool
+	AutoBindWarnings          []string
+	DetectedAgentDeckSession  string
+	DetectedAgentSession      string
+	DetectedClaudeCodeSession string
+	DetectedGeminiSession     string
+	DetectedOpencodeSession   string
+	StatusToolCalled          bool
 }
 
 type boundState struct {
-	BoundAddresses           []string `json:"bound_addresses"`
-	DefaultSender            string   `json:"default_sender"`
-	DefaultWorkdir           string   `json:"default_workdir"`
-	DetectedAgentDeckSession string   `json:"detected_agent_deck_session_id"`
-	DetectedAgentSession     string   `json:"detected_agent_session_id"`
-	Warnings                 []string `json:"warnings"`
+	BoundAddresses               []string `json:"bound_addresses"`
+	DefaultSender                string   `json:"default_sender"`
+	DefaultWorkdir               string   `json:"default_workdir"`
+	DetectedAgentDeckSession     string   `json:"detected_agent_deck_session_id"`
+	DetectedAgentSession         string   `json:"detected_agent_session_id"`
+	DetectedClaudeCodeSession    string   `json:"detected_claude_code_session_id"`
+	DetectedGeminiSession        string   `json:"detected_gemini_session_id"`
+	DetectedOpencodeSession      string   `json:"detected_opencode_session_id"`
+	DetectedToolSessionAddresses []string `json:"detected_tool_session_addresses"`
+	Warnings                     []string `json:"warnings"`
 }
 
 type agentDeckDBMatch struct {
@@ -83,8 +99,9 @@ type psRow struct {
 }
 
 type sessionManager struct {
-	runner Runner
-	state  *serverState
+	runner    Runner
+	state     *serverState
+	parentPID func() int
 }
 
 type sessionShowProbeStatus string
@@ -102,8 +119,9 @@ type sessionShowProbeResult struct {
 
 func newSessionManager(runner Runner, state *serverState) *sessionManager {
 	return &sessionManager{
-		runner: runner,
-		state:  state,
+		runner:    runner,
+		state:     state,
+		parentPID: os.Getppid,
 	}
 }
 
@@ -132,7 +150,14 @@ func (m *sessionManager) bind(ctx context.Context, input mailboxBindInput) (boun
 	m.state.defaultSender = defaultSender
 	m.state.defaultWorkdir = strings.TrimSpace(input.DefaultWorkdir)
 	m.state.autoBindAttempted = true
-	m.state.autoBoundCodexFallback = false
+	m.state.autoBindEmptyResult = false
+	m.state.autoBoundToolFallback = false
+	m.state.autoBindWarnings = nil
+	m.state.detectedAgentDeckSession = ""
+	m.state.detectedAgentSession = ""
+	m.state.detectedClaudeCodeSession = ""
+	m.state.detectedGeminiSession = ""
+	m.state.detectedOpencodeSession = ""
 	m.state.mu.Unlock()
 
 	return m.boundState(ctx)
@@ -156,23 +181,29 @@ func (m *sessionManager) boundState(ctx context.Context) (boundState, error) {
 	snapshot := m.snapshotState()
 
 	warnings := make([]string, 0, 3)
-	if snapshot.DetectedAgentDeckSession == "" {
+	warnings = append(warnings, snapshot.AutoBindWarnings...)
+	if snapshot.DetectedAgentDeckSession == "" && len(boundAddressesByScheme(snapshot.BoundAddresses, "agent-deck")) == 0 {
 		warnings = append(warnings, agentDeckBindRecoveryHint)
 	}
-	if snapshot.DetectedAgentSession == "" {
-		warnings = append(warnings, "unable to determine current AI agent session id")
+	toolAddresses := detectedToolSessionAddresses(snapshot)
+	if len(toolAddresses) == 0 && len(boundToolSessionAddresses(snapshot.BoundAddresses)) == 0 {
+		warnings = append(warnings, toolSessionBindRecoveryHint)
 	}
 	if len(snapshot.BoundAddresses) == 0 {
 		warnings = append(warnings, "no mailbox addresses are currently bound")
 	}
 
 	return boundState{
-		BoundAddresses:           snapshot.BoundAddresses,
-		DefaultSender:            snapshot.DefaultSender,
-		DefaultWorkdir:           snapshot.DefaultWorkdir,
-		DetectedAgentDeckSession: snapshot.DetectedAgentDeckSession,
-		DetectedAgentSession:     snapshot.DetectedAgentSession,
-		Warnings:                 warnings,
+		BoundAddresses:               snapshot.BoundAddresses,
+		DefaultSender:                snapshot.DefaultSender,
+		DefaultWorkdir:               snapshot.DefaultWorkdir,
+		DetectedAgentDeckSession:     snapshot.DetectedAgentDeckSession,
+		DetectedAgentSession:         snapshot.DetectedAgentSession,
+		DetectedClaudeCodeSession:    snapshot.DetectedClaudeCodeSession,
+		DetectedGeminiSession:        snapshot.DetectedGeminiSession,
+		DetectedOpencodeSession:      snapshot.DetectedOpencodeSession,
+		DetectedToolSessionAddresses: toolAddresses,
+		Warnings:                     warnings,
 	}, nil
 }
 
@@ -180,49 +211,55 @@ func (m *sessionManager) snapshotState() stateSnapshot {
 	m.state.mu.Lock()
 	defer m.state.mu.Unlock()
 	return stateSnapshot{
-		BoundAddresses:           append([]string(nil), m.state.boundAddresses...),
-		DefaultSender:            m.state.defaultSender,
-		DefaultWorkdir:           m.state.defaultWorkdir,
-		AutoBindAttempted:        m.state.autoBindAttempted,
-		AutoBoundCodexFallback:   m.state.autoBoundCodexFallback,
-		DetectedAgentDeckSession: m.state.detectedAgentDeckSession,
-		DetectedAgentSession:     m.state.detectedAgentSession,
+		BoundAddresses:            append([]string(nil), m.state.boundAddresses...),
+		DefaultSender:             m.state.defaultSender,
+		DefaultWorkdir:            m.state.defaultWorkdir,
+		AutoBindAttempted:         m.state.autoBindAttempted,
+		AutoBindEmptyResult:       m.state.autoBindEmptyResult,
+		AutoBoundToolFallback:     m.state.autoBoundToolFallback,
+		AutoBindWarnings:          append([]string(nil), m.state.autoBindWarnings...),
+		DetectedAgentDeckSession:  m.state.detectedAgentDeckSession,
+		DetectedAgentSession:      m.state.detectedAgentSession,
+		DetectedClaudeCodeSession: m.state.detectedClaudeCodeSession,
+		DetectedGeminiSession:     m.state.detectedGeminiSession,
+		DetectedOpencodeSession:   m.state.detectedOpencodeSession,
+		StatusToolCalled:          m.state.statusToolCalled,
 	}
 }
 
 func (m *sessionManager) tryAutoBindCurrentSession(ctx context.Context) error {
 	snapshot := m.snapshotState()
 	if len(snapshot.BoundAddresses) > 0 {
-		if snapshot.AutoBoundCodexFallback && snapshot.DetectedAgentDeckSession == "" && snapshot.DetectedAgentSession != "" {
+		if snapshot.AutoBoundToolFallback && snapshot.DetectedAgentDeckSession == "" && len(detectedToolSessionAddresses(snapshot)) > 0 {
 			return m.tryUpgradeAgentDeckBinding(ctx, snapshot)
 		}
 		return nil
 	}
-	if snapshot.AutoBindAttempted {
+	if snapshot.AutoBindAttempted && !snapshot.AutoBindEmptyResult {
 		return nil
 	}
 
-	codexSessionID, err := m.detectCurrentCodexSessionID(ctx)
-	if err != nil {
-		return err
-	}
+	codexSessionID, autoBindWarnings := m.detectCurrentCodexSessionID(ctx)
+	claudeCodeSessionID := detectSessionIDFromEnv("CLAUDE_CODE_SESSION_ID")
+	geminiSessionID := detectSessionIDFromEnv("GEMINI_SESSION_ID")
+	opencodeSessionID := detectSessionIDFromEnv("OPENCODE_SESSION_ID")
 
 	defaultWorkdir := snapshot.DefaultWorkdir
-	agentDeckSessionID, defaultWorkdir, probeCompleted, err := m.detectCurrentAgentDeckSessionID(ctx, codexSessionID, defaultWorkdir)
+	agentDeckSessionID, defaultWorkdir, probeCompleted, agentDeckWarnings, err := m.detectCurrentAgentDeckSessionID(ctx, codexSessionID, defaultWorkdir)
 	if err != nil {
 		return err
 	}
+	autoBindWarnings = append(autoBindWarnings, agentDeckWarnings...)
 
-	addresses := make([]string, 0, 2)
+	addresses := make([]string, 0, 5)
 	detectedAgentDeckSession := ""
 	if agentDeckSessionID != "" {
 		detectedAgentDeckSession = agentDeckSessionID
 		addresses = append(addresses, agentDeckAddress(agentDeckSessionID))
 		data, err := m.resolveSessionShowBestEffort(ctx, agentDeckSessionID)
 		if err != nil {
-			return err
-		}
-		if data != nil && strings.TrimSpace(data.Path) != "" {
+			autoBindWarnings = append(autoBindWarnings, fmt.Sprintf("agent-deck session show returned invalid data during auto-bind: %v", err))
+		} else if data != nil && strings.TrimSpace(data.Path) != "" {
 			defaultWorkdir = strings.TrimSpace(data.Path)
 		}
 	}
@@ -232,8 +269,17 @@ func (m *sessionManager) tryAutoBindCurrentSession(ctx context.Context) error {
 		detectedAgentSession = codexSessionID
 		addresses = append(addresses, codexAddress(codexSessionID))
 	}
+	if claudeCodeSessionID != "" {
+		addresses = append(addresses, claudeAddress(claudeCodeSessionID))
+	}
+	if geminiSessionID != "" {
+		addresses = append(addresses, geminiAddress(geminiSessionID))
+	}
+	if opencodeSessionID != "" {
+		addresses = append(addresses, opencodeAddress(opencodeSessionID))
+	}
 
-	if !probeCompleted && codexSessionID == "" && len(addresses) == 0 {
+	if !probeCompleted && len(addresses) == 0 && len(autoBindWarnings) == 0 {
 		return nil
 	}
 
@@ -245,13 +291,24 @@ func (m *sessionManager) tryAutoBindCurrentSession(ctx context.Context) error {
 	m.state.boundAddresses = dedupe(addresses)
 	m.state.detectedAgentDeckSession = detectedAgentDeckSession
 	m.state.detectedAgentSession = detectedAgentSession
+	m.state.detectedClaudeCodeSession = claudeCodeSessionID
+	m.state.detectedGeminiSession = geminiSessionID
+	m.state.detectedOpencodeSession = opencodeSessionID
 	m.state.defaultWorkdir = defaultWorkdir
-	m.state.autoBoundCodexFallback = detectedAgentDeckSession == "" && detectedAgentSession != ""
+	m.state.autoBoundToolFallback = detectedAgentDeckSession == "" && len(addresses) > 0
+	m.state.autoBindEmptyResult = len(addresses) == 0
+	m.state.autoBindWarnings = append([]string(nil), autoBindWarnings...)
 	switch {
 	case detectedAgentDeckSession != "":
 		m.state.defaultSender = agentDeckAddress(detectedAgentDeckSession)
 	case detectedAgentSession != "":
 		m.state.defaultSender = codexAddress(detectedAgentSession)
+	case claudeCodeSessionID != "":
+		m.state.defaultSender = claudeAddress(claudeCodeSessionID)
+	case geminiSessionID != "":
+		m.state.defaultSender = geminiAddress(geminiSessionID)
+	case opencodeSessionID != "":
+		m.state.defaultSender = opencodeAddress(opencodeSessionID)
 	}
 	m.state.autoBindAttempted = true
 	return nil
@@ -259,49 +316,56 @@ func (m *sessionManager) tryAutoBindCurrentSession(ctx context.Context) error {
 
 func (m *sessionManager) tryUpgradeAgentDeckBinding(ctx context.Context, snapshot stateSnapshot) error {
 	defaultWorkdir := snapshot.DefaultWorkdir
-	agentDeckSessionID, defaultWorkdir, _, err := m.detectCurrentAgentDeckSessionID(ctx, snapshot.DetectedAgentSession, defaultWorkdir)
+	agentDeckSessionID, defaultWorkdir, _, autoBindWarnings, err := m.detectCurrentAgentDeckSessionID(ctx, snapshot.DetectedAgentSession, defaultWorkdir)
 	if err != nil {
 		return err
 	}
 	if agentDeckSessionID == "" {
+		m.state.mu.Lock()
+		if m.state.autoBoundToolFallback && m.state.detectedAgentDeckSession == "" && currentToolFallbackMatchesSnapshot(m.state, snapshot) {
+			m.state.autoBindWarnings = append([]string(nil), autoBindWarnings...)
+		}
+		m.state.mu.Unlock()
 		return nil
 	}
 
 	if data, err := m.resolveSessionShowBestEffort(ctx, agentDeckSessionID); err != nil {
-		return err
+		autoBindWarnings = append(autoBindWarnings, fmt.Sprintf("agent-deck session show returned invalid data during auto-bind: %v", err))
 	} else if data != nil && strings.TrimSpace(data.Path) != "" {
 		defaultWorkdir = strings.TrimSpace(data.Path)
 	}
 
 	m.state.mu.Lock()
 	defer m.state.mu.Unlock()
-	if !m.state.autoBoundCodexFallback ||
+	if !m.state.autoBoundToolFallback ||
 		m.state.detectedAgentDeckSession != "" ||
-		m.state.detectedAgentSession != snapshot.DetectedAgentSession ||
-		!slices.Equal(m.state.boundAddresses, []string{codexAddress(snapshot.DetectedAgentSession)}) {
+		!currentToolFallbackMatchesSnapshot(m.state, snapshot) {
 		return nil
 	}
 	addresses := append([]string{agentDeckAddress(agentDeckSessionID)}, m.state.boundAddresses...)
 	m.state.boundAddresses = dedupe(addresses)
 	m.state.detectedAgentDeckSession = agentDeckSessionID
 	m.state.defaultWorkdir = defaultWorkdir
-	m.state.autoBoundCodexFallback = false
-	if m.state.defaultSender == "" || m.state.defaultSender == codexAddress(snapshot.DetectedAgentSession) {
+	m.state.autoBoundToolFallback = false
+	m.state.autoBindEmptyResult = false
+	m.state.autoBindWarnings = nil
+	if m.state.defaultSender == "" || slices.Contains(detectedToolSessionAddresses(snapshot), m.state.defaultSender) {
 		m.state.defaultSender = agentDeckAddress(agentDeckSessionID)
 	}
 	m.state.autoBindAttempted = true
 	return nil
 }
 
-func (m *sessionManager) detectCurrentAgentDeckSessionID(ctx context.Context, codexSessionID, defaultWorkdir string) (string, string, bool, error) {
+func (m *sessionManager) detectCurrentAgentDeckSessionID(ctx context.Context, codexSessionID, defaultWorkdir string) (string, string, bool, []string, error) {
 	envAgentDeckID := strings.TrimSpace(os.Getenv("AGENTDECK_INSTANCE_ID"))
 	agentDeckSessionID := envAgentDeckID
 	probeCompleted := envAgentDeckID != ""
+	var warnings []string
 
 	if agentDeckSessionID == "" {
 		result, err := runProbe(ctx, m.runner, []string{"agent-deck", "session", "current", "--json"}, runOptions{timeout: syncCmdTimeout}, false)
 		if err != nil {
-			return "", defaultWorkdir, probeCompleted, err
+			return "", defaultWorkdir, probeCompleted, warnings, err
 		}
 		if result != nil {
 			probeCompleted = true
@@ -310,9 +374,10 @@ func (m *sessionManager) detectCurrentAgentDeckSessionID(ctx context.Context, co
 					ID string `json:"id"`
 				}
 				if err := json.Unmarshal([]byte(result.Stdout), &current); err != nil {
-					return "", defaultWorkdir, probeCompleted, fmt.Errorf("agent-deck session current returned invalid JSON: %w", err)
+					warnings = append(warnings, fmt.Sprintf("agent-deck session current returned invalid JSON during auto-bind: %v", err))
+				} else {
+					agentDeckSessionID = strings.TrimSpace(current.ID)
 				}
-				agentDeckSessionID = strings.TrimSpace(current.ID)
 			}
 		}
 	}
@@ -320,7 +385,7 @@ func (m *sessionManager) detectCurrentAgentDeckSessionID(ctx context.Context, co
 	if agentDeckSessionID == "" && codexSessionID != "" {
 		match, err := lookupAgentDeckSessionByCodexID(ctx, codexSessionID)
 		if err != nil {
-			return "", defaultWorkdir, probeCompleted, err
+			return "", defaultWorkdir, probeCompleted, warnings, err
 		}
 		if match != nil {
 			agentDeckSessionID = match.SessionID
@@ -330,7 +395,7 @@ func (m *sessionManager) detectCurrentAgentDeckSessionID(ctx context.Context, co
 		}
 	}
 
-	return agentDeckSessionID, defaultWorkdir, probeCompleted, nil
+	return agentDeckSessionID, defaultWorkdir, probeCompleted, warnings, nil
 }
 
 func lookupAgentDeckSessionByCodexID(ctx context.Context, codexSessionID string) (*agentDeckDBMatch, error) {
@@ -460,18 +525,20 @@ func agentDeckDefaultProfile(configPath string) string {
 	return strings.TrimSpace(config.DefaultProfile)
 }
 
-func (m *sessionManager) detectCurrentCodexSessionID(ctx context.Context) (string, error) {
+func (m *sessionManager) detectCurrentCodexSessionID(ctx context.Context) (string, []string) {
 	if sessionID := strings.TrimSpace(os.Getenv("CODEX_SESSION_ID")); sessionID != "" {
 		return sessionID, nil
 	}
 
+	var warnings []string
 	seen := map[int]bool{}
-	pid := os.Getppid()
+	pid := m.parentPID()
 	for pid > 1 && !seen[pid] {
 		seen[pid] = true
 		row, err := m.getProcessRow(ctx, pid)
 		if err != nil {
-			return "", err
+			warnings = append(warnings, fmt.Sprintf("codex session auto-bind probe failed: %v", err))
+			return "", warnings
 		}
 		if row == nil {
 			break
@@ -479,25 +546,93 @@ func (m *sessionManager) detectCurrentCodexSessionID(ctx context.Context) (strin
 		looksLikeCodex := row.Comm == "codex" || codexCommandPattern.MatchString(row.Args) || strings.Contains(row.Args, "@openai/codex")
 		if looksLikeCodex {
 			if fromArgs := extractCodexSessionIDFromArgs(row.Args); fromArgs != "" {
-				return fromArgs, nil
+				return fromArgs, warnings
 			}
 			if fromLsof, err := m.extractCodexSessionIDFromLsof(ctx, row.PID); err != nil {
-				return "", err
+				warnings = append(warnings, fmt.Sprintf("codex session auto-bind probe failed: %v", err))
+				return "", warnings
 			} else if fromLsof != "" {
-				return fromLsof, nil
+				return fromLsof, warnings
 			}
-			return "", nil
+			return "", warnings
 		}
 		pid = row.PPID
 	}
-	return "", nil
+	return "", warnings
+}
+
+func detectSessionIDFromEnv(name string) string {
+	return strings.TrimSpace(os.Getenv(name))
+}
+
+func detectedToolSessionAddresses(snapshot stateSnapshot) []string {
+	addresses := make([]string, 0, 4)
+	if snapshot.DetectedAgentSession != "" {
+		addresses = append(addresses, codexAddress(snapshot.DetectedAgentSession))
+	}
+	if snapshot.DetectedClaudeCodeSession != "" {
+		addresses = append(addresses, claudeAddress(snapshot.DetectedClaudeCodeSession))
+	}
+	if snapshot.DetectedGeminiSession != "" {
+		addresses = append(addresses, geminiAddress(snapshot.DetectedGeminiSession))
+	}
+	if snapshot.DetectedOpencodeSession != "" {
+		addresses = append(addresses, opencodeAddress(snapshot.DetectedOpencodeSession))
+	}
+	return addresses
+}
+
+func boundToolSessionAddresses(boundAddresses []string) []string {
+	return boundAddressesByScheme(boundAddresses, "codex", "claude", "gemini", "opencode")
+}
+
+func boundAddressesByScheme(boundAddresses []string, schemes ...string) []string {
+	if len(schemes) == 0 {
+		return nil
+	}
+	allowed := make(map[string]struct{}, len(schemes))
+	for _, scheme := range schemes {
+		allowed[scheme] = struct{}{}
+	}
+	addresses := make([]string, 0, len(boundAddresses))
+	for _, address := range boundAddresses {
+		parsed, err := mailbox.ParseAddress(address)
+		if err != nil {
+			continue
+		}
+		if _, ok := allowed[parsed.Scheme]; ok {
+			addresses = append(addresses, address)
+		}
+	}
+	return addresses
+}
+
+func currentToolFallbackMatchesSnapshot(state *serverState, snapshot stateSnapshot) bool {
+	current := stateSnapshot{
+		DetectedAgentSession:      state.detectedAgentSession,
+		DetectedClaudeCodeSession: state.detectedClaudeCodeSession,
+		DetectedGeminiSession:     state.detectedGeminiSession,
+		DetectedOpencodeSession:   state.detectedOpencodeSession,
+	}
+	if current.DetectedAgentSession != snapshot.DetectedAgentSession ||
+		current.DetectedClaudeCodeSession != snapshot.DetectedClaudeCodeSession ||
+		current.DetectedGeminiSession != snapshot.DetectedGeminiSession ||
+		current.DetectedOpencodeSession != snapshot.DetectedOpencodeSession {
+		return false
+	}
+	for _, address := range detectedToolSessionAddresses(snapshot) {
+		if !slices.Contains(state.boundAddresses, address) {
+			return false
+		}
+	}
+	return true
 }
 
 func (m *sessionManager) getProcessRow(ctx context.Context, pid int) (*psRow, error) {
 	if pid <= 1 {
 		return nil, nil
 	}
-	result, err := runProbe(ctx, m.runner, []string{"ps", "-p", strconv.Itoa(pid), "-o", "pid=,ppid=,comm=,args="}, runOptions{timeout: syncCmdTimeout}, false)
+	result, err := runProbe(ctx, m.runner, []string{"ps", "-p", strconv.Itoa(pid), "-o", "pid=,ppid=,comm=,args="}, runOptions{timeout: syncCmdTimeout}, true)
 	if err != nil {
 		return nil, err
 	}
@@ -511,7 +646,7 @@ func (m *sessionManager) extractCodexSessionIDFromLsof(ctx context.Context, pid 
 	if pid <= 1 {
 		return "", nil
 	}
-	result, err := runProbe(ctx, m.runner, []string{"lsof", "-p", strconv.Itoa(pid)}, runOptions{timeout: syncCmdTimeout}, false)
+	result, err := runProbe(ctx, m.runner, []string{"lsof", "-p", strconv.Itoa(pid)}, runOptions{timeout: syncCmdTimeout}, true)
 	if err != nil {
 		return "", err
 	}

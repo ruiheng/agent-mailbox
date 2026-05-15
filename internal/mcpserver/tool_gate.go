@@ -1,0 +1,35 @@
+package mcpserver
+
+import (
+	"context"
+	"fmt"
+
+	"github.com/modelcontextprotocol/go-sdk/mcp"
+)
+
+func addToolRequiringMailboxStatus[In, Out any](server *mcp.Server, service *Service, tool *mcp.Tool, handler mcp.ToolHandlerFor[In, Out]) {
+	toolName := tool.Name
+	mcp.AddTool(server, tool, func(ctx context.Context, req *mcp.CallToolRequest, input In) (*mcp.CallToolResult, Out, error) {
+		var zero Out
+		if err := service.requireMailboxStatusCalled(toolName); err != nil {
+			return nil, zero, err
+		}
+		return handler(ctx, req, input)
+	})
+}
+
+func (s *Service) markMailboxStatusCalled() {
+	s.state.mu.Lock()
+	s.state.statusToolCalled = true
+	s.state.mu.Unlock()
+}
+
+func (s *Service) requireMailboxStatusCalled(toolName string) error {
+	s.state.mu.Lock()
+	called := s.state.statusToolCalled
+	s.state.mu.Unlock()
+	if called {
+		return nil
+	}
+	return fmt.Errorf("%s cannot run before mailbox_status; call mailbox_status first so the MCP server can auto-bind addresses and report any binding warnings", toolName)
+}
