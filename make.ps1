@@ -10,11 +10,18 @@ $ErrorActionPreference = "Stop"
 
 $go = if ($env:GO) { $env:GO } else { "go" }
 $cmdPath = if ($env:CMD_PATH) { $env:CMD_PATH } else { "./cmd/mailbox" }
+$launcherCmdPath = if ($env:LAUNCHER_CMD_PATH) { $env:LAUNCHER_CMD_PATH } else { "./cmd/mailbox-launcher" }
 $binDir = if ($env:BIN_DIR) { $env:BIN_DIR } else { "bin" }
 $binaryName = if ($env:BINARY_NAME) { $env:BINARY_NAME } else { "agent-mailbox.exe" }
 $prefix = if ($env:PREFIX) { $env:PREFIX } else { Join-Path $env:USERPROFILE ".local" }
 $destDir = if ($env:DESTDIR) { $env:DESTDIR } else { "" }
-$installDir = if ($env:INSTALL_DIR) { $env:INSTALL_DIR } else { Join-Path $prefix "bin" }
+$installDirWasExplicit = -not [string]::IsNullOrWhiteSpace($env:INSTALL_DIR)
+$installDir = if ($installDirWasExplicit) { $env:INSTALL_DIR } else { Join-Path $prefix "bin" }
+$installPrefix = Split-Path -Path $installDir -Parent
+if ([string]::IsNullOrWhiteSpace($installPrefix)) {
+    $installPrefix = if ($installDirWasExplicit) { "." } else { $prefix }
+}
+$appRoot = Join-Path (Join-Path $installPrefix "lib") "agent-mailbox"
 $buildOutput = Join-Path $binDir $binaryName
 $runArgs = if ($env:ARGS) { $null } else { $RemainingArgs }
 
@@ -33,6 +40,20 @@ function Invoke-Go {
     if ($LASTEXITCODE -ne 0) {
         exit $LASTEXITCODE
     }
+}
+
+function Initialize-GoCache {
+    $cacheRoot = Join-Path $env:LOCALAPPDATA "agent-mailbox\go"
+
+    if ([string]::IsNullOrWhiteSpace($env:GOCACHE)) {
+        $env:GOCACHE = Join-Path $cacheRoot "build"
+    }
+    if ([string]::IsNullOrWhiteSpace($env:GOMODCACHE)) {
+        $env:GOMODCACHE = Join-Path $cacheRoot "mod"
+    }
+
+    Ensure-Directory $env:GOCACHE
+    Ensure-Directory $env:GOMODCACHE
 }
 
 function Assert-CgoRequired {
@@ -160,6 +181,104 @@ function Resolve-InstallDestinationRoot {
     return Join-Path $DestDir $relativeInstallDir
 }
 
+function New-InstallVersion {
+    if ($env:VERSION) {
+        return $env:VERSION
+    }
+
+    $timestamp = Get-Date -Format "yyyyMMddHHmmssfff"
+    $commit = (& git rev-parse --short HEAD 2>$null)
+    if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($commit)) {
+        return $timestamp
+    }
+
+    $version = "$timestamp-$($commit.Trim())"
+    $dirty = (& git status --porcelain 2>$null)
+    if ($LASTEXITCODE -eq 0 -and -not [string]::IsNullOrWhiteSpace($dirty)) {
+        $version = "$version-dirty"
+    }
+    return $version
+}
+
+function Move-FileReplacing {
+    param(
+        [string]$Source,
+        [string]$Destination
+    )
+
+    if (Test-Path -LiteralPath $Destination) {
+        $backup = "$Destination.bak-$PID"
+        [System.IO.File]::Replace($Source, $Destination, $backup, $true)
+        if (Test-Path -LiteralPath $backup) {
+            Remove-Item -LiteralPath $backup -Force
+        }
+        return
+    }
+    [System.IO.File]::Move($Source, $Destination)
+}
+
+function Write-ActiveVersionManifest {
+    param(
+        [string]$ManifestPath,
+        [string]$Version,
+        [string]$Executable
+    )
+
+    Ensure-Directory (Split-Path -Path $ManifestPath -Parent)
+    $manifest = [ordered]@{
+        version = $Version
+        executable = $Executable
+    }
+    $tempPath = "$ManifestPath.tmp-$PID"
+    $json = $manifest | ConvertTo-Json
+    $utf8NoBom = [System.Text.UTF8Encoding]::new($false)
+    [System.IO.File]::WriteAllText($tempPath, $json, $utf8NoBom)
+    Move-FileReplacing -Source $tempPath -Destination $ManifestPath
+}
+
+function Install-Launcher {
+    param(
+        [string]$LauncherOutput,
+        [string]$Destination,
+        [bool]$ExistingLauncherCanContinue
+    )
+
+    if (-not (Test-Path -LiteralPath $Destination)) {
+        Copy-Item -LiteralPath $LauncherOutput -Destination $Destination
+        return
+    }
+
+    try {
+        Copy-Item -LiteralPath $LauncherOutput -Destination $Destination -Force -ErrorAction Stop
+    } catch {
+        if ($ExistingLauncherCanContinue) {
+            Write-Warning "Could not replace locked launcher '$Destination'; leaving existing launcher in place."
+            return
+        }
+        throw "Could not replace existing '$Destination'. If it is a running pre-launcher binary, stop that process once and rerun install. Original error: $($_.Exception.Message)"
+    }
+}
+
+function Remove-OldVersions {
+    param(
+        [string]$VersionsRoot,
+        [string]$ActiveVersion
+    )
+
+    if (-not (Test-Path -LiteralPath $VersionsRoot)) {
+        return
+    }
+
+    $oldVersions = Get-ChildItem -LiteralPath $VersionsRoot -Directory | Where-Object { $_.Name -ne $ActiveVersion }
+    foreach ($versionDir in $oldVersions) {
+        try {
+            Remove-Item -LiteralPath $versionDir.FullName -Recurse -Force -ErrorAction Stop
+        } catch {
+            Write-Warning "Could not remove old version '$($versionDir.FullName)': $($_.Exception.Message)"
+        }
+    }
+}
+
 function Split-ArgumentString {
     param([string]$ArgumentString)
 
@@ -213,7 +332,7 @@ function Show-Help {
         "  ./make.ps1 test               Run the Go test suite"
         "  ./make.ps1 run -- <args>      Run the CLI with go run and pass args through"
         "  ./make.ps1 run-mcp            Run the built-in stdio MCP server with go run"
-        "  ./make.ps1 install            Copy the built CLI into $installDir"
+        "  ./make.ps1 install            Install launcher into $installDir and versioned CLI into $appRoot"
         "  ./make.ps1 clean              Remove local build output"
     ) | ForEach-Object { Write-Output $_ }
 }
@@ -223,17 +342,20 @@ switch ($Target) {
         Show-Help
     }
     "build" {
+        Initialize-GoCache
         Assert-CgoRequired
         Initialize-CgoToolchain
         Ensure-Directory $binDir
         Invoke-Go @("build", "-o", $buildOutput, $cmdPath)
     }
     "test" {
+        Initialize-GoCache
         Assert-CgoRequired
         Initialize-CgoToolchain
         Invoke-Go @("test", "./...")
     }
     "run" {
+        Initialize-GoCache
         Assert-CgoRequired
         Initialize-CgoToolchain
         if ($env:ARGS) {
@@ -243,19 +365,42 @@ switch ($Target) {
         Invoke-Go $goArgs
     }
     "run-mcp" {
+        Initialize-GoCache
         Assert-CgoRequired
         Initialize-CgoToolchain
         Invoke-Go @("run", $cmdPath, "mcp")
     }
     "install" {
-        & $PSCommandPath build
-        if ($LASTEXITCODE -ne 0) {
-            exit $LASTEXITCODE
+        $destinationRoot = Resolve-InstallDestinationRoot -InstallDir $installDir -DestDir $destDir
+        $destinationAppRoot = Resolve-InstallDestinationRoot -InstallDir $appRoot -DestDir $destDir
+        $version = New-InstallVersion
+        $versionsRoot = Join-Path $destinationAppRoot "versions"
+        $versionRoot = Join-Path $versionsRoot $version
+        $versionedBinary = Join-Path $versionRoot $binaryName
+        $manifestPath = Join-Path $destinationAppRoot "active-version.json"
+        $launcherDestination = Join-Path $destinationRoot $binaryName
+        $launcherBuildOutput = Join-Path $binDir "agent-mailbox-launcher.exe"
+        $manifestExecutable = Join-Path (Join-Path "versions" $version) $binaryName
+        $existingLauncherCanContinue = Test-Path -LiteralPath $manifestPath
+
+        Ensure-Directory $destinationRoot
+        Ensure-Directory $versionRoot
+        Ensure-Directory $binDir
+
+        Initialize-GoCache
+        Assert-CgoRequired
+        Initialize-CgoToolchain
+        Invoke-Go @("build", "-o", $versionedBinary, $cmdPath)
+        Invoke-Go @("build", "-o", $launcherBuildOutput, $launcherCmdPath)
+        Install-Launcher -LauncherOutput $launcherBuildOutput -Destination $launcherDestination -ExistingLauncherCanContinue $existingLauncherCanContinue
+        Write-ActiveVersionManifest -ManifestPath $manifestPath -Version $version -Executable $manifestExecutable
+
+        if ([string]::IsNullOrWhiteSpace($destDir)) {
+            Remove-OldVersions -VersionsRoot $versionsRoot -ActiveVersion $version
         }
 
-        $destinationRoot = Resolve-InstallDestinationRoot -InstallDir $installDir -DestDir $destDir
-        Ensure-Directory $destinationRoot
-        Copy-Item -LiteralPath $buildOutput -Destination (Join-Path $destinationRoot $binaryName) -Force
+        Write-Output "Installed $launcherDestination"
+        Write-Output "Activated version $version"
     }
     "clean" {
         if (Test-Path -LiteralPath $binDir) {

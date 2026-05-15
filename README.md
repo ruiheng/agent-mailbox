@@ -105,11 +105,16 @@ Install into `/usr/local/bin`:
 make install
 ```
 
-On Windows, `install` copies the binary into `%USERPROFILE%\.local\bin` by default:
+On Windows, `install` writes a stable launcher into `%USERPROFILE%\.local\bin`
+and stores the real CLI under `%USERPROFILE%\.local\lib\agent-mailbox\versions`:
 
 ```powershell
 ./make.ps1 install
 ```
+
+This avoids replacing a running `agent-mailbox.exe`; existing processes keep
+using their version, while new processes go through the launcher to the active
+version recorded in `lib\agent-mailbox\active-version.json`.
 
 Install into a user-local prefix without needing root:
 
