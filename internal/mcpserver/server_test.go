@@ -4239,12 +4239,12 @@ func TestMailboxStatusRetriesAutoBindAfterEmptyAttempt(t *testing.T) {
 		t.Fatalf("first bound_addresses = %#v, want empty", got)
 	}
 
-	t.Setenv("CLAUDE_CODE_SESSION_ID", "claude-session-123")
+	t.Setenv("CLAUDE_CODE_SESSION_ID", "aaaaaaaaaaaaaaaa")
 	second := callServiceTool(t, service, "mailbox_status", nil)
-	if got := second["bound_addresses"]; !reflect.DeepEqual(got, []any{"claude/claude-session-123"}) {
+	if got := second["bound_addresses"]; !reflect.DeepEqual(got, []any{"claude/aaaaaaaaaaaaaaaa"}) {
 		t.Fatalf("second bound_addresses = %#v, want claude auto-bind", got)
 	}
-	if got := second["default_sender"]; got != "claude/claude-session-123" {
+	if got := second["default_sender"]; got != "claude/aaaaaaaaaaaaaaaa" {
 		t.Fatalf("second default_sender = %v, want claude default sender", got)
 	}
 	assertNoToolSessionWarning(t, second)
@@ -4364,6 +4364,202 @@ func TestMailboxStatusWarnsWhenOnlyAgentDeckAddressIsBound(t *testing.T) {
 	assertHasToolSessionWarning(t, status)
 }
 
+func TestMailboxStatusIgnoresInvalidToolSessionEnvValues(t *testing.T) {
+	t.Setenv("CODEX_THREAD_ID", "not-a-thread")
+	t.Setenv("CLAUDE_CODE_SESSION_ID", "claude-session")
+	t.Setenv("GEMINI_SESSION_ID", "1234")
+	t.Setenv("OPENCODE_SESSION_ID", "abc--def0")
+	t.Setenv("AGENTDECK_INSTANCE_ID", "")
+
+	runner := &fakeRunner{t: t}
+	runner.handler = func(args []string, _ string) (RunResult, error) {
+		switch {
+		case len(args) >= 1 && args[0] == "ps":
+			return RunResult{ExitCode: 1, Stderr: "no process"}, nil
+		case strings.Join(args, "\x00") == strings.Join([]string{"agent-deck", "session", "current", "--json"}, "\x00"):
+			return RunResult{ExitCode: 1, Stderr: "not in an agent-deck pane"}, nil
+		default:
+			t.Fatalf("unexpected command: %v", args)
+			return RunResult{}, nil
+		}
+	}
+
+	service := newService(Options{
+		MailboxServiceFactory: fakeMailboxServiceFactory{service: &fakeMailboxService{t: t}},
+		CommandRunner:         runner,
+		DisableWakeScheduler:  true,
+		DisableLeaseRenewLoop: true,
+	})
+
+	status := callServiceTool(t, service, "mailbox_status", nil)
+	if got := status["bound_addresses"]; got != nil && !reflect.DeepEqual(got, []any{}) {
+		t.Fatalf("bound_addresses = %#v, want no env auto-bind", got)
+	}
+	assertHasToolSessionWarning(t, status)
+
+	warnings, ok := status["warnings"].([]any)
+	if !ok {
+		t.Fatalf("warnings = %#v, want warning list", status["warnings"])
+	}
+	for _, envName := range []string{"CODEX_THREAD_ID", "CLAUDE_CODE_SESSION_ID", "GEMINI_SESSION_ID", "OPENCODE_SESSION_ID"} {
+		found := false
+		for _, warning := range warnings {
+			if strings.Contains(fmt.Sprint(warning), envName) && strings.Contains(fmt.Sprint(warning), "does not look like a hex session id") {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("warnings = %#v, want invalid %s warning", warnings, envName)
+		}
+	}
+}
+
+func TestMailboxStatusPreservesInvalidToolSessionEnvWarningsDuringFallbackRetry(t *testing.T) {
+	t.Setenv("CODEX_THREAD_ID", "0123456789abcdef")
+	t.Setenv("CLAUDE_CODE_SESSION_ID", "claude-session")
+	t.Setenv("AGENTDECK_INSTANCE_ID", "")
+	t.Setenv("AGENTDECK_PROFILE", "")
+
+	currentCalls := 0
+	runner := &fakeRunner{t: t}
+	runner.handler = func(args []string, _ string) (RunResult, error) {
+		switch strings.Join(args, "\x00") {
+		case strings.Join([]string{"agent-deck", "session", "current", "--json"}, "\x00"):
+			currentCalls++
+			return RunResult{ExitCode: 1, Stderr: "not in an agent-deck pane"}, nil
+		default:
+			t.Fatalf("unexpected command: %v", args)
+			return RunResult{}, nil
+		}
+	}
+
+	service := newService(Options{
+		MailboxServiceFactory: fakeMailboxServiceFactory{service: &fakeMailboxService{t: t}},
+		CommandRunner:         runner,
+		DisableWakeScheduler:  true,
+		DisableLeaseRenewLoop: true,
+	})
+
+	first := callServiceTool(t, service, "mailbox_status", nil)
+	if got := first["bound_addresses"]; !reflect.DeepEqual(got, []any{"codex/0123456789abcdef"}) {
+		t.Fatalf("first bound_addresses = %#v, want codex fallback", got)
+	}
+	assertHasInvalidToolSessionEnvWarning(t, first, "CLAUDE_CODE_SESSION_ID")
+
+	second := callServiceTool(t, service, "mailbox_status", nil)
+	if currentCalls != 2 {
+		t.Fatalf("agent-deck current calls = %d, want retry on fallback", currentCalls)
+	}
+	if got := second["bound_addresses"]; !reflect.DeepEqual(got, []any{"codex/0123456789abcdef"}) {
+		t.Fatalf("second bound_addresses = %#v, want codex fallback", got)
+	}
+	assertHasInvalidToolSessionEnvWarning(t, second, "CLAUDE_CODE_SESSION_ID")
+}
+
+func TestMailboxStatusPreservesInvalidToolSessionEnvWarningsAfterAgentDeckUpgrade(t *testing.T) {
+	t.Setenv("CODEX_THREAD_ID", "0123456789abcdef")
+	t.Setenv("CLAUDE_CODE_SESSION_ID", "claude-session")
+	t.Setenv("AGENTDECK_INSTANCE_ID", "")
+	t.Setenv("AGENTDECK_PROFILE", "")
+
+	currentCalls := 0
+	runner := &fakeRunner{t: t}
+	runner.handler = func(args []string, _ string) (RunResult, error) {
+		switch strings.Join(args, "\x00") {
+		case strings.Join([]string{"agent-deck", "session", "current", "--json"}, "\x00"):
+			currentCalls++
+			if currentCalls == 1 {
+				return RunResult{ExitCode: 1, Stderr: "not in an agent-deck pane"}, nil
+			}
+			return RunResult{ExitCode: 0, Stdout: `{"id":"deck-session-1"}`}, nil
+		case strings.Join([]string{"agent-deck", "session", "show", "deck-session-1", "--json"}, "\x00"):
+			return RunResult{ExitCode: 1, Stderr: "not found"}, nil
+		default:
+			t.Fatalf("unexpected command: %v", args)
+			return RunResult{}, nil
+		}
+	}
+
+	service := newService(Options{
+		MailboxServiceFactory: fakeMailboxServiceFactory{service: &fakeMailboxService{t: t}},
+		CommandRunner:         runner,
+		DisableWakeScheduler:  true,
+		DisableLeaseRenewLoop: true,
+	})
+
+	first := callServiceTool(t, service, "mailbox_status", nil)
+	if got := first["default_sender"]; got != "codex/0123456789abcdef" {
+		t.Fatalf("first default_sender = %v, want codex fallback", got)
+	}
+	assertHasInvalidToolSessionEnvWarning(t, first, "CLAUDE_CODE_SESSION_ID")
+
+	second := callServiceTool(t, service, "mailbox_status", nil)
+	if currentCalls != 2 {
+		t.Fatalf("agent-deck current calls = %d, want retry on fallback", currentCalls)
+	}
+	if got := second["default_sender"]; got != "agent-deck/deck-session-1" {
+		t.Fatalf("second default_sender = %v, want agent-deck/deck-session-1", got)
+	}
+	assertHasInvalidToolSessionEnvWarning(t, second, "CLAUDE_CODE_SESSION_ID")
+}
+
+func TestLooksLikeHexSessionID(t *testing.T) {
+	tests := []struct {
+		name      string
+		sessionID string
+		want      bool
+	}{
+		{name: "plain hex", sessionID: "0123456789abcdef", want: true},
+		{name: "uppercase hex", sessionID: "ABCDEF1234567890", want: true},
+		{name: "uuid style", sessionID: "01234567-89ab-cdef-0123-456789abcdef", want: true},
+		{name: "too short", sessionID: "1234abc", want: false},
+		{name: "letters outside hex", sessionID: "claude-session-123", want: false},
+		{name: "consecutive hyphen", sessionID: "abc--def0", want: false},
+		{name: "leading hyphen", sessionID: "-abcdef01", want: false},
+		{name: "trailing hyphen", sessionID: "abcdef01-", want: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := looksLikeHexSessionID(tt.sessionID); got != tt.want {
+				t.Fatalf("looksLikeHexSessionID(%q) = %v, want %v", tt.sessionID, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestInvalidCodexThreadEnvFallsBackToProcessProbe(t *testing.T) {
+	t.Setenv("CODEX_THREAD_ID", "not-a-thread")
+
+	runner := &fakeRunner{t: t}
+	runner.handler = func(args []string, _ string) (RunResult, error) {
+		switch {
+		case len(args) >= 1 && args[0] == "ps":
+			return RunResult{ExitCode: 0, Stdout: "4242 1 codex codex resume 01234567-89ab-cdef-0123-456789abcdef"}, nil
+		default:
+			t.Fatalf("unexpected command: %v", args)
+			return RunResult{}, nil
+		}
+	}
+
+	service := newService(Options{
+		MailboxServiceFactory: fakeMailboxServiceFactory{service: &fakeMailboxService{t: t}},
+		CommandRunner:         runner,
+		DisableWakeScheduler:  true,
+		DisableLeaseRenewLoop: true,
+	})
+	service.sessions.parentPID = func() int { return 4242 }
+
+	sessionID, warnings := service.sessions.detectCurrentCodexSessionID(context.Background())
+	if sessionID != "01234567-89ab-cdef-0123-456789abcdef" {
+		t.Fatalf("sessionID = %q, want process-probed codex thread", sessionID)
+	}
+	if len(warnings) != 1 || !strings.Contains(warnings[0], "CODEX_THREAD_ID") {
+		t.Fatalf("warnings = %#v, want invalid CODEX_THREAD_ID warning", warnings)
+	}
+}
+
 func TestAutoBindFindsClaudeCodeSessionFromEnv(t *testing.T) {
 	tests := []struct {
 		name              string
@@ -4376,25 +4572,25 @@ func TestAutoBindFindsClaudeCodeSessionFromEnv(t *testing.T) {
 		{
 			name:              "claude code",
 			envName:           "CLAUDE_CODE_SESSION_ID",
-			envValue:          "claude-session-123",
-			wantDefaultSender: "claude/claude-session-123",
-			wantAddresses:     []any{"claude/claude-session-123"},
+			envValue:          "aaaaaaaaaaaaaaaa",
+			wantDefaultSender: "claude/aaaaaaaaaaaaaaaa",
+			wantAddresses:     []any{"claude/aaaaaaaaaaaaaaaa"},
 			wantDetectedKey:   "detected_claude_code_session_id",
 		},
 		{
 			name:              "gemini",
 			envName:           "GEMINI_SESSION_ID",
-			envValue:          "gemini-session-123",
-			wantDefaultSender: "gemini/gemini-session-123",
-			wantAddresses:     []any{"gemini/gemini-session-123"},
+			envValue:          "bbbbbbbbbbbbbbbb",
+			wantDefaultSender: "gemini/bbbbbbbbbbbbbbbb",
+			wantAddresses:     []any{"gemini/bbbbbbbbbbbbbbbb"},
 			wantDetectedKey:   "detected_gemini_session_id",
 		},
 		{
 			name:              "opencode",
 			envName:           "OPENCODE_SESSION_ID",
-			envValue:          "opencode-session-123",
-			wantDefaultSender: "opencode/opencode-session-123",
-			wantAddresses:     []any{"opencode/opencode-session-123"},
+			envValue:          "cccccccccccccccc",
+			wantDefaultSender: "opencode/cccccccccccccccc",
+			wantAddresses:     []any{"opencode/cccccccccccccccc"},
 			wantDetectedKey:   "detected_opencode_session_id",
 		},
 	}
@@ -4448,11 +4644,11 @@ func TestAutoBindFindsClaudeCodeSessionFromEnv(t *testing.T) {
 func TestAutoBindFindsAgentDeckSessionFromCodexStateDB(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
-	t.Setenv("CODEX_THREAD_ID", "codex-session-123")
+	t.Setenv("CODEX_THREAD_ID", "0123456789abcdef")
 	t.Setenv("AGENTDECK_INSTANCE_ID", "")
 	t.Setenv("AGENTDECK_PROFILE", "bad")
 	writeBrokenAgentDeckStateDB(t, home, "bad")
-	writeAgentDeckStateDB(t, home, "work", "deck-session-1", "/tmp/project", "codex-session-123")
+	writeAgentDeckStateDB(t, home, "work", "deck-session-1", "/tmp/project", "0123456789abcdef")
 
 	runner := &fakeRunner{t: t}
 	runner.handler = func(args []string, _ string) (RunResult, error) {
@@ -4478,7 +4674,7 @@ func TestAutoBindFindsAgentDeckSessionFromCodexStateDB(t *testing.T) {
 	if got := status["default_sender"]; got != "agent-deck/deck-session-1" {
 		t.Fatalf("default_sender = %v, want agent-deck/deck-session-1", got)
 	}
-	wantAddresses := []any{"agent-deck/deck-session-1", "codex/codex-session-123"}
+	wantAddresses := []any{"agent-deck/deck-session-1", "codex/0123456789abcdef"}
 	if !reflect.DeepEqual(status["bound_addresses"], wantAddresses) {
 		t.Fatalf("bound_addresses = %v, want %v", status["bound_addresses"], wantAddresses)
 	}
@@ -4487,7 +4683,7 @@ func TestAutoBindFindsAgentDeckSessionFromCodexStateDB(t *testing.T) {
 func TestAutoBindSkipsBadAgentDeckDBAndFallsBackToCodexOnly(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
-	t.Setenv("CODEX_THREAD_ID", "codex-session-123")
+	t.Setenv("CODEX_THREAD_ID", "0123456789abcdef")
 	t.Setenv("AGENTDECK_INSTANCE_ID", "")
 	t.Setenv("AGENTDECK_PROFILE", "bad")
 	writeBrokenAgentDeckStateDB(t, home, "bad")
@@ -4511,10 +4707,10 @@ func TestAutoBindSkipsBadAgentDeckDBAndFallsBackToCodexOnly(t *testing.T) {
 	})
 	status := callServiceTool(t, service, "mailbox_status", nil)
 
-	if got := status["default_sender"]; got != "codex/codex-session-123" {
-		t.Fatalf("default_sender = %v, want codex/codex-session-123", got)
+	if got := status["default_sender"]; got != "codex/0123456789abcdef" {
+		t.Fatalf("default_sender = %v, want codex/0123456789abcdef", got)
 	}
-	wantAddresses := []any{"codex/codex-session-123"}
+	wantAddresses := []any{"codex/0123456789abcdef"}
 	if !reflect.DeepEqual(status["bound_addresses"], wantAddresses) {
 		t.Fatalf("bound_addresses = %v, want %v", status["bound_addresses"], wantAddresses)
 	}
@@ -4523,7 +4719,7 @@ func TestAutoBindSkipsBadAgentDeckDBAndFallsBackToCodexOnly(t *testing.T) {
 func TestAutoBindRetriesAgentDeckAfterCodexOnlyFallback(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
-	t.Setenv("CODEX_THREAD_ID", "codex-session-123")
+	t.Setenv("CODEX_THREAD_ID", "0123456789abcdef")
 	t.Setenv("AGENTDECK_INSTANCE_ID", "")
 	t.Setenv("AGENTDECK_PROFILE", "")
 
@@ -4547,7 +4743,7 @@ func TestAutoBindRetriesAgentDeckAfterCodexOnlyFallback(t *testing.T) {
 
 	mailboxService := &fakeMailboxService{t: t}
 	mailboxService.receiveBatchFunc = func(_ context.Context, params mailbox.ReceiveBatchParams) (mailbox.ReceiveResult, error) {
-		want := []string{"agent-deck/deck-session-1", "codex/codex-session-123"}
+		want := []string{"agent-deck/deck-session-1", "codex/0123456789abcdef"}
 		if !reflect.DeepEqual(params.Addresses, want) {
 			t.Fatalf("receive addresses = %v, want %v", params.Addresses, want)
 		}
@@ -4562,8 +4758,8 @@ func TestAutoBindRetriesAgentDeckAfterCodexOnlyFallback(t *testing.T) {
 	})
 
 	status := callServiceTool(t, service, "mailbox_status", nil)
-	if got := status["default_sender"]; got != "codex/codex-session-123" {
-		t.Fatalf("initial default_sender = %v, want codex/codex-session-123", got)
+	if got := status["default_sender"]; got != "codex/0123456789abcdef" {
+		t.Fatalf("initial default_sender = %v, want codex/0123456789abcdef", got)
 	}
 
 	recv := callServiceTool(t, service, "mailbox_recv", nil)
@@ -4579,8 +4775,8 @@ func TestAutoBindRetriesAgentDeckAfterCodexOnlyFallback(t *testing.T) {
 func TestAutoBindRetriesAgentDeckAfterCodexFallbackWithExtraToolAddress(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
-	t.Setenv("CODEX_THREAD_ID", "codex-session-123")
-	t.Setenv("CLAUDE_CODE_SESSION_ID", "claude-session-123")
+	t.Setenv("CODEX_THREAD_ID", "0123456789abcdef")
+	t.Setenv("CLAUDE_CODE_SESSION_ID", "aaaaaaaaaaaaaaaa")
 	t.Setenv("AGENTDECK_INSTANCE_ID", "")
 	t.Setenv("AGENTDECK_PROFILE", "")
 
@@ -4604,7 +4800,7 @@ func TestAutoBindRetriesAgentDeckAfterCodexFallbackWithExtraToolAddress(t *testi
 
 	mailboxService := &fakeMailboxService{t: t}
 	mailboxService.receiveBatchFunc = func(_ context.Context, params mailbox.ReceiveBatchParams) (mailbox.ReceiveResult, error) {
-		want := []string{"agent-deck/deck-session-1", "codex/codex-session-123", "claude/claude-session-123"}
+		want := []string{"agent-deck/deck-session-1", "codex/0123456789abcdef", "claude/aaaaaaaaaaaaaaaa"}
 		if !reflect.DeepEqual(params.Addresses, want) {
 			t.Fatalf("receive addresses = %v, want %v", params.Addresses, want)
 		}
@@ -4619,10 +4815,10 @@ func TestAutoBindRetriesAgentDeckAfterCodexFallbackWithExtraToolAddress(t *testi
 	})
 
 	status := callServiceTool(t, service, "mailbox_status", nil)
-	if got := status["default_sender"]; got != "codex/codex-session-123" {
-		t.Fatalf("initial default_sender = %v, want codex/codex-session-123", got)
+	if got := status["default_sender"]; got != "codex/0123456789abcdef" {
+		t.Fatalf("initial default_sender = %v, want codex/0123456789abcdef", got)
 	}
-	wantInitialAddresses := []any{"codex/codex-session-123", "claude/claude-session-123"}
+	wantInitialAddresses := []any{"codex/0123456789abcdef", "claude/aaaaaaaaaaaaaaaa"}
 	if !reflect.DeepEqual(status["bound_addresses"], wantInitialAddresses) {
 		t.Fatalf("initial bound_addresses = %v, want %v", status["bound_addresses"], wantInitialAddresses)
 	}
@@ -4635,7 +4831,7 @@ func TestAutoBindRetriesAgentDeckAfterCodexFallbackWithExtraToolAddress(t *testi
 	if got := status["default_sender"]; got != "agent-deck/deck-session-1" {
 		t.Fatalf("upgraded default_sender = %v, want agent-deck/deck-session-1", got)
 	}
-	wantUpgradedAddresses := []any{"agent-deck/deck-session-1", "codex/codex-session-123", "claude/claude-session-123"}
+	wantUpgradedAddresses := []any{"agent-deck/deck-session-1", "codex/0123456789abcdef", "claude/aaaaaaaaaaaaaaaa"}
 	if !reflect.DeepEqual(status["bound_addresses"], wantUpgradedAddresses) {
 		t.Fatalf("upgraded bound_addresses = %v, want %v", status["bound_addresses"], wantUpgradedAddresses)
 	}
@@ -4645,7 +4841,7 @@ func TestAutoBindRetriesAgentDeckAfterClaudeOnlyFallback(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("CODEX_THREAD_ID", "")
-	t.Setenv("CLAUDE_CODE_SESSION_ID", "claude-session-123")
+	t.Setenv("CLAUDE_CODE_SESSION_ID", "aaaaaaaaaaaaaaaa")
 	t.Setenv("AGENTDECK_INSTANCE_ID", "")
 	t.Setenv("AGENTDECK_PROFILE", "")
 
@@ -4671,7 +4867,7 @@ func TestAutoBindRetriesAgentDeckAfterClaudeOnlyFallback(t *testing.T) {
 
 	mailboxService := &fakeMailboxService{t: t}
 	mailboxService.receiveBatchFunc = func(_ context.Context, params mailbox.ReceiveBatchParams) (mailbox.ReceiveResult, error) {
-		want := []string{"agent-deck/deck-session-1", "claude/claude-session-123"}
+		want := []string{"agent-deck/deck-session-1", "claude/aaaaaaaaaaaaaaaa"}
 		if !reflect.DeepEqual(params.Addresses, want) {
 			t.Fatalf("receive addresses = %v, want %v", params.Addresses, want)
 		}
@@ -4686,8 +4882,8 @@ func TestAutoBindRetriesAgentDeckAfterClaudeOnlyFallback(t *testing.T) {
 	})
 
 	status := callServiceTool(t, service, "mailbox_status", nil)
-	if got := status["default_sender"]; got != "claude/claude-session-123" {
-		t.Fatalf("initial default_sender = %v, want claude/claude-session-123", got)
+	if got := status["default_sender"]; got != "claude/aaaaaaaaaaaaaaaa" {
+		t.Fatalf("initial default_sender = %v, want claude/aaaaaaaaaaaaaaaa", got)
 	}
 
 	recv := callServiceTool(t, service, "mailbox_recv", nil)
@@ -4698,7 +4894,7 @@ func TestAutoBindRetriesAgentDeckAfterClaudeOnlyFallback(t *testing.T) {
 	if got := status["default_sender"]; got != "agent-deck/deck-session-1" {
 		t.Fatalf("upgraded default_sender = %v, want agent-deck/deck-session-1", got)
 	}
-	wantAddresses := []any{"agent-deck/deck-session-1", "claude/claude-session-123"}
+	wantAddresses := []any{"agent-deck/deck-session-1", "claude/aaaaaaaaaaaaaaaa"}
 	if !reflect.DeepEqual(status["bound_addresses"], wantAddresses) {
 		t.Fatalf("upgraded bound_addresses = %v, want %v", status["bound_addresses"], wantAddresses)
 	}
@@ -4707,7 +4903,7 @@ func TestAutoBindRetriesAgentDeckAfterClaudeOnlyFallback(t *testing.T) {
 func TestMailboxBindDisablesAgentDeckRetryUpgrade(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
-	t.Setenv("CODEX_THREAD_ID", "codex-session-123")
+	t.Setenv("CODEX_THREAD_ID", "0123456789abcdef")
 	t.Setenv("AGENTDECK_INSTANCE_ID", "")
 	t.Setenv("AGENTDECK_PROFILE", "")
 
@@ -4737,8 +4933,8 @@ func TestMailboxBindDisablesAgentDeckRetryUpgrade(t *testing.T) {
 	})
 
 	status := callServiceTool(t, service, "mailbox_status", nil)
-	if got := status["default_sender"]; got != "codex/codex-session-123" {
-		t.Fatalf("initial default_sender = %v, want codex/codex-session-123", got)
+	if got := status["default_sender"]; got != "codex/0123456789abcdef" {
+		t.Fatalf("initial default_sender = %v, want codex/0123456789abcdef", got)
 	}
 
 	bind := callServiceTool(t, service, "mailbox_bind", map[string]any{
@@ -4769,7 +4965,7 @@ func TestMailboxBindDisablesAgentDeckRetryUpgrade(t *testing.T) {
 }
 
 func TestMailboxBindManualOverrideWarnsWhenNoToolAddressRemains(t *testing.T) {
-	t.Setenv("CODEX_THREAD_ID", "codex-session-123")
+	t.Setenv("CODEX_THREAD_ID", "0123456789abcdef")
 	t.Setenv("AGENTDECK_INSTANCE_ID", "")
 	t.Setenv("AGENTDECK_PROFILE", "")
 
@@ -4792,8 +4988,8 @@ func TestMailboxBindManualOverrideWarnsWhenNoToolAddressRemains(t *testing.T) {
 	})
 
 	status := callServiceTool(t, service, "mailbox_status", nil)
-	if got := status["default_sender"]; got != "codex/codex-session-123" {
-		t.Fatalf("initial default_sender = %v, want codex/codex-session-123", got)
+	if got := status["default_sender"]; got != "codex/0123456789abcdef" {
+		t.Fatalf("initial default_sender = %v, want codex/0123456789abcdef", got)
 	}
 
 	bind := callServiceTool(t, service, "mailbox_bind", map[string]any{
@@ -4814,7 +5010,7 @@ func TestMailboxBindManualOverrideWarnsWhenNoToolAddressRemains(t *testing.T) {
 func TestAgentDeckRetryRechecksFallbackStateBeforeUpgrade(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
-	t.Setenv("CODEX_THREAD_ID", "codex-session-123")
+	t.Setenv("CODEX_THREAD_ID", "0123456789abcdef")
 	t.Setenv("AGENTDECK_INSTANCE_ID", "")
 	t.Setenv("AGENTDECK_PROFILE", "")
 
@@ -4839,18 +5035,18 @@ func TestAgentDeckRetryRechecksFallbackStateBeforeUpgrade(t *testing.T) {
 	})
 
 	staleFallback := stateSnapshot{
-		BoundAddresses:           []string{"codex/codex-session-123"},
-		DefaultSender:            "codex/codex-session-123",
+		BoundAddresses:           []string{"codex/0123456789abcdef"},
+		DefaultSender:            "codex/0123456789abcdef",
 		AutoBindAttempted:        true,
 		AutoBoundToolFallback:    true,
-		DetectedAgentSession:     "codex-session-123",
+		DetectedAgentSession:     "0123456789abcdef",
 		DetectedAgentDeckSession: "",
 	}
 	service.state.boundAddresses = []string{"codex/manual"}
 	service.state.defaultSender = "codex/manual"
 	service.state.autoBindAttempted = true
 	service.state.autoBoundToolFallback = false
-	service.state.detectedAgentSession = "codex-session-123"
+	service.state.detectedAgentSession = "0123456789abcdef"
 
 	if err := service.sessions.tryUpgradeAgentDeckBinding(context.Background(), staleFallback); err != nil {
 		t.Fatalf("tryUpgradeAgentDeckBinding error = %v", err)
@@ -5153,6 +5349,21 @@ func assertHasToolSessionWarning(t *testing.T, output map[string]any) {
 		}
 	}
 	t.Fatalf("warnings = %#v, want tool-session auto-bind warning", warnings)
+}
+
+func assertHasInvalidToolSessionEnvWarning(t *testing.T, output map[string]any, envName string) {
+	t.Helper()
+	warnings, ok := output["warnings"].([]any)
+	if !ok {
+		t.Fatalf("warnings = %#v, want warning list", output["warnings"])
+	}
+	for _, warning := range warnings {
+		text := fmt.Sprint(warning)
+		if strings.Contains(text, envName) && strings.Contains(text, "does not look like a hex session id") {
+			return
+		}
+	}
+	t.Fatalf("warnings = %#v, want invalid %s warning", warnings, envName)
 }
 
 func requiresMailboxStatusToolName(name string) bool {

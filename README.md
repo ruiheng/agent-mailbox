@@ -146,6 +146,8 @@ so callers get the current binding state and any recovery warnings before they
 read, send, claim, ack, or alter mailbox state. If auto-bind cannot find a supported
 tool session address, use the warning details to expose the relevant environment
 variable or call `mailbox_bind` manually after `mailbox_status`.
+Tool session environment variable values must look like hex session ids; invalid
+values are ignored and reported in the `mailbox_status` warnings.
 
 `mailbox_send` always uses the fixed wakeup text for supported remote notify
 paths. Set `disable_notify_message = true` to skip only that immediate send-time
