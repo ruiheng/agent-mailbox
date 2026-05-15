@@ -136,6 +136,17 @@ The Go MCP entrypoint keeps the existing tool names:
 - `agent_deck_create_session`
 - `agent_deck_require_session`
 
+Call `mailbox_status` first after starting each MCP server process. It
+auto-binds detectable session addresses from `agent-deck session current`,
+`CODEX_SESSION_ID`, `CLAUDE_CODE_SESSION_ID`, `GEMINI_SESSION_ID`, and
+`OPENCODE_SESSION_ID`, yielding addresses such as `agent-deck/<session-id>`,
+`codex/<session-id>`, `claude/<session-id>`, `gemini/<session-id>`, and
+`opencode/<session-id>`. All other tools fail until `mailbox_status` succeeds,
+so callers get the current binding state and any recovery warnings before they
+read, send, claim, ack, or alter mailbox state. If auto-bind cannot find a supported
+tool session address, use the warning details to expose the relevant environment
+variable or call `mailbox_bind` manually after `mailbox_status`.
+
 `mailbox_send` always uses the fixed wakeup text for supported remote notify
 paths. Set `disable_notify_message = true` to skip only that immediate send-time
 notify.

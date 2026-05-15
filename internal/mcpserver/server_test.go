@@ -430,7 +430,7 @@ func TestMailboxSendNotifiesWorkerTarget(t *testing.T) {
 	service.state.defaultSender = "agent-deck/self"
 	service.state.autoBindAttempted = true
 
-	output := callTool(t, service.Server(), "mailbox_send", map[string]any{
+	output := callServiceTool(t, service, "mailbox_send", map[string]any{
 		"to_address": "agent-deck/target",
 		"subject":    "delegate",
 		"body":       "body",
@@ -477,7 +477,7 @@ func TestMailboxSendSkipsNotifyWhenDeliveryAlreadyClaimed(t *testing.T) {
 	service.state.defaultSender = "agent-deck/self"
 	service.state.autoBindAttempted = true
 
-	output := callTool(t, service.Server(), "mailbox_send", map[string]any{
+	output := callServiceTool(t, service, "mailbox_send", map[string]any{
 		"to_address": "agent-deck/target",
 		"subject":    "delegate",
 		"body":       "body",
@@ -575,7 +575,7 @@ func TestMailboxSendAllowsAgentDeckNotifyDisable(t *testing.T) {
 	service.state.defaultSender = "agent-deck/self"
 	service.state.autoBindAttempted = true
 
-	output := callTool(t, service.Server(), "mailbox_send", map[string]any{
+	output := callServiceTool(t, service, "mailbox_send", map[string]any{
 		"to_address":             "agent-deck/target",
 		"subject":                "delegate",
 		"body":                   "body",
@@ -613,7 +613,7 @@ func TestMailboxSendUsesExplicitFromAddressWithoutBoundState(t *testing.T) {
 		DisableWakeScheduler: true,
 	})
 
-	output := callTool(t, service.Server(), "mailbox_send", map[string]any{
+	output := callServiceTool(t, service, "mailbox_send", map[string]any{
 		"to_address":   "workflow/target",
 		"from_address": "agent/sender",
 		"subject":      "delegate",
@@ -654,7 +654,7 @@ func TestMailboxSendGroupModeUsesGroupSendParams(t *testing.T) {
 		DisableWakeScheduler: true,
 	})
 
-	output := callTool(t, service.Server(), "mailbox_send", map[string]any{
+	output := callServiceTool(t, service, "mailbox_send", map[string]any{
 		"to_address":   "group/review",
 		"from_address": "agent/sender",
 		"subject":      "group update",
@@ -746,7 +746,7 @@ func TestMailboxSendGroupModeNotifiesSubscriber(t *testing.T) {
 		DisableWakeScheduler:  true,
 	})
 
-	output := callTool(t, service.Server(), "mailbox_send", map[string]any{
+	output := callServiceTool(t, service, "mailbox_send", map[string]any{
 		"to_address":   "group/review",
 		"from_address": "agent-deck/expert",
 		"subject":      "expert post",
@@ -808,7 +808,7 @@ func TestMailboxSendGroupModeSkipsSenderSubscriber(t *testing.T) {
 		DisableWakeScheduler: true,
 	})
 
-	output := callTool(t, service.Server(), "mailbox_send", map[string]any{
+	output := callServiceTool(t, service, "mailbox_send", map[string]any{
 		"to_address":   "group/review",
 		"from_address": "agent-deck/moderator",
 		"subject":      "moderator post",
@@ -859,7 +859,7 @@ func TestMailboxSendGroupModeSkipsResolvedDefaultSenderSubscriber(t *testing.T) 
 	service.state.defaultSender = "agent-deck/moderator"
 	service.state.autoBindAttempted = true
 
-	output := callTool(t, service.Server(), "mailbox_send", map[string]any{
+	output := callServiceTool(t, service, "mailbox_send", map[string]any{
 		"to_address": "group/review",
 		"subject":    "moderator post",
 		"body":       "body",
@@ -912,7 +912,7 @@ func TestMailboxSendGroupModeKeepsReceiptWhenSubscriberNotifyFails(t *testing.T)
 		DisableWakeScheduler:  true,
 	})
 
-	output := callTool(t, service.Server(), "mailbox_send", map[string]any{
+	output := callServiceTool(t, service, "mailbox_send", map[string]any{
 		"to_address":   "group/review",
 		"from_address": "agent-deck/expert",
 		"subject":      "expert post",
@@ -986,7 +986,7 @@ func TestMailboxForwardByMessageIDPreservesPayloadAndPrefixesSubject(t *testing.
 		DisableWakeScheduler: true,
 	})
 
-	output := callTool(t, service.Server(), "mailbox_forward", map[string]any{
+	output := callServiceTool(t, service, "mailbox_forward", map[string]any{
 		"message_id":   "msg_1",
 		"to_address":   "workflow/target",
 		"from_address": "agent/sender",
@@ -1041,7 +1041,7 @@ func TestMailboxForwardByDeliveryIDAllowsSubjectOverride(t *testing.T) {
 		DisableWakeScheduler: true,
 	})
 
-	output := callTool(t, service.Server(), "mailbox_forward", map[string]any{
+	output := callServiceTool(t, service, "mailbox_forward", map[string]any{
 		"delivery_id":  "dlv_1",
 		"to_address":   "workflow/target",
 		"from_address": "agent/sender",
@@ -1102,7 +1102,7 @@ func TestMailboxForwardToGroupInboxPreservesGroupMode(t *testing.T) {
 		DisableWakeScheduler: true,
 	})
 
-	output := callTool(t, service.Server(), "mailbox_forward", map[string]any{
+	output := callServiceTool(t, service, "mailbox_forward", map[string]any{
 		"message_id":   "msg_1",
 		"to_address":   "group/review",
 		"from_address": "agent/sender",
@@ -1140,7 +1140,7 @@ func TestMailboxForwardRequiresExactlyOneSourceID(t *testing.T) {
 	})
 	service.state.autoBindAttempted = true
 
-	err := callToolExpectError(t, service.Server(), "mailbox_forward", map[string]any{
+	err := callServiceToolExpectError(t, service, "mailbox_forward", map[string]any{
 		"message_id":  "msg_1",
 		"delivery_id": "dlv_1",
 		"to_address":  "workflow/target",
@@ -1182,7 +1182,7 @@ func TestMailboxSendUsesFixedWakeTextWhenDisableFlagUnset(t *testing.T) {
 	service.state.defaultSender = "agent-deck/self"
 	service.state.autoBindAttempted = true
 
-	output := callTool(t, service.Server(), "mailbox_send", map[string]any{
+	output := callServiceTool(t, service, "mailbox_send", map[string]any{
 		"to_address":             "agent-deck/target",
 		"subject":                "delegate",
 		"body":                   "body",
@@ -1224,7 +1224,7 @@ func TestMailboxSendPreservesMailboxDefaultsWhenMetadataOmitted(t *testing.T) {
 	service.state.defaultSender = "agent-deck/self"
 	service.state.autoBindAttempted = true
 
-	output := callTool(t, service.Server(), "mailbox_send", map[string]any{
+	output := callServiceTool(t, service, "mailbox_send", map[string]any{
 		"to_address":   "agent-deck/self",
 		"subject":      "delegate",
 		"body":         "body",
@@ -1264,7 +1264,7 @@ func TestMailboxSendReturnsReceiptWhenNotifyFails(t *testing.T) {
 	service.state.defaultSender = "agent-deck/self"
 	service.state.autoBindAttempted = true
 
-	output := callTool(t, service.Server(), "mailbox_send", map[string]any{
+	output := callServiceTool(t, service, "mailbox_send", map[string]any{
 		"to_address": "agent-deck/target",
 		"subject":    "delegate",
 		"body":       "body",
@@ -1312,12 +1312,12 @@ func TestToolResultsIncludeMailHintWhenBoundAddressesHaveMail(t *testing.T) {
 	service.state.defaultSender = "agent-deck/self"
 	service.state.autoBindAttempted = true
 
-	status := callTool(t, service.Server(), "mailbox_status", nil)
+	status := callServiceTool(t, service, "mailbox_status", nil)
 	if got := status["mail_hint"]; got != defaultMailHint {
 		t.Fatalf("mailbox_status mail_hint = %v, want %q", got, defaultMailHint)
 	}
 
-	resolve := callTool(t, service.Server(), "agent_deck_resolve_session", map[string]any{
+	resolve := callServiceTool(t, service, "agent_deck_resolve_session", map[string]any{
 		"session": "planner",
 	})
 	if got := resolve["mail_hint"]; got != defaultMailHint {
@@ -1346,7 +1346,7 @@ func TestMailboxSendOmitsMailHintWhenAvailabilityCheckFails(t *testing.T) {
 	service.state.defaultSender = "agent-deck/self"
 	service.state.autoBindAttempted = true
 
-	output := callTool(t, service.Server(), "mailbox_send", map[string]any{
+	output := callServiceTool(t, service, "mailbox_send", map[string]any{
 		"to_address":   "agent-deck/self",
 		"from_address": "agent-deck/self",
 		"subject":      "delegate",
@@ -1385,7 +1385,7 @@ func TestMailboxBindIncludesMailHint(t *testing.T) {
 	})
 	service.state.autoBindAttempted = true
 
-	bind := callTool(t, service.Server(), "mailbox_bind", map[string]any{
+	bind := callServiceTool(t, service, "mailbox_bind", map[string]any{
 		"addresses": []string{"agent-deck/self"},
 	})
 	if got := bind["mail_hint"]; got != defaultMailHint {
@@ -1403,7 +1403,7 @@ func TestMailboxBindRejectsInvalidAddress(t *testing.T) {
 	})
 	service.state.autoBindAttempted = true
 
-	err := callToolExpectError(t, service.Server(), "mailbox_bind", map[string]any{
+	err := callServiceToolExpectError(t, service, "mailbox_bind", map[string]any{
 		"addresses": []string{"agent-deck"},
 	})
 	if err == nil || !strings.Contains(err.Error(), `invalid address`) || !strings.Contains(err.Error(), `agent-deck`) {
@@ -1424,7 +1424,7 @@ func TestMailboxBindAcceptsGenericAddressCharacters(t *testing.T) {
 	})
 	service.state.autoBindAttempted = true
 
-	output := callTool(t, service.Server(), "mailbox_bind", map[string]any{
+	output := callServiceTool(t, service, "mailbox_bind", map[string]any{
 		"addresses": []string{"workflow/收件箱+tag@example.com"},
 	})
 	if got := output["bound_addresses"]; !reflect.DeepEqual(got, []any{"workflow/收件箱+tag@example.com"}) {
@@ -1442,7 +1442,7 @@ func TestMailboxBindExcludesGroupAddresses(t *testing.T) {
 	})
 	service.state.autoBindAttempted = true
 
-	output := callTool(t, service.Server(), "mailbox_bind", map[string]any{
+	output := callServiceTool(t, service, "mailbox_bind", map[string]any{
 		"addresses": []string{"group/review", "agent-deck/self", "group/ops"},
 	})
 	if got := output["bound_addresses"]; !reflect.DeepEqual(got, []any{"agent-deck/self"}) {
@@ -1463,7 +1463,7 @@ func TestMailboxBindRejectsGroupDefaultSender(t *testing.T) {
 	})
 	service.state.autoBindAttempted = true
 
-	err := callToolExpectError(t, service.Server(), "mailbox_bind", map[string]any{
+	err := callServiceToolExpectError(t, service, "mailbox_bind", map[string]any{
 		"addresses":      []string{"agent-deck/self"},
 		"default_sender": "group/review",
 	})
@@ -1482,7 +1482,7 @@ func TestMailboxSendRejectsInvalidOverrideSender(t *testing.T) {
 	})
 	service.state.autoBindAttempted = true
 
-	err := callToolExpectError(t, service.Server(), "mailbox_send", map[string]any{
+	err := callServiceToolExpectError(t, service, "mailbox_send", map[string]any{
 		"to_address":   "agent-deck/target",
 		"from_address": "agent-deck",
 		"subject":      "delegate",
@@ -1503,7 +1503,7 @@ func TestMailboxSendRejectsInvalidRecipientAddress(t *testing.T) {
 	})
 	service.state.autoBindAttempted = true
 
-	err := callToolExpectError(t, service.Server(), "mailbox_send", map[string]any{
+	err := callServiceToolExpectError(t, service, "mailbox_send", map[string]any{
 		"to_address": "agent-deck",
 		"subject":    "delegate",
 		"body":       "body",
@@ -1523,7 +1523,7 @@ func TestMailboxRecvRejectsInvalidExplicitAddress(t *testing.T) {
 	})
 	service.state.autoBindAttempted = true
 
-	err := callToolExpectError(t, service.Server(), "mailbox_recv", map[string]any{
+	err := callServiceToolExpectError(t, service, "mailbox_recv", map[string]any{
 		"addresses": []string{"agent-deck"},
 	})
 	if err == nil || !strings.Contains(err.Error(), `invalid address`) || !strings.Contains(err.Error(), `agent-deck`) {
@@ -1588,7 +1588,7 @@ func TestMailboxOverviewResourceCapabilitiesAndNotifications(t *testing.T) {
 		t.Fatalf("Subscribe() error = %v", err)
 	}
 
-	callTool(t, service.Server(), "mailbox_bind", map[string]any{
+	callServiceTool(t, service, "mailbox_bind", map[string]any{
 		"addresses": []string{"agent-deck/self"},
 	})
 
@@ -1930,7 +1930,7 @@ func TestAgentDeckRequireSessionReturnsActiveTargetWithoutStart(t *testing.T) {
 	})
 	service.state.autoBindAttempted = true
 
-	output := callTool(t, service.Server(), "agent_deck_require_session", map[string]any{
+	output := callServiceTool(t, service, "agent_deck_require_session", map[string]any{
 		"session_ref": "coder-ref",
 		"workdir":     "/tmp",
 	})
@@ -1973,7 +1973,7 @@ func TestAgentDeckRequireSessionStartsInactiveTarget(t *testing.T) {
 	})
 	service.state.autoBindAttempted = true
 
-	output := callTool(t, service.Server(), "agent_deck_require_session", map[string]any{
+	output := callServiceTool(t, service, "agent_deck_require_session", map[string]any{
 		"session_ref": "coder-ref",
 		"workdir":     "/tmp",
 	})
@@ -2005,7 +2005,7 @@ func TestAgentDeckRequireSessionRejectsStartupInstruction(t *testing.T) {
 	})
 	service.state.autoBindAttempted = true
 
-	err := callToolExpectError(t, service.Server(), "agent_deck_require_session", map[string]any{
+	err := callServiceToolExpectError(t, service, "agent_deck_require_session", map[string]any{
 		"session_ref":         "coder-ref",
 		"startup_instruction": "listen now",
 		"workdir":             "/tmp",
@@ -2025,7 +2025,7 @@ func TestAgentDeckRequireSessionRequiresExplicitWorkdir(t *testing.T) {
 	})
 	service.state.autoBindAttempted = true
 
-	err := callToolExpectError(t, service.Server(), "agent_deck_require_session", map[string]any{
+	err := callServiceToolExpectError(t, service, "agent_deck_require_session", map[string]any{
 		"session_ref": "coder-ref",
 	})
 	if err == nil || !strings.Contains(err.Error(), "workdir") {
@@ -2050,7 +2050,7 @@ func TestAgentDeckRequireSessionRejectsMissingTarget(t *testing.T) {
 	})
 	service.state.autoBindAttempted = true
 
-	err := callToolExpectError(t, service.Server(), "agent_deck_require_session", map[string]any{
+	err := callServiceToolExpectError(t, service, "agent_deck_require_session", map[string]any{
 		"session_ref": "coder-ref",
 		"workdir":     "/tmp",
 	})
@@ -2076,7 +2076,7 @@ func TestAgentDeckRequireSessionRejectsExistingSessionWithoutPath(t *testing.T) 
 	})
 	service.state.autoBindAttempted = true
 
-	err := callToolExpectError(t, service.Server(), "agent_deck_require_session", map[string]any{
+	err := callServiceToolExpectError(t, service, "agent_deck_require_session", map[string]any{
 		"session_ref": "coder-ref",
 		"workdir":     "/tmp",
 	})
@@ -2095,7 +2095,7 @@ func TestAgentDeckRequireSessionRejectsExtraFields(t *testing.T) {
 	})
 	service.state.autoBindAttempted = true
 
-	err := callToolExpectError(t, service.Server(), "agent_deck_require_session", map[string]any{
+	err := callServiceToolExpectError(t, service, "agent_deck_require_session", map[string]any{
 		"session_ref":       "coder-ref",
 		"workdir":           "/tmp",
 		"ensure_title":      "coder-ref",
@@ -2128,7 +2128,7 @@ func TestAgentDeckCreateSessionCreatesTargetWithoutDefaultStartupInstruction(t *
 	})
 	service.state.autoBindAttempted = true
 
-	output := callTool(t, service.Server(), "agent_deck_create_session", map[string]any{
+	output := callServiceTool(t, service, "agent_deck_create_session", map[string]any{
 		"ensure_title":      "coder-ref",
 		"ensure_cmd":        "codex --model gpt-5.4 --ask-for-approval on-request",
 		"parent_session_id": "planner-1",
@@ -2163,7 +2163,7 @@ func TestAgentDeckCreateSessionRejectsExistingTarget(t *testing.T) {
 	})
 	service.state.autoBindAttempted = true
 
-	err := callToolExpectError(t, service.Server(), "agent_deck_create_session", map[string]any{
+	err := callServiceToolExpectError(t, service, "agent_deck_create_session", map[string]any{
 		"ensure_title":   "coder-ref",
 		"ensure_cmd":     "codex --model gpt-5.4 --ask-for-approval on-request",
 		"no_parent_link": true,
@@ -2191,7 +2191,7 @@ func TestAgentDeckCreateSessionRejectsExistingTargetWithMismatchedWorkdir(t *tes
 	})
 	service.state.autoBindAttempted = true
 
-	err := callToolExpectError(t, service.Server(), "agent_deck_create_session", map[string]any{
+	err := callServiceToolExpectError(t, service, "agent_deck_create_session", map[string]any{
 		"ensure_title":   "coder-ref",
 		"ensure_cmd":     "codex --model gpt-5.4 --ask-for-approval on-request",
 		"no_parent_link": true,
@@ -2222,7 +2222,7 @@ func TestAgentDeckCreateSessionAllowsDetachedCreateWithoutGroup(t *testing.T) {
 	})
 	service.state.autoBindAttempted = true
 
-	output := callTool(t, service.Server(), "agent_deck_create_session", map[string]any{
+	output := callServiceTool(t, service, "agent_deck_create_session", map[string]any{
 		"ensure_title":   "coder-ref",
 		"ensure_cmd":     "codex --model gpt-5.4 --ask-for-approval on-request",
 		"no_parent_link": true,
@@ -2265,7 +2265,7 @@ func TestAgentDeckCreateSessionDerivesChildGroupFromChildParentSession(t *testin
 	})
 	service.state.autoBindAttempted = true
 
-	output := callTool(t, service.Server(), "agent_deck_create_session", map[string]any{
+	output := callServiceTool(t, service, "agent_deck_create_session", map[string]any{
 		"ensure_title":      "coder-ref",
 		"ensure_cmd":        "codex --model gpt-5.4 --ask-for-approval on-request",
 		"parent_session_id": "child-planner",
@@ -2305,7 +2305,7 @@ func TestAgentDeckCreateSessionDerivesTopLevelGroupFromChildParentWithoutGroup(t
 	})
 	service.state.autoBindAttempted = true
 
-	output := callTool(t, service.Server(), "agent_deck_create_session", map[string]any{
+	output := callServiceTool(t, service, "agent_deck_create_session", map[string]any{
 		"ensure_title":      "coder-ref",
 		"ensure_cmd":        "codex --model gpt-5.4 --ask-for-approval on-request",
 		"parent_session_id": "child-planner",
@@ -2343,7 +2343,7 @@ func TestAgentDeckCreateSessionDropsChildParentLinkForExplicitGroupPath(t *testi
 	})
 	service.state.autoBindAttempted = true
 
-	output := callTool(t, service.Server(), "agent_deck_create_session", map[string]any{
+	output := callServiceTool(t, service, "agent_deck_create_session", map[string]any{
 		"ensure_title":      "coder-ref",
 		"ensure_cmd":        "codex --model gpt-5.4 --ask-for-approval on-request",
 		"parent_session_id": "child-planner",
@@ -2384,7 +2384,7 @@ func TestAgentDeckCreateSessionDerivesGroupFromGroupParentSession(t *testing.T) 
 	})
 	service.state.autoBindAttempted = true
 
-	output := callTool(t, service.Server(), "agent_deck_create_session", map[string]any{
+	output := callServiceTool(t, service, "agent_deck_create_session", map[string]any{
 		"ensure_title":            "coder-ref",
 		"ensure_cmd":              "codex --model gpt-5.4 --ask-for-approval on-request",
 		"group_parent_session_id": "planner-1",
@@ -2408,7 +2408,7 @@ func TestAgentDeckCreateSessionDoesNotCreateGroupWhenCreateValidationFails(t *te
 	})
 	service.state.autoBindAttempted = true
 
-	err := callToolExpectError(t, service.Server(), "agent_deck_create_session", map[string]any{
+	err := callServiceToolExpectError(t, service, "agent_deck_create_session", map[string]any{
 		"ensure_title": "coder-ref",
 		"group_path":   "reviews/new-group",
 		"workdir":      "/tmp",
@@ -2449,7 +2449,7 @@ func TestAgentDeckRequireSessionAcceptsSymlinkedEquivalentWorkdir(t *testing.T) 
 	})
 	service.state.autoBindAttempted = true
 
-	output := callTool(t, service.Server(), "agent_deck_require_session", map[string]any{
+	output := callServiceTool(t, service, "agent_deck_require_session", map[string]any{
 		"session_ref": "coder-ref",
 		"workdir":     symlinkDir,
 	})
@@ -2485,7 +2485,7 @@ func TestAgentDeckCreateSessionCreatesTargetWithGroupPathAndNoParentLink(t *test
 	})
 	service.state.autoBindAttempted = true
 
-	output := callTool(t, service.Server(), "agent_deck_create_session", map[string]any{
+	output := callServiceTool(t, service, "agent_deck_create_session", map[string]any{
 		"ensure_title":   "coder-ref",
 		"ensure_cmd":     "codex --model gpt-5.4 --ask-for-approval on-request",
 		"group_path":     "reviews",
@@ -2519,7 +2519,7 @@ func TestMailboxServiceUsesConfiguredStateDir(t *testing.T) {
 	service.state.defaultSender = "agent-deck/self"
 	service.state.autoBindAttempted = true
 
-	output := callTool(t, service.Server(), "mailbox_send", map[string]any{
+	output := callServiceTool(t, service, "mailbox_send", map[string]any{
 		"to_address": "agent-deck/self",
 		"subject":    "delegate",
 		"body":       "body",
@@ -2564,7 +2564,7 @@ func TestMailboxLifecycleToolsUseDirectMailboxService(t *testing.T) {
 	service.state.defaultSender = "agent-deck/self"
 	service.state.autoBindAttempted = true
 
-	send := callTool(t, service.Server(), "mailbox_send", map[string]any{
+	send := callServiceTool(t, service, "mailbox_send", map[string]any{
 		"to_address": "agent-deck/self",
 		"subject":    "delegate",
 		"body":       "body",
@@ -2574,7 +2574,7 @@ func TestMailboxLifecycleToolsUseDirectMailboxService(t *testing.T) {
 		t.Fatal("delivery_id = empty, want non-empty")
 	}
 
-	wait := callTool(t, service.Server(), "mailbox_wait", map[string]any{
+	wait := callServiceTool(t, service, "mailbox_wait", map[string]any{
 		"addresses": []string{"agent-deck/self"},
 	})
 	if got := wait["status"]; got != "message_available" {
@@ -2588,7 +2588,7 @@ func TestMailboxLifecycleToolsUseDirectMailboxService(t *testing.T) {
 		t.Fatalf("wait delivery unexpectedly contains body: %v", waitDelivery)
 	}
 
-	recv := callTool(t, service.Server(), "mailbox_recv", map[string]any{
+	recv := callServiceTool(t, service, "mailbox_recv", map[string]any{
 		"addresses": []string{"agent-deck/self"},
 	})
 	if got := recv["status"]; got != "received" {
@@ -2607,7 +2607,7 @@ func TestMailboxLifecycleToolsUseDirectMailboxService(t *testing.T) {
 		t.Fatalf("recv body = %v, want body", message["body"])
 	}
 
-	ack := callTool(t, service.Server(), "mailbox_ack", map[string]any{
+	ack := callServiceTool(t, service, "mailbox_ack", map[string]any{
 		"delivery_id": deliveryID,
 		"lease_token": message["lease_token"],
 	})
@@ -2615,7 +2615,7 @@ func TestMailboxLifecycleToolsUseDirectMailboxService(t *testing.T) {
 		t.Fatalf("ack status = %v, want acked", got)
 	}
 
-	list := callTool(t, service.Server(), "mailbox_list", map[string]any{
+	list := callServiceTool(t, service, "mailbox_list", map[string]any{
 		"address": "agent-deck/self",
 		"state":   "acked",
 	})
@@ -2631,7 +2631,7 @@ func TestMailboxLifecycleToolsUseDirectMailboxService(t *testing.T) {
 		t.Fatalf("listed state = %v, want acked", listed["state"])
 	}
 
-	read := callTool(t, service.Server(), "mailbox_read", map[string]any{
+	read := callServiceTool(t, service, "mailbox_read", map[string]any{
 		"addresses": []string{"agent-deck/self"},
 		"latest":    true,
 		"state":     "acked",
@@ -2684,7 +2684,7 @@ func TestMailboxRecvWithTimeoutClaimsMessageSentLater(t *testing.T) {
 	}()
 
 	time.Sleep(75 * time.Millisecond)
-	send := callTool(t, service.Server(), "mailbox_send", map[string]any{
+	send := callServiceTool(t, service, "mailbox_send", map[string]any{
 		"to_address": "agent-deck/self",
 		"subject":    "blocking recv",
 		"body":       "body",
@@ -2764,7 +2764,7 @@ func TestMailboxRecvWithTimeoutClaimsWithParentContext(t *testing.T) {
 	service.state.defaultSender = "agent-deck/self"
 	service.state.autoBindAttempted = true
 
-	output := callTool(t, service.Server(), "mailbox_recv", map[string]any{
+	output := callServiceTool(t, service, "mailbox_recv", map[string]any{
 		"addresses": []string{"agent-deck/self"},
 		"timeout":   "30s",
 	})
@@ -2804,7 +2804,7 @@ func TestMailboxRecvWithTimeoutReturnsNoMessage(t *testing.T) {
 	service.state.defaultSender = "agent-deck/self"
 	service.state.autoBindAttempted = true
 
-	output := callTool(t, service.Server(), "mailbox_recv", map[string]any{
+	output := callServiceTool(t, service, "mailbox_recv", map[string]any{
 		"addresses": []string{"agent-deck/self"},
 		"timeout":   "25ms",
 	})
@@ -2847,7 +2847,7 @@ func TestMailboxRecvWithTimeoutBoundsAvailabilityCheck(t *testing.T) {
 	service.state.autoBindAttempted = true
 
 	startedAt := time.Now()
-	output := callTool(t, service.Server(), "mailbox_recv", map[string]any{
+	output := callServiceTool(t, service, "mailbox_recv", map[string]any{
 		"addresses": []string{"agent-deck/self"},
 		"timeout":   "25ms",
 	})
@@ -2880,7 +2880,7 @@ func TestMailboxRecvWithoutTimeoutRemainsImmediate(t *testing.T) {
 	service.state.defaultSender = "agent-deck/self"
 	service.state.autoBindAttempted = true
 
-	output := callTool(t, service.Server(), "mailbox_recv", map[string]any{
+	output := callServiceTool(t, service, "mailbox_recv", map[string]any{
 		"addresses": []string{"agent-deck/self"},
 	})
 	if got := output["status"]; got != "no_message" {
@@ -2908,7 +2908,7 @@ func TestMailboxGroupMCPRuntimeFlow(t *testing.T) {
 	service.state.defaultSender = "agent/sender"
 	service.state.autoBindAttempted = true
 
-	created := callTool(t, service.Server(), "mailbox_group_create", map[string]any{
+	created := callServiceTool(t, service, "mailbox_group_create", map[string]any{
 		"group_address": "group/review",
 	})
 	group := created["group"].(map[string]any)
@@ -2916,16 +2916,16 @@ func TestMailboxGroupMCPRuntimeFlow(t *testing.T) {
 		t.Fatalf("created group address = %v, want group/review", group["address"])
 	}
 
-	callTool(t, service.Server(), "mailbox_group_add_member", map[string]any{
+	callServiceTool(t, service, "mailbox_group_add_member", map[string]any{
 		"group_address": "group/review",
 		"person":        "alice",
 	})
-	callTool(t, service.Server(), "mailbox_group_add_member", map[string]any{
+	callServiceTool(t, service, "mailbox_group_add_member", map[string]any{
 		"group_address": "group/review",
 		"person":        "bob",
 	})
 
-	send := callTool(t, service.Server(), "mailbox_send", map[string]any{
+	send := callServiceTool(t, service, "mailbox_send", map[string]any{
 		"to_address": "group/review",
 		"subject":    "group update",
 		"body":       "group body",
@@ -2938,7 +2938,7 @@ func TestMailboxGroupMCPRuntimeFlow(t *testing.T) {
 		t.Fatalf("group send delivery_id = %v, want nil", got)
 	}
 
-	wait := callTool(t, service.Server(), "mailbox_wait", map[string]any{
+	wait := callServiceTool(t, service, "mailbox_wait", map[string]any{
 		"addresses": []string{"group/review"},
 		"as_person": "alice",
 	})
@@ -2953,7 +2953,7 @@ func TestMailboxGroupMCPRuntimeFlow(t *testing.T) {
 		t.Fatalf("group wait exposed delivery_id: %v", waitMessage)
 	}
 
-	recv := callTool(t, service.Server(), "mailbox_recv", map[string]any{
+	recv := callServiceTool(t, service, "mailbox_recv", map[string]any{
 		"addresses": []string{"group/review"},
 		"as_person": "alice",
 	})
@@ -2971,7 +2971,7 @@ func TestMailboxGroupMCPRuntimeFlow(t *testing.T) {
 		t.Fatal("group recv tracked active lease")
 	}
 
-	list := callTool(t, service.Server(), "mailbox_list", map[string]any{
+	list := callServiceTool(t, service, "mailbox_list", map[string]any{
 		"address":   "group/review",
 		"as_person": "alice",
 	})
@@ -2984,14 +2984,14 @@ func TestMailboxGroupMCPRuntimeFlow(t *testing.T) {
 		t.Fatalf("listed read = %v, want true after recv", listed["read"])
 	}
 
-	members := callTool(t, service.Server(), "mailbox_group_members", map[string]any{
+	members := callServiceTool(t, service, "mailbox_group_members", map[string]any{
 		"group_address": "group/review",
 	})
 	if got := len(members["memberships"].([]any)); got != 2 {
 		t.Fatalf("group members = %d, want 2", got)
 	}
 
-	inspect := callTool(t, service.Server(), "mailbox_address_inspect", map[string]any{
+	inspect := callServiceTool(t, service, "mailbox_address_inspect", map[string]any{
 		"address": "group/review",
 	})
 	if got := inspect["inspection"].(map[string]any)["kind"]; got != mailbox.AddressKindGroup {
@@ -3021,20 +3021,20 @@ func TestMailboxGroupSendRuntimeKeepsMessageWhenSubscriberNotifyFails(t *testing
 	})
 	service.state.autoBindAttempted = true
 
-	callTool(t, service.Server(), "mailbox_group_create", map[string]any{
+	callServiceTool(t, service, "mailbox_group_create", map[string]any{
 		"group_address": "group/review",
 	})
-	callTool(t, service.Server(), "mailbox_group_add_member", map[string]any{
+	callServiceTool(t, service, "mailbox_group_add_member", map[string]any{
 		"group_address": "group/review",
 		"person":        "alice",
 	})
-	callTool(t, service.Server(), "mailbox_group_add_subscriber", map[string]any{
+	callServiceTool(t, service, "mailbox_group_add_subscriber", map[string]any{
 		"group_address":  "group/review",
 		"notify_address": "agent-deck/moderator",
 		"person":         "moderator",
 	})
 
-	send := callTool(t, service.Server(), "mailbox_send", map[string]any{
+	send := callServiceTool(t, service, "mailbox_send", map[string]any{
 		"to_address":   "group/review",
 		"from_address": "agent-deck/expert",
 		"subject":      "expert post",
@@ -3048,7 +3048,7 @@ func TestMailboxGroupSendRuntimeKeepsMessageWhenSubscriberNotifyFails(t *testing
 		t.Fatalf("notify_status = %v, want failed", got)
 	}
 
-	recv := callTool(t, service.Server(), "mailbox_recv", map[string]any{
+	recv := callServiceTool(t, service, "mailbox_recv", map[string]any{
 		"addresses": []string{"group/review"},
 		"as_person": "alice",
 	})
@@ -3091,7 +3091,7 @@ func TestMailboxRecvExposesForwardedFromAddressInCompactPayload(t *testing.T) {
 	service.state.defaultSender = "agent-deck/self"
 	service.state.autoBindAttempted = true
 
-	recv := callTool(t, service.Server(), "mailbox_recv", map[string]any{
+	recv := callServiceTool(t, service, "mailbox_recv", map[string]any{
 		"addresses": []string{"agent-deck/self"},
 	})
 	delivery := recv["delivery"].(map[string]any)
@@ -3128,7 +3128,7 @@ func TestMailboxWaitExposesForwardedFromAddressInCompactPayload(t *testing.T) {
 	service.state.defaultSender = "agent-deck/self"
 	service.state.autoBindAttempted = true
 
-	wait := callTool(t, service.Server(), "mailbox_wait", map[string]any{
+	wait := callServiceTool(t, service, "mailbox_wait", map[string]any{
 		"addresses": []string{"agent-deck/self"},
 	})
 	delivery := wait["delivery"].(map[string]any)
@@ -3173,7 +3173,7 @@ func TestMailboxListAsPersonExposesForwardedFromAddress(t *testing.T) {
 	})
 	service.state.autoBindAttempted = true
 
-	list := callTool(t, service.Server(), "mailbox_list", map[string]any{
+	list := callServiceTool(t, service, "mailbox_list", map[string]any{
 		"address":   "group/review",
 		"as_person": "alice",
 	})
@@ -3218,7 +3218,7 @@ func TestMailboxWaitAsPersonUsesGroupWaitWithoutDeliveryLease(t *testing.T) {
 	})
 	service.state.autoBindAttempted = true
 
-	wait := callTool(t, service.Server(), "mailbox_wait", map[string]any{
+	wait := callServiceTool(t, service, "mailbox_wait", map[string]any{
 		"addresses": []string{"group/review"},
 		"as_person": "alice",
 		"timeout":   "25ms",
@@ -3270,7 +3270,7 @@ func TestMailboxRecvAsPersonUsesGroupRecvWithoutTrackingLease(t *testing.T) {
 	})
 	service.state.autoBindAttempted = true
 
-	recv := callTool(t, service.Server(), "mailbox_recv", map[string]any{
+	recv := callServiceTool(t, service, "mailbox_recv", map[string]any{
 		"addresses": []string{"group/review"},
 		"as_person": "alice",
 	})
@@ -3351,7 +3351,7 @@ func TestMailboxRecvAsPersonWithTimeoutUsesGroupWaitThenRecv(t *testing.T) {
 	})
 	service.state.autoBindAttempted = true
 
-	recv := callTool(t, service.Server(), "mailbox_recv", map[string]any{
+	recv := callServiceTool(t, service, "mailbox_recv", map[string]any{
 		"addresses": []string{"group/review"},
 		"as_person": "alice",
 		"timeout":   "30s",
@@ -3385,7 +3385,7 @@ func TestMailboxGroupReadRequiresSingleGroupAddress(t *testing.T) {
 	})
 	service.state.autoBindAttempted = true
 
-	err := callToolExpectError(t, service.Server(), "mailbox_recv", map[string]any{
+	err := callServiceToolExpectError(t, service, "mailbox_recv", map[string]any{
 		"addresses": []string{"group/one", "group/two"},
 		"as_person": "alice",
 	})
@@ -3393,7 +3393,7 @@ func TestMailboxGroupReadRequiresSingleGroupAddress(t *testing.T) {
 		t.Fatalf("mailbox_recv error = %v, want single group address validation", err)
 	}
 
-	err = callToolExpectError(t, service.Server(), "mailbox_wait", map[string]any{
+	err = callServiceToolExpectError(t, service, "mailbox_wait", map[string]any{
 		"addresses": []string{"agent/alice"},
 		"as_person": "alice",
 	})
@@ -3516,7 +3516,7 @@ func TestMailboxGroupControlToolsUseMailboxService(t *testing.T) {
 	})
 	service.state.autoBindAttempted = true
 
-	created := callTool(t, service.Server(), "mailbox_group_create", map[string]any{
+	created := callServiceTool(t, service, "mailbox_group_create", map[string]any{
 		"group_address": "group/review",
 	})
 	if got := created["status"]; got != "created" {
@@ -3526,7 +3526,7 @@ func TestMailboxGroupControlToolsUseMailboxService(t *testing.T) {
 		t.Fatalf("created group_id = %v, want grp_1", got)
 	}
 
-	added := callTool(t, service.Server(), "mailbox_group_add_member", map[string]any{
+	added := callServiceTool(t, service, "mailbox_group_add_member", map[string]any{
 		"group_address": "group/review",
 		"person":        "alice",
 	})
@@ -3537,7 +3537,7 @@ func TestMailboxGroupControlToolsUseMailboxService(t *testing.T) {
 		t.Fatalf("added person = %v, want alice", got)
 	}
 
-	members := callTool(t, service.Server(), "mailbox_group_members", map[string]any{
+	members := callServiceTool(t, service, "mailbox_group_members", map[string]any{
 		"group_address": "group/review",
 	})
 	memberships := members["memberships"].([]any)
@@ -3545,7 +3545,7 @@ func TestMailboxGroupControlToolsUseMailboxService(t *testing.T) {
 		t.Fatalf("memberships = %d, want 1", len(memberships))
 	}
 
-	removed := callTool(t, service.Server(), "mailbox_group_remove_member", map[string]any{
+	removed := callServiceTool(t, service, "mailbox_group_remove_member", map[string]any{
 		"group_address": "group/review",
 		"person":        "alice",
 	})
@@ -3556,7 +3556,7 @@ func TestMailboxGroupControlToolsUseMailboxService(t *testing.T) {
 		t.Fatalf("removed active = %v, want false", got)
 	}
 
-	addedSubscriber := callTool(t, service.Server(), "mailbox_group_add_subscriber", map[string]any{
+	addedSubscriber := callServiceTool(t, service, "mailbox_group_add_subscriber", map[string]any{
 		"group_address":  "group/review",
 		"notify_address": "agent-deck/moderator",
 		"person":         "moderator",
@@ -3568,7 +3568,7 @@ func TestMailboxGroupControlToolsUseMailboxService(t *testing.T) {
 		t.Fatalf("subscriber notify_address = %v, want agent-deck/moderator", got)
 	}
 
-	subscribers := callTool(t, service.Server(), "mailbox_group_subscribers", map[string]any{
+	subscribers := callServiceTool(t, service, "mailbox_group_subscribers", map[string]any{
 		"group_address": "group/review",
 	})
 	subscriptions := subscribers["subscribers"].([]any)
@@ -3576,7 +3576,7 @@ func TestMailboxGroupControlToolsUseMailboxService(t *testing.T) {
 		t.Fatalf("subscribers = %d, want 1", len(subscriptions))
 	}
 
-	removedSubscriber := callTool(t, service.Server(), "mailbox_group_remove_subscriber", map[string]any{
+	removedSubscriber := callServiceTool(t, service, "mailbox_group_remove_subscriber", map[string]any{
 		"group_address":  "group/review",
 		"notify_address": "agent-deck/moderator",
 	})
@@ -3587,7 +3587,7 @@ func TestMailboxGroupControlToolsUseMailboxService(t *testing.T) {
 		t.Fatalf("removed subscriber active = %v, want false", got)
 	}
 
-	inspected := callTool(t, service.Server(), "mailbox_address_inspect", map[string]any{
+	inspected := callServiceTool(t, service, "mailbox_address_inspect", map[string]any{
 		"address": "group/review",
 	})
 	inspection := inspected["inspection"].(map[string]any)
@@ -3652,7 +3652,7 @@ func TestMailboxRecvStartsLeaseRenewLoopWithShortTTL(t *testing.T) {
 	service.state.defaultSender = "agent-deck/self"
 	service.state.autoBindAttempted = true
 
-	callTool(t, service.Server(), "mailbox_recv", map[string]any{
+	callServiceTool(t, service, "mailbox_recv", map[string]any{
 		"addresses": []string{"agent-deck/self"},
 	})
 
@@ -3710,7 +3710,7 @@ func TestProcessLeaseRenewalsRetriesTransientFailureWithinLeaseWindow(t *testing
 	service.state.defaultSender = "agent-deck/self"
 	service.state.autoBindAttempted = true
 
-	callTool(t, service.Server(), "mailbox_recv", map[string]any{
+	callServiceTool(t, service, "mailbox_recv", map[string]any{
 		"addresses": []string{"agent-deck/self"},
 	})
 
@@ -3724,7 +3724,7 @@ func TestProcessLeaseRenewalsRetriesTransientFailureWithinLeaseWindow(t *testing
 		t.Fatalf("lastRenewalError() = %v, want nil after successful retry", failure)
 	}
 
-	output := callTool(t, service.Server(), "mailbox_ack", map[string]any{
+	output := callServiceTool(t, service, "mailbox_ack", map[string]any{
 		"delivery_id": "dlv_retry",
 		"lease_token": "lease_retry",
 	})
@@ -3773,7 +3773,7 @@ func TestProcessLeaseRenewalsAllowsTerminalMutationBeforeExpiryAfterTransientFai
 	service.state.defaultSender = "agent-deck/self"
 	service.state.autoBindAttempted = true
 
-	callTool(t, service.Server(), "mailbox_recv", map[string]any{
+	callServiceTool(t, service, "mailbox_recv", map[string]any{
 		"addresses": []string{"agent-deck/self"},
 	})
 
@@ -3785,7 +3785,7 @@ func TestProcessLeaseRenewalsAllowsTerminalMutationBeforeExpiryAfterTransientFai
 		t.Fatal("active lease tracking removed after transient renewal failure")
 	}
 
-	output := callTool(t, service.Server(), "mailbox_ack", map[string]any{
+	output := callServiceTool(t, service, "mailbox_ack", map[string]any{
 		"delivery_id": "dlv_failure",
 		"lease_token": "lease_failure",
 	})
@@ -3835,7 +3835,7 @@ func TestProcessLeaseRenewalsAllowsTerminalMutationAfterExpiryFollowingTransient
 	service.state.defaultSender = "agent-deck/self"
 	service.state.autoBindAttempted = true
 
-	callTool(t, service.Server(), "mailbox_recv", map[string]any{
+	callServiceTool(t, service, "mailbox_recv", map[string]any{
 		"addresses": []string{"agent-deck/self"},
 	})
 
@@ -3845,7 +3845,7 @@ func TestProcessLeaseRenewalsAllowsTerminalMutationAfterExpiryFollowingTransient
 	}
 
 	current = current.Add(defaultMCPLeaseTTL + time.Second)
-	output := callTool(t, service.Server(), "mailbox_ack", map[string]any{
+	output := callServiceTool(t, service, "mailbox_ack", map[string]any{
 		"delivery_id": "dlv_expired_failure",
 		"lease_token": "lease_expired_failure",
 	})
@@ -3890,13 +3890,13 @@ func TestMailboxAckStopsTrackingActiveLease(t *testing.T) {
 	service.state.defaultSender = "agent-deck/self"
 	service.state.autoBindAttempted = true
 
-	recv := callTool(t, service.Server(), "mailbox_recv", map[string]any{
+	recv := callServiceTool(t, service, "mailbox_recv", map[string]any{
 		"addresses": []string{"agent-deck/self"},
 	})
 	delivery := recv["delivery"].(map[string]any)
 	message := delivery["messages"].([]any)[0].(map[string]any)
 
-	callTool(t, service.Server(), "mailbox_ack", map[string]any{
+	callServiceTool(t, service, "mailbox_ack", map[string]any{
 		"delivery_id": "dlv_acked",
 		"lease_token": message["lease_token"],
 	})
@@ -3924,17 +3924,17 @@ func TestMailboxReleaseDeferAndFailUseDirectMailboxService(t *testing.T) {
 	service.state.defaultSender = "agent-deck/self"
 	service.state.autoBindAttempted = true
 
-	firstSend := callTool(t, service.Server(), "mailbox_send", map[string]any{
+	firstSend := callServiceTool(t, service, "mailbox_send", map[string]any{
 		"to_address": "agent-deck/self",
 		"subject":    "release-defer",
 		"body":       "body",
 	})
-	firstRecv := callTool(t, service.Server(), "mailbox_recv", map[string]any{
+	firstRecv := callServiceTool(t, service, "mailbox_recv", map[string]any{
 		"addresses": []string{"agent-deck/self"},
 	})
 	firstMessage := firstRecv["delivery"].(map[string]any)["messages"].([]any)[0].(map[string]any)
 
-	release := callTool(t, service.Server(), "mailbox_release", map[string]any{
+	release := callServiceTool(t, service, "mailbox_release", map[string]any{
 		"delivery_id": firstSend["delivery_id"],
 		"lease_token": firstMessage["lease_token"],
 	})
@@ -3942,12 +3942,12 @@ func TestMailboxReleaseDeferAndFailUseDirectMailboxService(t *testing.T) {
 		t.Fatalf("release status = %v, want released", got)
 	}
 
-	secondRecv := callTool(t, service.Server(), "mailbox_recv", map[string]any{
+	secondRecv := callServiceTool(t, service, "mailbox_recv", map[string]any{
 		"addresses": []string{"agent-deck/self"},
 	})
 	secondMessage := secondRecv["delivery"].(map[string]any)["messages"].([]any)[0].(map[string]any)
 	until := time.Now().UTC().Add(10 * time.Minute).Format(time.RFC3339Nano)
-	deferResult := callTool(t, service.Server(), "mailbox_defer", map[string]any{
+	deferResult := callServiceTool(t, service, "mailbox_defer", map[string]any{
 		"delivery_id": firstSend["delivery_id"],
 		"lease_token": secondMessage["lease_token"],
 		"until":       until,
@@ -3956,7 +3956,7 @@ func TestMailboxReleaseDeferAndFailUseDirectMailboxService(t *testing.T) {
 		t.Fatalf("defer status = %v, want deferred", got)
 	}
 
-	wait := callTool(t, service.Server(), "mailbox_wait", map[string]any{
+	wait := callServiceTool(t, service, "mailbox_wait", map[string]any{
 		"addresses": []string{"agent-deck/self"},
 		"timeout":   "10ms",
 	})
@@ -3964,16 +3964,16 @@ func TestMailboxReleaseDeferAndFailUseDirectMailboxService(t *testing.T) {
 		t.Fatalf("wait status after defer = %v, want no_message", got)
 	}
 
-	secondSend := callTool(t, service.Server(), "mailbox_send", map[string]any{
+	secondSend := callServiceTool(t, service, "mailbox_send", map[string]any{
 		"to_address": "agent-deck/self",
 		"subject":    "fail",
 		"body":       "body-2",
 	})
-	failRecv := callTool(t, service.Server(), "mailbox_recv", map[string]any{
+	failRecv := callServiceTool(t, service, "mailbox_recv", map[string]any{
 		"addresses": []string{"agent-deck/self"},
 	})
 	failMessage := failRecv["delivery"].(map[string]any)["messages"].([]any)[0].(map[string]any)
-	failResult := callTool(t, service.Server(), "mailbox_fail", map[string]any{
+	failResult := callServiceTool(t, service, "mailbox_fail", map[string]any{
 		"delivery_id": secondSend["delivery_id"],
 		"lease_token": failMessage["lease_token"],
 		"reason":      "boom",
@@ -3983,6 +3983,465 @@ func TestMailboxReleaseDeferAndFailUseDirectMailboxService(t *testing.T) {
 	}
 	if got := failResult["reason"]; got != "boom" {
 		t.Fatalf("fail reason = %v, want boom", got)
+	}
+}
+
+func TestWriteToolRequiresMailboxStatusFirst(t *testing.T) {
+	service := newService(Options{
+		MailboxServiceFactory: fakeMailboxServiceFactory{service: &fakeMailboxService{t: t}},
+		CommandRunner:         &fakeRunner{t: t},
+		DisableWakeScheduler:  true,
+		DisableLeaseRenewLoop: true,
+	})
+
+	err := callServiceToolExpectErrorWithoutStatusBootstrap(t, service, "mailbox_send", map[string]any{
+		"from_address": "codex/source",
+		"to_address":   "codex/target",
+		"subject":      "hello",
+		"body":         "body",
+	})
+	if err == nil || !strings.Contains(err.Error(), "mailbox_status") {
+		t.Fatalf("mailbox_send error = %v, want mailbox_status gate", err)
+	}
+}
+
+func TestReadToolRequiresMailboxStatusFirst(t *testing.T) {
+	service := newService(Options{
+		MailboxServiceFactory: fakeMailboxServiceFactory{service: &fakeMailboxService{t: t}},
+		CommandRunner:         &fakeRunner{t: t},
+		DisableWakeScheduler:  true,
+		DisableLeaseRenewLoop: true,
+	})
+
+	err := callServiceToolExpectErrorWithoutStatusBootstrap(t, service, "mailbox_wait", map[string]any{
+		"addresses": []string{"codex/source"},
+		"timeout":   "0s",
+	})
+	if err == nil || !strings.Contains(err.Error(), "mailbox_status") {
+		t.Fatalf("mailbox_wait error = %v, want mailbox_status gate", err)
+	}
+}
+
+func TestAllNonStatusToolsRequireMailboxStatus(t *testing.T) {
+	service := newService(Options{
+		MailboxServiceFactory: fakeMailboxServiceFactory{service: &fakeMailboxService{t: t}},
+		CommandRunner:         &fakeRunner{t: t},
+		DisableWakeScheduler:  true,
+		DisableLeaseRenewLoop: true,
+	})
+
+	ctx := context.Background()
+	clientTransport, serverTransport := mcp.NewInMemoryTransports()
+	serverSession, err := service.Server().Connect(ctx, serverTransport, nil)
+	if err != nil {
+		t.Fatalf("server connect: %v", err)
+	}
+	client := mcp.NewClient(&mcp.Implementation{Name: "test-client", Version: "v0.0.1"}, nil)
+	clientSession, err := client.Connect(ctx, clientTransport, nil)
+	if err != nil {
+		t.Fatalf("client connect: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = clientSession.Close()
+		_ = serverSession.Wait()
+	})
+
+	tools, err := clientSession.ListTools(ctx, nil)
+	if err != nil {
+		t.Fatalf("ListTools() error = %v", err)
+	}
+	registered := map[string]bool{}
+	for _, tool := range tools.Tools {
+		registered[tool.Name] = true
+		if tool.Name == "mailbox_status" {
+			continue
+		}
+		if !requiresMailboxStatusToolName(tool.Name) {
+			t.Fatalf("tool %q is registered but missing from requiresMailboxStatusToolName", tool.Name)
+		}
+	}
+	for _, name := range requiresMailboxStatusToolNames() {
+		if !registered[name] {
+			t.Fatalf("requiresMailboxStatusToolName contains unregistered tool %q", name)
+		}
+	}
+	if !registered["mailbox_status"] {
+		t.Fatalf("mailbox_status is not registered")
+	}
+}
+
+func TestMailboxStatusReportsAutoBindInvalidJSONWarningAndUnlocksManualBind(t *testing.T) {
+	t.Setenv("CODEX_SESSION_ID", "")
+	t.Setenv("AGENTDECK_INSTANCE_ID", "")
+
+	runner := &fakeRunner{t: t}
+	runner.handler = func(args []string, _ string) (RunResult, error) {
+		switch {
+		case len(args) >= 1 && args[0] == "ps":
+			return RunResult{ExitCode: 1}, nil
+		case strings.Join(args, "\x00") == strings.Join([]string{"agent-deck", "session", "current", "--json"}, "\x00"):
+			return RunResult{ExitCode: 0, Stdout: `not-json`}, nil
+		default:
+			t.Fatalf("unexpected command: %v", args)
+			return RunResult{}, nil
+		}
+	}
+
+	service := newService(Options{
+		MailboxServiceFactory: fakeMailboxServiceFactory{service: &fakeMailboxService{t: t}},
+		CommandRunner:         runner,
+		DisableWakeScheduler:  true,
+		DisableLeaseRenewLoop: true,
+	})
+
+	status := callServiceTool(t, service, "mailbox_status", nil)
+	warnings, ok := status["warnings"].([]any)
+	if !ok {
+		t.Fatalf("warnings = %#v, want warning list", status["warnings"])
+	}
+	foundInvalidJSONWarning := false
+	for _, warning := range warnings {
+		if strings.Contains(fmt.Sprint(warning), "invalid JSON") {
+			foundInvalidJSONWarning = true
+		}
+	}
+	if !foundInvalidJSONWarning {
+		t.Fatalf("warnings = %#v, want invalid JSON warning", warnings)
+	}
+
+	bind := callServiceTool(t, service, "mailbox_bind", map[string]any{
+		"addresses": []string{"codex/manual"},
+	})
+	if got := bind["default_sender"]; got != "codex/manual" {
+		t.Fatalf("mailbox_bind default_sender = %v, want codex/manual", got)
+	}
+	assertNoToolSessionWarning(t, bind)
+}
+
+func TestMailboxStatusReportsCodexProbeWarningAndUnlocksManualBind(t *testing.T) {
+	t.Setenv("CODEX_SESSION_ID", "")
+	t.Setenv("AGENTDECK_INSTANCE_ID", "")
+
+	runner := &fakeRunner{t: t}
+	runner.handler = func(args []string, _ string) (RunResult, error) {
+		switch {
+		case len(args) >= 1 && args[0] == "ps":
+			return RunResult{ExitCode: 0, Stdout: "4242 1 codex codex"}, nil
+		case len(args) >= 1 && args[0] == "lsof":
+			return RunResult{}, errors.New("lsof failed")
+		case strings.Join(args, "\x00") == strings.Join([]string{"agent-deck", "session", "current", "--json"}, "\x00"):
+			return RunResult{ExitCode: 1, Stderr: "not in an agent-deck pane"}, nil
+		default:
+			t.Fatalf("unexpected command: %v", args)
+			return RunResult{}, nil
+		}
+	}
+
+	service := newService(Options{
+		MailboxServiceFactory: fakeMailboxServiceFactory{service: &fakeMailboxService{t: t}},
+		CommandRunner:         runner,
+		DisableWakeScheduler:  true,
+		DisableLeaseRenewLoop: true,
+	})
+	service.sessions.parentPID = func() int { return 4242 }
+
+	status := callServiceTool(t, service, "mailbox_status", nil)
+	warnings, ok := status["warnings"].([]any)
+	if !ok {
+		t.Fatalf("warnings = %#v, want warning list", status["warnings"])
+	}
+	foundCodexProbeWarning := false
+	for _, warning := range warnings {
+		if strings.Contains(fmt.Sprint(warning), "codex session auto-bind probe failed") {
+			foundCodexProbeWarning = true
+		}
+	}
+	if !foundCodexProbeWarning {
+		t.Fatalf("warnings = %#v, calls = %#v, want codex probe warning", warnings, runner.Calls())
+	}
+
+	bind := callServiceTool(t, service, "mailbox_bind", map[string]any{
+		"addresses": []string{"codex/manual"},
+	})
+	if got := bind["default_sender"]; got != "codex/manual" {
+		t.Fatalf("mailbox_bind default_sender = %v, want codex/manual", got)
+	}
+	assertNoToolSessionWarning(t, bind)
+}
+
+func TestMailboxStatusKeepsCodexProbeWarningWhenAgentDeckProbeDoesNotComplete(t *testing.T) {
+	t.Setenv("CODEX_SESSION_ID", "")
+	t.Setenv("AGENTDECK_INSTANCE_ID", "")
+
+	runner := &fakeRunner{t: t}
+	runner.handler = func(args []string, _ string) (RunResult, error) {
+		switch {
+		case len(args) >= 1 && args[0] == "ps":
+			return RunResult{ExitCode: 0, Stdout: "4242 1 codex codex"}, nil
+		case len(args) >= 1 && args[0] == "lsof":
+			return RunResult{}, errors.New("lsof failed")
+		case strings.Join(args, "\x00") == strings.Join([]string{"agent-deck", "session", "current", "--json"}, "\x00"):
+			return RunResult{}, errors.New("agent-deck not found")
+		default:
+			t.Fatalf("unexpected command: %v", args)
+			return RunResult{}, nil
+		}
+	}
+
+	service := newService(Options{
+		MailboxServiceFactory: fakeMailboxServiceFactory{service: &fakeMailboxService{t: t}},
+		CommandRunner:         runner,
+		DisableWakeScheduler:  true,
+		DisableLeaseRenewLoop: true,
+	})
+	service.sessions.parentPID = func() int { return 4242 }
+
+	status := callServiceTool(t, service, "mailbox_status", nil)
+	warnings, ok := status["warnings"].([]any)
+	if !ok {
+		t.Fatalf("warnings = %#v, want warning list", status["warnings"])
+	}
+	for _, warning := range warnings {
+		if strings.Contains(fmt.Sprint(warning), "codex session auto-bind probe failed") {
+			return
+		}
+	}
+	t.Fatalf("warnings = %#v, calls = %#v, want codex probe warning", warnings, runner.Calls())
+}
+
+func TestMailboxStatusRetriesAutoBindAfterEmptyAttempt(t *testing.T) {
+	t.Setenv("CODEX_SESSION_ID", "")
+	t.Setenv("AGENTDECK_INSTANCE_ID", "")
+	t.Setenv("CLAUDE_CODE_SESSION_ID", "")
+
+	runner := &fakeRunner{t: t}
+	runner.handler = func(args []string, _ string) (RunResult, error) {
+		switch {
+		case len(args) >= 1 && args[0] == "ps":
+			return RunResult{ExitCode: 1, Stderr: "no process"}, nil
+		case strings.Join(args, "\x00") == strings.Join([]string{"agent-deck", "session", "current", "--json"}, "\x00"):
+			return RunResult{ExitCode: 1, Stderr: "not in an agent-deck pane"}, nil
+		default:
+			t.Fatalf("unexpected command: %v", args)
+			return RunResult{}, nil
+		}
+	}
+
+	service := newService(Options{
+		MailboxServiceFactory: fakeMailboxServiceFactory{service: &fakeMailboxService{t: t}},
+		CommandRunner:         runner,
+		DisableWakeScheduler:  true,
+		DisableLeaseRenewLoop: true,
+	})
+
+	first := callServiceTool(t, service, "mailbox_status", nil)
+	if got := first["bound_addresses"]; got != nil && !reflect.DeepEqual(got, []any{}) {
+		t.Fatalf("first bound_addresses = %#v, want empty", got)
+	}
+
+	t.Setenv("CLAUDE_CODE_SESSION_ID", "claude-session-123")
+	second := callServiceTool(t, service, "mailbox_status", nil)
+	if got := second["bound_addresses"]; !reflect.DeepEqual(got, []any{"claude/claude-session-123"}) {
+		t.Fatalf("second bound_addresses = %#v, want claude auto-bind", got)
+	}
+	if got := second["default_sender"]; got != "claude/claude-session-123" {
+		t.Fatalf("second default_sender = %v, want claude default sender", got)
+	}
+	assertNoToolSessionWarning(t, second)
+}
+
+func TestMailboxStatusDoesNotWarnForCodexProbeMiss(t *testing.T) {
+	t.Setenv("CODEX_SESSION_ID", "")
+	t.Setenv("AGENTDECK_INSTANCE_ID", "")
+
+	runner := &fakeRunner{t: t}
+	runner.handler = func(args []string, _ string) (RunResult, error) {
+		switch {
+		case len(args) >= 1 && args[0] == "ps":
+			return RunResult{ExitCode: 1, Stderr: "no process"}, nil
+		case strings.Join(args, "\x00") == strings.Join([]string{"agent-deck", "session", "current", "--json"}, "\x00"):
+			return RunResult{ExitCode: 1, Stderr: "not in an agent-deck pane"}, nil
+		default:
+			t.Fatalf("unexpected command: %v", args)
+			return RunResult{}, nil
+		}
+	}
+
+	service := newService(Options{
+		MailboxServiceFactory: fakeMailboxServiceFactory{service: &fakeMailboxService{t: t}},
+		CommandRunner:         runner,
+		DisableWakeScheduler:  true,
+		DisableLeaseRenewLoop: true,
+	})
+	service.sessions.parentPID = func() int { return 4242 }
+
+	status := callServiceTool(t, service, "mailbox_status", nil)
+	warnings, ok := status["warnings"].([]any)
+	if !ok {
+		t.Fatalf("warnings = %#v, want warning list", status["warnings"])
+	}
+	for _, warning := range warnings {
+		if strings.Contains(fmt.Sprint(warning), "codex session auto-bind probe failed") {
+			t.Fatalf("warnings = %#v, want no codex probe failure warning for probe miss", warnings)
+		}
+	}
+}
+
+func TestMailboxStatusReportsAgentDeckShowInvalidJSONWarning(t *testing.T) {
+	t.Setenv("CODEX_SESSION_ID", "")
+	t.Setenv("AGENTDECK_INSTANCE_ID", "deck-session-1")
+
+	runner := &fakeRunner{t: t}
+	runner.handler = func(args []string, _ string) (RunResult, error) {
+		switch {
+		case len(args) >= 1 && args[0] == "ps":
+			return RunResult{ExitCode: 1}, nil
+		case strings.Join(args, "\x00") == strings.Join([]string{"agent-deck", "session", "show", "deck-session-1", "--json"}, "\x00"):
+			return RunResult{ExitCode: 0, Stdout: `not-json`}, nil
+		default:
+			t.Fatalf("unexpected command: %v", args)
+			return RunResult{}, nil
+		}
+	}
+
+	service := newService(Options{
+		MailboxServiceFactory: fakeMailboxServiceFactory{service: &fakeMailboxService{t: t}},
+		CommandRunner:         runner,
+		DisableWakeScheduler:  true,
+		DisableLeaseRenewLoop: true,
+	})
+
+	status := callServiceTool(t, service, "mailbox_status", nil)
+	if got := status["default_sender"]; got != "agent-deck/deck-session-1" {
+		t.Fatalf("default_sender = %v, want agent-deck/deck-session-1", got)
+	}
+	warnings, ok := status["warnings"].([]any)
+	if !ok {
+		t.Fatalf("warnings = %#v, want warning list", status["warnings"])
+	}
+	foundInvalidJSONWarning := false
+	for _, warning := range warnings {
+		if strings.Contains(fmt.Sprint(warning), "invalid JSON") {
+			foundInvalidJSONWarning = true
+		}
+	}
+	if !foundInvalidJSONWarning {
+		t.Fatalf("warnings = %#v, want invalid JSON warning", warnings)
+	}
+}
+
+func TestMailboxStatusWarnsWhenOnlyAgentDeckAddressIsBound(t *testing.T) {
+	t.Setenv("CODEX_SESSION_ID", "")
+	t.Setenv("CLAUDE_CODE_SESSION_ID", "")
+	t.Setenv("GEMINI_SESSION_ID", "")
+	t.Setenv("OPENCODE_SESSION_ID", "")
+	t.Setenv("AGENTDECK_INSTANCE_ID", "deck-session-1")
+
+	runner := &fakeRunner{t: t}
+	runner.handler = func(args []string, _ string) (RunResult, error) {
+		switch {
+		case len(args) >= 1 && args[0] == "ps":
+			return RunResult{ExitCode: 1}, nil
+		case strings.Join(args, "\x00") == strings.Join([]string{"agent-deck", "session", "show", "deck-session-1", "--json"}, "\x00"):
+			return RunResult{ExitCode: 1, Stderr: "not found"}, nil
+		default:
+			t.Fatalf("unexpected command: %v", args)
+			return RunResult{}, nil
+		}
+	}
+
+	service := newService(Options{
+		MailboxServiceFactory: fakeMailboxServiceFactory{service: &fakeMailboxService{t: t}},
+		CommandRunner:         runner,
+		DisableWakeScheduler:  true,
+		DisableLeaseRenewLoop: true,
+	})
+
+	status := callServiceTool(t, service, "mailbox_status", nil)
+	if got := status["default_sender"]; got != "agent-deck/deck-session-1" {
+		t.Fatalf("default_sender = %v, want agent-deck/deck-session-1", got)
+	}
+	assertHasToolSessionWarning(t, status)
+}
+
+func TestAutoBindFindsClaudeCodeSessionFromEnv(t *testing.T) {
+	tests := []struct {
+		name              string
+		envName           string
+		envValue          string
+		wantDefaultSender string
+		wantAddresses     []any
+		wantDetectedKey   string
+	}{
+		{
+			name:              "claude code",
+			envName:           "CLAUDE_CODE_SESSION_ID",
+			envValue:          "claude-session-123",
+			wantDefaultSender: "claude/claude-session-123",
+			wantAddresses:     []any{"claude/claude-session-123"},
+			wantDetectedKey:   "detected_claude_code_session_id",
+		},
+		{
+			name:              "gemini",
+			envName:           "GEMINI_SESSION_ID",
+			envValue:          "gemini-session-123",
+			wantDefaultSender: "gemini/gemini-session-123",
+			wantAddresses:     []any{"gemini/gemini-session-123"},
+			wantDetectedKey:   "detected_gemini_session_id",
+		},
+		{
+			name:              "opencode",
+			envName:           "OPENCODE_SESSION_ID",
+			envValue:          "opencode-session-123",
+			wantDefaultSender: "opencode/opencode-session-123",
+			wantAddresses:     []any{"opencode/opencode-session-123"},
+			wantDetectedKey:   "detected_opencode_session_id",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("CODEX_SESSION_ID", "")
+			t.Setenv("CLAUDE_CODE_SESSION_ID", "")
+			t.Setenv("GEMINI_SESSION_ID", "")
+			t.Setenv("OPENCODE_SESSION_ID", "")
+			t.Setenv(tt.envName, tt.envValue)
+			t.Setenv("AGENTDECK_INSTANCE_ID", "")
+
+			runner := &fakeRunner{t: t}
+			runner.handler = func(args []string, _ string) (RunResult, error) {
+				switch {
+				case len(args) >= 1 && args[0] == "ps":
+					return RunResult{ExitCode: 1}, nil
+				case strings.Join(args, "\x00") == strings.Join([]string{"agent-deck", "session", "current", "--json"}, "\x00"):
+					return RunResult{ExitCode: 1, Stderr: "not in an agent-deck pane"}, nil
+				default:
+					t.Fatalf("unexpected command: %v", args)
+					return RunResult{}, nil
+				}
+			}
+
+			service := newService(Options{
+				MailboxServiceFactory: fakeMailboxServiceFactory{service: &fakeMailboxService{t: t}},
+				CommandRunner:         runner,
+				DisableWakeScheduler:  true,
+				DisableLeaseRenewLoop: true,
+			})
+			status := callServiceTool(t, service, "mailbox_status", nil)
+
+			if got := status["default_sender"]; got != tt.wantDefaultSender {
+				t.Fatalf("default_sender = %v, want %v", got, tt.wantDefaultSender)
+			}
+			if !reflect.DeepEqual(status["bound_addresses"], tt.wantAddresses) {
+				t.Fatalf("bound_addresses = %v, want %v", status["bound_addresses"], tt.wantAddresses)
+			}
+			if got := status[tt.wantDetectedKey]; got != tt.envValue {
+				t.Fatalf("%s = %v, want %v", tt.wantDetectedKey, got, tt.envValue)
+			}
+			if got := status["detected_tool_session_addresses"]; !reflect.DeepEqual(got, tt.wantAddresses) {
+				t.Fatalf("detected_tool_session_addresses = %v, want %v", got, tt.wantAddresses)
+			}
+		})
 	}
 }
 
@@ -4014,7 +4473,7 @@ func TestAutoBindFindsAgentDeckSessionFromCodexStateDB(t *testing.T) {
 		DisableWakeScheduler:  true,
 		DisableLeaseRenewLoop: true,
 	})
-	status := callTool(t, service.Server(), "mailbox_status", nil)
+	status := callServiceTool(t, service, "mailbox_status", nil)
 
 	if got := status["default_sender"]; got != "agent-deck/deck-session-1" {
 		t.Fatalf("default_sender = %v, want agent-deck/deck-session-1", got)
@@ -4050,7 +4509,7 @@ func TestAutoBindSkipsBadAgentDeckDBAndFallsBackToCodexOnly(t *testing.T) {
 		DisableWakeScheduler:  true,
 		DisableLeaseRenewLoop: true,
 	})
-	status := callTool(t, service.Server(), "mailbox_status", nil)
+	status := callServiceTool(t, service, "mailbox_status", nil)
 
 	if got := status["default_sender"]; got != "codex/codex-session-123" {
 		t.Fatalf("default_sender = %v, want codex/codex-session-123", got)
@@ -4102,18 +4561,146 @@ func TestAutoBindRetriesAgentDeckAfterCodexOnlyFallback(t *testing.T) {
 		DisableLeaseRenewLoop: true,
 	})
 
-	status := callTool(t, service.Server(), "mailbox_status", nil)
+	status := callServiceTool(t, service, "mailbox_status", nil)
 	if got := status["default_sender"]; got != "codex/codex-session-123" {
 		t.Fatalf("initial default_sender = %v, want codex/codex-session-123", got)
 	}
 
-	recv := callTool(t, service.Server(), "mailbox_recv", nil)
+	recv := callServiceTool(t, service, "mailbox_recv", nil)
 	if got := recv["warnings"]; got != nil {
 		t.Fatalf("recv warnings = %v, want nil after agent-deck retry succeeds", got)
 	}
-	status = callTool(t, service.Server(), "mailbox_status", nil)
+	status = callServiceTool(t, service, "mailbox_status", nil)
 	if got := status["default_sender"]; got != "agent-deck/deck-session-1" {
 		t.Fatalf("upgraded default_sender = %v, want agent-deck/deck-session-1", got)
+	}
+}
+
+func TestAutoBindRetriesAgentDeckAfterCodexFallbackWithExtraToolAddress(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("CODEX_SESSION_ID", "codex-session-123")
+	t.Setenv("CLAUDE_CODE_SESSION_ID", "claude-session-123")
+	t.Setenv("AGENTDECK_INSTANCE_ID", "")
+	t.Setenv("AGENTDECK_PROFILE", "")
+
+	var currentCalls int
+	runner := &fakeRunner{t: t}
+	runner.handler = func(args []string, _ string) (RunResult, error) {
+		switch strings.Join(args, "\x00") {
+		case strings.Join([]string{"agent-deck", "session", "current", "--json"}, "\x00"):
+			currentCalls++
+			if currentCalls == 1 {
+				return RunResult{ExitCode: 1, Stderr: "not in an agent-deck pane"}, nil
+			}
+			return RunResult{ExitCode: 0, Stdout: `{"id":"deck-session-1"}`}, nil
+		case strings.Join([]string{"agent-deck", "session", "show", "deck-session-1", "--json"}, "\x00"):
+			return RunResult{ExitCode: 1, Stderr: "not found"}, nil
+		default:
+			t.Fatalf("unexpected command: %v", args)
+			return RunResult{}, nil
+		}
+	}
+
+	mailboxService := &fakeMailboxService{t: t}
+	mailboxService.receiveBatchFunc = func(_ context.Context, params mailbox.ReceiveBatchParams) (mailbox.ReceiveResult, error) {
+		want := []string{"agent-deck/deck-session-1", "codex/codex-session-123", "claude/claude-session-123"}
+		if !reflect.DeepEqual(params.Addresses, want) {
+			t.Fatalf("receive addresses = %v, want %v", params.Addresses, want)
+		}
+		return mailbox.ReceiveResult{}, mailbox.ErrNoMessage
+	}
+
+	service := newService(Options{
+		MailboxServiceFactory: fakeMailboxServiceFactory{service: mailboxService},
+		CommandRunner:         runner,
+		DisableWakeScheduler:  true,
+		DisableLeaseRenewLoop: true,
+	})
+
+	status := callServiceTool(t, service, "mailbox_status", nil)
+	if got := status["default_sender"]; got != "codex/codex-session-123" {
+		t.Fatalf("initial default_sender = %v, want codex/codex-session-123", got)
+	}
+	wantInitialAddresses := []any{"codex/codex-session-123", "claude/claude-session-123"}
+	if !reflect.DeepEqual(status["bound_addresses"], wantInitialAddresses) {
+		t.Fatalf("initial bound_addresses = %v, want %v", status["bound_addresses"], wantInitialAddresses)
+	}
+
+	recv := callServiceTool(t, service, "mailbox_recv", nil)
+	if got := recv["warnings"]; got != nil {
+		t.Fatalf("recv warnings = %v, want nil after agent-deck retry succeeds", got)
+	}
+	status = callServiceTool(t, service, "mailbox_status", nil)
+	if got := status["default_sender"]; got != "agent-deck/deck-session-1" {
+		t.Fatalf("upgraded default_sender = %v, want agent-deck/deck-session-1", got)
+	}
+	wantUpgradedAddresses := []any{"agent-deck/deck-session-1", "codex/codex-session-123", "claude/claude-session-123"}
+	if !reflect.DeepEqual(status["bound_addresses"], wantUpgradedAddresses) {
+		t.Fatalf("upgraded bound_addresses = %v, want %v", status["bound_addresses"], wantUpgradedAddresses)
+	}
+}
+
+func TestAutoBindRetriesAgentDeckAfterClaudeOnlyFallback(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("CODEX_SESSION_ID", "")
+	t.Setenv("CLAUDE_CODE_SESSION_ID", "claude-session-123")
+	t.Setenv("AGENTDECK_INSTANCE_ID", "")
+	t.Setenv("AGENTDECK_PROFILE", "")
+
+	var currentCalls int
+	runner := &fakeRunner{t: t}
+	runner.handler = func(args []string, _ string) (RunResult, error) {
+		switch {
+		case len(args) >= 1 && args[0] == "ps":
+			return RunResult{ExitCode: 1}, nil
+		case strings.Join(args, "\x00") == strings.Join([]string{"agent-deck", "session", "current", "--json"}, "\x00"):
+			currentCalls++
+			if currentCalls == 1 {
+				return RunResult{ExitCode: 1, Stderr: "not in an agent-deck pane"}, nil
+			}
+			return RunResult{ExitCode: 0, Stdout: `{"id":"deck-session-1"}`}, nil
+		case strings.Join(args, "\x00") == strings.Join([]string{"agent-deck", "session", "show", "deck-session-1", "--json"}, "\x00"):
+			return RunResult{ExitCode: 1, Stderr: "not found"}, nil
+		default:
+			t.Fatalf("unexpected command: %v", args)
+			return RunResult{}, nil
+		}
+	}
+
+	mailboxService := &fakeMailboxService{t: t}
+	mailboxService.receiveBatchFunc = func(_ context.Context, params mailbox.ReceiveBatchParams) (mailbox.ReceiveResult, error) {
+		want := []string{"agent-deck/deck-session-1", "claude/claude-session-123"}
+		if !reflect.DeepEqual(params.Addresses, want) {
+			t.Fatalf("receive addresses = %v, want %v", params.Addresses, want)
+		}
+		return mailbox.ReceiveResult{}, mailbox.ErrNoMessage
+	}
+
+	service := newService(Options{
+		MailboxServiceFactory: fakeMailboxServiceFactory{service: mailboxService},
+		CommandRunner:         runner,
+		DisableWakeScheduler:  true,
+		DisableLeaseRenewLoop: true,
+	})
+
+	status := callServiceTool(t, service, "mailbox_status", nil)
+	if got := status["default_sender"]; got != "claude/claude-session-123" {
+		t.Fatalf("initial default_sender = %v, want claude/claude-session-123", got)
+	}
+
+	recv := callServiceTool(t, service, "mailbox_recv", nil)
+	if got := recv["warnings"]; got != nil {
+		t.Fatalf("recv warnings = %v, want nil after agent-deck retry succeeds", got)
+	}
+	status = callServiceTool(t, service, "mailbox_status", nil)
+	if got := status["default_sender"]; got != "agent-deck/deck-session-1" {
+		t.Fatalf("upgraded default_sender = %v, want agent-deck/deck-session-1", got)
+	}
+	wantAddresses := []any{"agent-deck/deck-session-1", "claude/claude-session-123"}
+	if !reflect.DeepEqual(status["bound_addresses"], wantAddresses) {
+		t.Fatalf("upgraded bound_addresses = %v, want %v", status["bound_addresses"], wantAddresses)
 	}
 }
 
@@ -4149,29 +4736,79 @@ func TestMailboxBindDisablesAgentDeckRetryUpgrade(t *testing.T) {
 		DisableLeaseRenewLoop: true,
 	})
 
-	status := callTool(t, service.Server(), "mailbox_status", nil)
+	status := callServiceTool(t, service, "mailbox_status", nil)
 	if got := status["default_sender"]; got != "codex/codex-session-123" {
 		t.Fatalf("initial default_sender = %v, want codex/codex-session-123", got)
 	}
 
-	bind := callTool(t, service.Server(), "mailbox_bind", map[string]any{
+	bind := callServiceTool(t, service, "mailbox_bind", map[string]any{
 		"addresses": []string{"codex/manual"},
 	})
 	if got := bind["default_sender"]; got != "codex/manual" {
 		t.Fatalf("mailbox_bind default_sender = %v, want codex/manual", got)
 	}
 
-	status = callTool(t, service.Server(), "mailbox_status", nil)
+	status = callServiceTool(t, service, "mailbox_status", nil)
 	if got := status["default_sender"]; got != "codex/manual" {
 		t.Fatalf("status default_sender = %v, want codex/manual", got)
+	}
+	if got := status["detected_agent_session_id"]; got != nil {
+		t.Fatalf("detected_agent_session_id = %v, want nil after manual bind override", got)
+	}
+	if got := status["detected_tool_session_addresses"]; !reflect.DeepEqual(got, []any{}) {
+		t.Fatalf("detected_tool_session_addresses = %v, want empty after manual bind override", got)
 	}
 	wantAddresses := []any{"codex/manual"}
 	if !reflect.DeepEqual(status["bound_addresses"], wantAddresses) {
 		t.Fatalf("bound_addresses = %v, want %v", status["bound_addresses"], wantAddresses)
 	}
+	assertNoToolSessionWarning(t, status)
 	if currentCalls != 1 {
 		t.Fatalf("agent-deck current calls = %d, want 1", currentCalls)
 	}
+}
+
+func TestMailboxBindManualOverrideWarnsWhenNoToolAddressRemains(t *testing.T) {
+	t.Setenv("CODEX_SESSION_ID", "codex-session-123")
+	t.Setenv("AGENTDECK_INSTANCE_ID", "")
+	t.Setenv("AGENTDECK_PROFILE", "")
+
+	runner := &fakeRunner{t: t}
+	runner.handler = func(args []string, _ string) (RunResult, error) {
+		switch strings.Join(args, "\x00") {
+		case strings.Join([]string{"agent-deck", "session", "current", "--json"}, "\x00"):
+			return RunResult{ExitCode: 1, Stderr: "not in an agent-deck pane"}, nil
+		default:
+			t.Fatalf("unexpected command: %v", args)
+			return RunResult{}, nil
+		}
+	}
+
+	service := newService(Options{
+		MailboxServiceFactory: fakeMailboxServiceFactory{service: &fakeMailboxService{t: t}},
+		CommandRunner:         runner,
+		DisableWakeScheduler:  true,
+		DisableLeaseRenewLoop: true,
+	})
+
+	status := callServiceTool(t, service, "mailbox_status", nil)
+	if got := status["default_sender"]; got != "codex/codex-session-123" {
+		t.Fatalf("initial default_sender = %v, want codex/codex-session-123", got)
+	}
+
+	bind := callServiceTool(t, service, "mailbox_bind", map[string]any{
+		"addresses": []string{"workflow/manual"},
+	})
+	if got := bind["default_sender"]; got != "workflow/manual" {
+		t.Fatalf("mailbox_bind default_sender = %v, want workflow/manual", got)
+	}
+	if got := bind["detected_agent_session_id"]; got != nil {
+		t.Fatalf("detected_agent_session_id = %v, want nil after manual bind override", got)
+	}
+	if got := bind["detected_tool_session_addresses"]; !reflect.DeepEqual(got, []any{}) {
+		t.Fatalf("detected_tool_session_addresses = %v, want empty after manual bind override", got)
+	}
+	assertHasToolSessionWarning(t, bind)
 }
 
 func TestAgentDeckRetryRechecksFallbackStateBeforeUpgrade(t *testing.T) {
@@ -4205,14 +4842,14 @@ func TestAgentDeckRetryRechecksFallbackStateBeforeUpgrade(t *testing.T) {
 		BoundAddresses:           []string{"codex/codex-session-123"},
 		DefaultSender:            "codex/codex-session-123",
 		AutoBindAttempted:        true,
-		AutoBoundCodexFallback:   true,
+		AutoBoundToolFallback:    true,
 		DetectedAgentSession:     "codex-session-123",
 		DetectedAgentDeckSession: "",
 	}
 	service.state.boundAddresses = []string{"codex/manual"}
 	service.state.defaultSender = "codex/manual"
 	service.state.autoBindAttempted = true
-	service.state.autoBoundCodexFallback = false
+	service.state.autoBoundToolFallback = false
 	service.state.detectedAgentSession = "codex-session-123"
 
 	if err := service.sessions.tryUpgradeAgentDeckBinding(context.Background(), staleFallback); err != nil {
@@ -4248,12 +4885,76 @@ func TestMailboxRecvWarnsWhenOnlyCodexSessionIsBound(t *testing.T) {
 	service.state.detectedAgentSession = "self"
 	service.state.autoBindAttempted = true
 
-	out := callTool(t, service.Server(), "mailbox_recv", nil)
+	out := callServiceTool(t, service, "mailbox_recv", nil)
 	warnings, ok := out["warnings"].([]any)
 	if !ok || len(warnings) != 1 {
 		t.Fatalf("warnings = %#v, want one warning", out["warnings"])
 	}
 	warning := warnings[0].(string)
+	if !strings.Contains(warning, "agent-deck session current --json") || !strings.Contains(warning, "mailbox_bind") {
+		t.Fatalf("warning = %v, want manual agent-deck bind recovery hint", warning)
+	}
+}
+
+func TestMailboxRecvWarnsWhenManualToolAddressIsBoundWithoutAgentDeck(t *testing.T) {
+	mailboxService := &fakeMailboxService{t: t}
+	mailboxService.receiveBatchFunc = func(_ context.Context, params mailbox.ReceiveBatchParams) (mailbox.ReceiveResult, error) {
+		if !reflect.DeepEqual(params.Addresses, []string{"codex/manual"}) {
+			t.Fatalf("receive addresses = %v, want [codex/manual]", params.Addresses)
+		}
+		return mailbox.ReceiveResult{}, mailbox.ErrNoMessage
+	}
+
+	service := newService(Options{
+		MailboxServiceFactory: fakeMailboxServiceFactory{service: mailboxService},
+		CommandRunner:         &fakeRunner{t: t},
+		DisableWakeScheduler:  true,
+		DisableLeaseRenewLoop: true,
+	})
+	service.state.boundAddresses = []string{"codex/manual"}
+	service.state.defaultSender = "codex/manual"
+	service.state.autoBindAttempted = true
+
+	out := callServiceTool(t, service, "mailbox_recv", nil)
+	warnings, ok := out["warnings"].([]any)
+	if !ok || len(warnings) != 1 {
+		t.Fatalf("warnings = %#v, want one warning", out["warnings"])
+	}
+	warning := warnings[0].(string)
+	if !strings.Contains(warning, "agent-deck session current --json") || !strings.Contains(warning, "mailbox_bind") {
+		t.Fatalf("warning = %v, want manual agent-deck bind recovery hint", warning)
+	}
+}
+
+func TestMailboxRecvWarnsWhenOnlyClaudeSessionIsBound(t *testing.T) {
+	mailboxService := &fakeMailboxService{t: t}
+	mailboxService.receiveBatchFunc = func(_ context.Context, params mailbox.ReceiveBatchParams) (mailbox.ReceiveResult, error) {
+		if !reflect.DeepEqual(params.Addresses, []string{"claude/self"}) {
+			t.Fatalf("receive addresses = %v, want [claude/self]", params.Addresses)
+		}
+		return mailbox.ReceiveResult{}, mailbox.ErrNoMessage
+	}
+
+	service := newService(Options{
+		MailboxServiceFactory: fakeMailboxServiceFactory{service: mailboxService},
+		CommandRunner:         &fakeRunner{t: t},
+		DisableWakeScheduler:  true,
+		DisableLeaseRenewLoop: true,
+	})
+	service.state.boundAddresses = []string{"claude/self"}
+	service.state.defaultSender = "claude/self"
+	service.state.detectedClaudeCodeSession = "self"
+	service.state.autoBindAttempted = true
+
+	out := callServiceTool(t, service, "mailbox_recv", nil)
+	warnings, ok := out["warnings"].([]any)
+	if !ok || len(warnings) != 1 {
+		t.Fatalf("warnings = %#v, want one warning", out["warnings"])
+	}
+	warning, ok := warnings[0].(string)
+	if !ok {
+		t.Fatalf("warning = %#v, want string", warnings[0])
+	}
 	if !strings.Contains(warning, "agent-deck session current --json") || !strings.Contains(warning, "mailbox_bind") {
 		t.Fatalf("warning = %v, want manual agent-deck bind recovery hint", warning)
 	}
@@ -4311,6 +5012,19 @@ func writeAgentDeckStateDB(t *testing.T, home, profile, id, projectPath, codexSe
 	}
 }
 
+func callServiceTool(t *testing.T, service *Service, name string, args map[string]any) map[string]any {
+	t.Helper()
+	if requiresMailboxStatusToolName(name) {
+		service.markMailboxStatusCalled()
+	}
+	return callTool(t, service.Server(), name, args)
+}
+
+func callServiceToolWithoutStatusBootstrap(t *testing.T, service *Service, name string, args map[string]any) map[string]any {
+	t.Helper()
+	return callTool(t, service.Server(), name, args)
+}
+
 func callTool(t *testing.T, server *mcp.Server, name string, args map[string]any) map[string]any {
 	t.Helper()
 
@@ -4361,6 +5075,19 @@ func assertMCPMapOmitsForwardedMessageID(t *testing.T, payload map[string]any) {
 	}
 }
 
+func callServiceToolExpectError(t *testing.T, service *Service, name string, args map[string]any) error {
+	t.Helper()
+	if requiresMailboxStatusToolName(name) {
+		service.markMailboxStatusCalled()
+	}
+	return callToolExpectError(t, service.Server(), name, args)
+}
+
+func callServiceToolExpectErrorWithoutStatusBootstrap(t *testing.T, service *Service, name string, args map[string]any) error {
+	t.Helper()
+	return callToolExpectError(t, service.Server(), name, args)
+}
+
 func callToolExpectError(t *testing.T, server *mcp.Server, name string, args map[string]any) error {
 	t.Helper()
 
@@ -4399,6 +5126,69 @@ func callToolExpectError(t *testing.T, server *mcp.Server, name string, args map
 		t.Fatalf("call tool %s unexpectedly succeeded", name)
 	}
 	return nil
+}
+
+func assertNoToolSessionWarning(t *testing.T, output map[string]any) {
+	t.Helper()
+	warnings, ok := output["warnings"].([]any)
+	if !ok {
+		return
+	}
+	for _, warning := range warnings {
+		if strings.Contains(fmt.Sprint(warning), "AI tool session auto-bind did not find") {
+			t.Fatalf("warnings = %#v, want no tool-session auto-bind warning", warnings)
+		}
+	}
+}
+
+func assertHasToolSessionWarning(t *testing.T, output map[string]any) {
+	t.Helper()
+	warnings, ok := output["warnings"].([]any)
+	if !ok {
+		t.Fatalf("warnings = %#v, want warning list", output["warnings"])
+	}
+	for _, warning := range warnings {
+		if strings.Contains(fmt.Sprint(warning), "AI tool session auto-bind did not find") {
+			return
+		}
+	}
+	t.Fatalf("warnings = %#v, want tool-session auto-bind warning", warnings)
+}
+
+func requiresMailboxStatusToolName(name string) bool {
+	for _, required := range requiresMailboxStatusToolNames() {
+		if name == required {
+			return true
+		}
+	}
+	return false
+}
+
+func requiresMailboxStatusToolNames() []string {
+	return []string{
+		"mailbox_bind",
+		"mailbox_wait",
+		"mailbox_send",
+		"mailbox_forward",
+		"mailbox_recv",
+		"mailbox_list",
+		"mailbox_read",
+		"mailbox_ack",
+		"mailbox_release",
+		"mailbox_defer",
+		"mailbox_fail",
+		"mailbox_group_create",
+		"mailbox_group_add_member",
+		"mailbox_group_remove_member",
+		"mailbox_group_members",
+		"mailbox_group_add_subscriber",
+		"mailbox_group_remove_subscriber",
+		"mailbox_group_subscribers",
+		"mailbox_address_inspect",
+		"agent_deck_resolve_session",
+		"agent_deck_create_session",
+		"agent_deck_require_session",
+	}
 }
 
 func connectTestClientSession(t *testing.T, server *mcp.Server, updateCh chan struct{}) (*mcp.ClientSession, func()) {
