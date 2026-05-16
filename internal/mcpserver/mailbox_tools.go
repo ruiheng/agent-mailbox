@@ -19,6 +19,8 @@ type mailboxBindInput struct {
 
 type mailboxStatusInput struct{}
 
+type mailboxDebugInput struct{}
+
 type mailboxSendInput struct {
 	ToAddress            string `json:"to_address"`
 	FromAddress          string `json:"from_address,omitempty"`
@@ -119,6 +121,10 @@ func (s *Service) registerMailboxTools(server *mcp.Server) {
 		Name:        "mailbox_status",
 		Description: "Show the currently bound mailbox addresses, default sender, and default workdir stored in this MCP server.",
 	}, s.mailboxStatus)
+	mcp.AddTool(server, &mcp.Tool{
+		Name:        "mailbox_debug",
+		Description: "Show read-only MCP process and allowlisted tool session environment diagnostics without auto-binding or mutating state.",
+	}, s.mailboxDebug)
 	addToolRequiringMailboxStatus(server, s, &mcp.Tool{
 		Name:        "mailbox_send",
 		Description: "Send one mailbox message and automatically push-notify a non-local target when the address scheme supports it. Set disable_notify_message=true to skip notify for that send.",

@@ -124,6 +124,7 @@ The Go MCP entrypoint keeps the existing tool names:
 - `mailbox_release`
 - `mailbox_defer`
 - `mailbox_fail`
+- `mailbox_debug`
 - `mailbox_group_create`
 - `mailbox_group_add_member`
 - `mailbox_group_remove_member`
@@ -148,6 +149,16 @@ tool session address, use the warning details to expose the relevant environment
 variable or call `mailbox_bind` manually after `mailbox_status`.
 Tool session environment variable values must look like hex session ids; invalid
 values are ignored and reported in the `mailbox_status` warnings.
+
+Use `mailbox_debug` before or after `mailbox_status` when auto-bind behavior is
+unclear. It is read-only, does not auto-bind, and reports only allowlisted tool
+session environment diagnostics for `CODEX_THREAD_ID`,
+`CLAUDE_CODE_SESSION_ID`, `GEMINI_SESSION_ID`, and `OPENCODE_SESSION_ID`,
+including whether each value is present, accepted by validation, and what
+address it would produce. Its broader debug environment diagnostics also include
+`TMUX`. On Linux it inspects the parent process chain for those same allowlisted
+variables so callers can tell whether a tool omitted a variable or failed to pass
+it into the MCP process.
 
 `mailbox_send` always uses the fixed wakeup text for supported remote notify
 paths. Set `disable_notify_message = true` to skip only that immediate send-time

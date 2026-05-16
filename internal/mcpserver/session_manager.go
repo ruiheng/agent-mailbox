@@ -573,7 +573,7 @@ func detectToolSessionIDFromEnv(name string) (string, []string) {
 	if sessionID == "" {
 		return "", nil
 	}
-	if looksLikeHexSessionID(sessionID) {
+	if toolSessionIDValidationFailure(sessionID) == "" {
 		return sessionID, nil
 	}
 	return "", []string{fmt.Sprintf("%s is set but does not look like a hex session id; ignoring it for auto-bind", name)}
@@ -581,20 +581,37 @@ func detectToolSessionIDFromEnv(name string) (string, []string) {
 
 func toolSessionEnvWarnings() []string {
 	var warnings []string
-	for _, name := range []string{"CODEX_THREAD_ID", "CLAUDE_CODE_SESSION_ID", "GEMINI_SESSION_ID", "OPENCODE_SESSION_ID"} {
+	for _, name := range toolSessionEnvNames() {
 		_, envWarnings := detectToolSessionIDFromEnv(name)
 		warnings = append(warnings, envWarnings...)
 	}
 	return warnings
 }
 
+func toolSessionEnvNames() []string {
+	return []string{"CODEX_THREAD_ID", "CLAUDE_CODE_SESSION_ID", "GEMINI_SESSION_ID", "OPENCODE_SESSION_ID"}
+}
+
 func looksLikeHexSessionID(sessionID string) bool {
+	return toolSessionIDValidationFailure(sessionID) == ""
+}
+
+func toolSessionIDValidationFailure(sessionID string) string {
 	sessionID = strings.TrimSpace(sessionID)
-	if !toolSessionIDPattern.MatchString(sessionID) || strings.Contains(sessionID, "--") {
-		return false
+	if sessionID == "" {
+		return "empty"
+	}
+	if strings.Contains(sessionID, "--") {
+		return "contains consecutive hyphen"
+	}
+	if !toolSessionIDPattern.MatchString(sessionID) {
+		return "must contain only hex digits and single hyphens, and start and end with a hex digit"
 	}
 	hexDigits := strings.ReplaceAll(sessionID, "-", "")
-	return len(hexDigits) >= 8
+	if len(hexDigits) < 8 {
+		return "must contain at least 8 hex digits"
+	}
+	return ""
 }
 
 func detectedToolSessionAddresses(snapshot stateSnapshot) []string {

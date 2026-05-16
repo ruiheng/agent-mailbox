@@ -4053,7 +4053,7 @@ func TestAllNonStatusToolsRequireMailboxStatus(t *testing.T) {
 	registered := map[string]bool{}
 	for _, tool := range tools.Tools {
 		registered[tool.Name] = true
-		if tool.Name == "mailbox_status" {
+		if tool.Name == "mailbox_status" || tool.Name == "mailbox_debug" {
 			continue
 		}
 		if !requiresMailboxStatusToolName(tool.Name) {
@@ -4067,6 +4067,95 @@ func TestAllNonStatusToolsRequireMailboxStatus(t *testing.T) {
 	}
 	if !registered["mailbox_status"] {
 		t.Fatalf("mailbox_status is not registered")
+	}
+	if !registered["mailbox_debug"] {
+		t.Fatalf("mailbox_debug is not registered")
+	}
+}
+
+func TestMailboxDebugWorksBeforeStatusAndDoesNotAutoBind(t *testing.T) {
+	t.Setenv("CODEX_THREAD_ID", "")
+	t.Setenv("CLAUDE_CODE_SESSION_ID", "aaaaaaaaaaaaaaaa")
+	t.Setenv("GEMINI_SESSION_ID", "not-a-session")
+	t.Setenv("OPENCODE_SESSION_ID", "")
+	t.Setenv("TMUX", "/tmp/tmux-1000/default,123,0")
+
+	runner := &fakeRunner{t: t}
+	runner.handler = func(args []string, _ string) (RunResult, error) {
+		t.Fatalf("mailbox_debug should not run auto-bind probe command: %v", args)
+		return RunResult{}, nil
+	}
+
+	service := newService(Options{
+		MailboxServiceFactory: fakeMailboxServiceFactory{service: &fakeMailboxService{t: t}},
+		CommandRunner:         runner,
+		DisableWakeScheduler:  true,
+		DisableLeaseRenewLoop: true,
+	})
+
+	debug := callServiceToolWithoutStatusBootstrap(t, service, "mailbox_debug", nil)
+	if got := debug["status"]; got != "debug" {
+		t.Fatalf("status = %v, want debug", got)
+	}
+	state, ok := debug["session_state"].(map[string]any)
+	if !ok {
+		t.Fatalf("session_state = %#v, want object", debug["session_state"])
+	}
+	if got := state["status_tool_called"]; got != false {
+		t.Fatalf("status_tool_called = %v, want false", got)
+	}
+	if got := state["auto_bind_attempted"]; got != false {
+		t.Fatalf("auto_bind_attempted = %v, want false", got)
+	}
+	if got := state["bound_addresses"]; got != nil && !reflect.DeepEqual(got, []any{}) {
+		t.Fatalf("bound_addresses = %#v, want empty before auto-bind", got)
+	}
+
+	debugEnv, ok := debug["debug_env"].(map[string]any)
+	if !ok {
+		t.Fatalf("debug_env = %#v, want object", debug["debug_env"])
+	}
+	tmux, ok := debugEnv["TMUX"].(map[string]any)
+	if !ok {
+		t.Fatalf("TMUX = %#v, want object", debugEnv["TMUX"])
+	}
+	if got := tmux["present"]; got != true {
+		t.Fatalf("tmux present = %v, want true", got)
+	}
+	if got := tmux["value"]; got != "/tmp/tmux-1000/default,123,0" {
+		t.Fatalf("tmux value = %v, want /tmp/tmux-1000/default,123,0", got)
+	}
+
+	env, ok := debug["tool_session_env"].(map[string]any)
+	if !ok {
+		t.Fatalf("tool_session_env = %#v, want object", debug["tool_session_env"])
+	}
+	claude, ok := env["CLAUDE_CODE_SESSION_ID"].(map[string]any)
+	if !ok {
+		t.Fatalf("CLAUDE_CODE_SESSION_ID = %#v, want object", env["CLAUDE_CODE_SESSION_ID"])
+	}
+	if got := claude["present"]; got != true {
+		t.Fatalf("claude present = %v, want true", got)
+	}
+	if got := claude["accepted_by_validation"]; got != true {
+		t.Fatalf("claude accepted_by_validation = %v, want true", got)
+	}
+	if got := claude["address"]; got != "claude/aaaaaaaaaaaaaaaa" {
+		t.Fatalf("claude address = %v, want claude/aaaaaaaaaaaaaaaa", got)
+	}
+
+	gemini, ok := env["GEMINI_SESSION_ID"].(map[string]any)
+	if !ok {
+		t.Fatalf("GEMINI_SESSION_ID = %#v, want object", env["GEMINI_SESSION_ID"])
+	}
+	if got := gemini["present"]; got != true {
+		t.Fatalf("gemini present = %v, want true", got)
+	}
+	if got := gemini["accepted_by_validation"]; got != false {
+		t.Fatalf("gemini accepted_by_validation = %v, want false", got)
+	}
+	if got := fmt.Sprint(gemini["failure_reason"]); !strings.Contains(got, "hex") {
+		t.Fatalf("gemini failure_reason = %v, want hex validation reason", got)
 	}
 }
 
