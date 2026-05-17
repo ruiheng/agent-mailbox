@@ -4078,6 +4078,7 @@ func TestMailboxDebugWorksBeforeStatusAndDoesNotAutoBind(t *testing.T) {
 	t.Setenv("CLAUDE_CODE_SESSION_ID", "aaaaaaaaaaaaaaaa")
 	t.Setenv("GEMINI_SESSION_ID", "not-a-session")
 	t.Setenv("OPENCODE_SESSION_ID", "")
+	t.Setenv("AGENTDECK_INSTANCE_ID", "deck-session-1")
 	t.Setenv("TMUX", "/tmp/tmux-1000/default,123,0")
 
 	runner := &fakeRunner{t: t}
@@ -4124,6 +4125,16 @@ func TestMailboxDebugWorksBeforeStatusAndDoesNotAutoBind(t *testing.T) {
 	}
 	if got := tmux["value"]; got != "/tmp/tmux-1000/default,123,0" {
 		t.Fatalf("tmux value = %v, want /tmp/tmux-1000/default,123,0", got)
+	}
+	agentDeck, ok := debugEnv["AGENTDECK_INSTANCE_ID"].(map[string]any)
+	if !ok {
+		t.Fatalf("AGENTDECK_INSTANCE_ID = %#v, want object", debugEnv["AGENTDECK_INSTANCE_ID"])
+	}
+	if got := agentDeck["present"]; got != true {
+		t.Fatalf("agent-deck env present = %v, want true", got)
+	}
+	if got := agentDeck["value"]; got != "deck-session-1" {
+		t.Fatalf("agent-deck env value = %v, want deck-session-1", got)
 	}
 
 	env, ok := debug["tool_session_env"].(map[string]any)
