@@ -29,6 +29,7 @@ var (
 	codexResumePattern      = regexp.MustCompile(`\bresume\s+([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\b`)
 	codexSessionFilePattern = regexp.MustCompile(`/\.codex/sessions/.*-([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.jsonl$`)
 	codexCommandPattern     = regexp.MustCompile(`(^|/)codex(\s|$)`)
+	toolSessionIDPattern    = regexp.MustCompile(`^[0-9a-fA-F][0-9a-fA-F-]*[0-9a-fA-F]$|^[0-9a-fA-F]$`)
 )
 
 type serverState struct {
@@ -241,9 +242,12 @@ func (m *sessionManager) tryAutoBindCurrentSession(ctx context.Context) error {
 	}
 
 	codexSessionID, autoBindWarnings := m.detectCurrentCodexSessionID(ctx)
-	claudeCodeSessionID := detectSessionIDFromEnv("CLAUDE_CODE_SESSION_ID")
-	geminiSessionID := detectSessionIDFromEnv("GEMINI_SESSION_ID")
-	opencodeSessionID := detectSessionIDFromEnv("OPENCODE_SESSION_ID")
+	claudeCodeSessionID, claudeWarnings := detectToolSessionIDFromEnv("CLAUDE_CODE_SESSION_ID")
+	geminiSessionID, geminiWarnings := detectToolSessionIDFromEnv("GEMINI_SESSION_ID")
+	opencodeSessionID, opencodeWarnings := detectToolSessionIDFromEnv("OPENCODE_SESSION_ID")
+	autoBindWarnings = append(autoBindWarnings, claudeWarnings...)
+	autoBindWarnings = append(autoBindWarnings, geminiWarnings...)
+	autoBindWarnings = append(autoBindWarnings, opencodeWarnings...)
 
 	defaultWorkdir := snapshot.DefaultWorkdir
 	agentDeckSessionID, defaultWorkdir, probeCompleted, agentDeckWarnings, err := m.detectCurrentAgentDeckSessionID(ctx, codexSessionID, defaultWorkdir)
@@ -321,6 +325,7 @@ func (m *sessionManager) tryUpgradeAgentDeckBinding(ctx context.Context, snapsho
 	if err != nil {
 		return err
 	}
+	autoBindWarnings = append(toolSessionEnvWarnings(), autoBindWarnings...)
 	if agentDeckSessionID == "" {
 		m.state.mu.Lock()
 		if m.state.autoBoundToolFallback && m.state.detectedAgentDeckSession == "" && currentToolFallbackMatchesSnapshot(m.state, snapshot) {
@@ -349,7 +354,7 @@ func (m *sessionManager) tryUpgradeAgentDeckBinding(ctx context.Context, snapsho
 	m.state.defaultWorkdir = defaultWorkdir
 	m.state.autoBoundToolFallback = false
 	m.state.autoBindEmptyResult = false
-	m.state.autoBindWarnings = nil
+	m.state.autoBindWarnings = append([]string(nil), autoBindWarnings...)
 	if m.state.defaultSender == "" || slices.Contains(detectedToolSessionAddresses(snapshot), m.state.defaultSender) {
 		m.state.defaultSender = agentDeckAddress(agentDeckSessionID)
 	}
@@ -527,14 +532,16 @@ func agentDeckDefaultProfile(configPath string) string {
 }
 
 func (m *sessionManager) detectCurrentCodexSessionID(ctx context.Context) (string, []string) {
-	if sessionID := strings.TrimSpace(os.Getenv("CODEX_THREAD_ID")); sessionID != "" {
+	var warnings []string
+	if sessionID, envWarnings := detectToolSessionIDFromEnv("CODEX_THREAD_ID"); sessionID != "" {
 		return sessionID, nil
+	} else if len(envWarnings) > 0 {
+		warnings = append(warnings, envWarnings...)
 	}
 	if runtime.GOOS == "windows" {
-		return "", nil
+		return "", warnings
 	}
 
-	var warnings []string
 	seen := map[int]bool{}
 	pid := m.parentPID()
 	for pid > 1 && !seen[pid] {
@@ -565,8 +572,50 @@ func (m *sessionManager) detectCurrentCodexSessionID(ctx context.Context) (strin
 	return "", warnings
 }
 
-func detectSessionIDFromEnv(name string) string {
-	return strings.TrimSpace(os.Getenv(name))
+func detectToolSessionIDFromEnv(name string) (string, []string) {
+	sessionID := strings.TrimSpace(os.Getenv(name))
+	if sessionID == "" {
+		return "", nil
+	}
+	if toolSessionIDValidationFailure(sessionID) == "" {
+		return sessionID, nil
+	}
+	return "", []string{fmt.Sprintf("%s is set but does not look like a hex session id; ignoring it for auto-bind", name)}
+}
+
+func toolSessionEnvWarnings() []string {
+	var warnings []string
+	for _, name := range toolSessionEnvNames() {
+		_, envWarnings := detectToolSessionIDFromEnv(name)
+		warnings = append(warnings, envWarnings...)
+	}
+	return warnings
+}
+
+func toolSessionEnvNames() []string {
+	return []string{"CODEX_THREAD_ID", "CLAUDE_CODE_SESSION_ID", "GEMINI_SESSION_ID", "OPENCODE_SESSION_ID"}
+}
+
+func looksLikeHexSessionID(sessionID string) bool {
+	return toolSessionIDValidationFailure(sessionID) == ""
+}
+
+func toolSessionIDValidationFailure(sessionID string) string {
+	sessionID = strings.TrimSpace(sessionID)
+	if sessionID == "" {
+		return "empty"
+	}
+	if strings.Contains(sessionID, "--") {
+		return "contains consecutive hyphen"
+	}
+	if !toolSessionIDPattern.MatchString(sessionID) {
+		return "must contain only hex digits and single hyphens, and start and end with a hex digit"
+	}
+	hexDigits := strings.ReplaceAll(sessionID, "-", "")
+	if len(hexDigits) < 8 {
+		return "must contain at least 8 hex digits"
+	}
+	return ""
 }
 
 func detectedToolSessionAddresses(snapshot stateSnapshot) []string {
