@@ -2176,10 +2176,21 @@ func TestAgentDeckCreateSessionRejectsExistingTarget(t *testing.T) {
 }
 
 func TestAgentDeckCreateSessionRejectsExistingTargetWithMismatchedWorkdir(t *testing.T) {
+	requestedWorkdir := t.TempDir()
+	existingWorkdir := t.TempDir()
 	commandRunner := &fakeRunner{t: t, handler: func(args []string, input string) (RunResult, error) {
 		switch {
 		case strings.Join(args, "\x00") == strings.Join([]string{"agent-deck", "session", "show", "coder-ref", "--json"}, "\x00"):
-			return RunResult{ExitCode: 0, Stdout: `{"id":"session-9","title":"coder-ref","status":"waiting","path":"/var/tmp"}`}, nil
+			payload, err := json.Marshal(map[string]string{
+				"id":     "session-9",
+				"title":  "coder-ref",
+				"status": "waiting",
+				"path":   existingWorkdir,
+			})
+			if err != nil {
+				t.Fatalf("marshal session show payload: %v", err)
+			}
+			return RunResult{ExitCode: 0, Stdout: string(payload)}, nil
 		default:
 			t.Fatalf("unexpected command args: %v", args)
 			return RunResult{}, nil
@@ -2196,7 +2207,7 @@ func TestAgentDeckCreateSessionRejectsExistingTargetWithMismatchedWorkdir(t *tes
 		"ensure_title":   "coder-ref",
 		"ensure_cmd":     "codex --model gpt-5.4 --ask-for-approval on-request",
 		"no_parent_link": true,
-		"workdir":        "/tmp",
+		"workdir":        requestedWorkdir,
 	})
 	if err == nil || !strings.Contains(err.Error(), "session path mismatch") {
 		t.Fatalf("agent_deck_create_session error = %v, want workdir mismatch validation", err)
@@ -4123,6 +4134,9 @@ func TestMailboxStatusReportsAutoBindInvalidJSONWarningAndUnlocksManualBind(t *t
 }
 
 func TestMailboxStatusReportsCodexProbeWarningAndUnlocksManualBind(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows skips Unix ps/lsof Codex session probing")
+	}
 	t.Setenv("CODEX_THREAD_ID", "")
 	t.Setenv("AGENTDECK_INSTANCE_ID", "")
 
@@ -4174,6 +4188,9 @@ func TestMailboxStatusReportsCodexProbeWarningAndUnlocksManualBind(t *testing.T)
 }
 
 func TestMailboxStatusKeepsCodexProbeWarningWhenAgentDeckProbeDoesNotComplete(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows skips Unix ps/lsof Codex session probing")
+	}
 	t.Setenv("CODEX_THREAD_ID", "")
 	t.Setenv("AGENTDECK_INSTANCE_ID", "")
 
@@ -4287,6 +4304,47 @@ func TestMailboxStatusDoesNotWarnForCodexProbeMiss(t *testing.T) {
 	for _, warning := range warnings {
 		if strings.Contains(fmt.Sprint(warning), "codex session auto-bind probe failed") {
 			t.Fatalf("warnings = %#v, want no codex probe failure warning for probe miss", warnings)
+		}
+	}
+}
+
+func TestMailboxStatusSkipsCodexProcessProbeOnWindows(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("Windows-specific Codex process probe behavior")
+	}
+	t.Setenv("CODEX_THREAD_ID", "")
+	t.Setenv("AGENTDECK_INSTANCE_ID", "")
+
+	runner := &fakeRunner{t: t}
+	runner.handler = func(args []string, _ string) (RunResult, error) {
+		switch {
+		case len(args) >= 1 && (args[0] == "ps" || args[0] == "lsof"):
+			t.Fatalf("unexpected Unix process probe on Windows: %v", args)
+			return RunResult{}, nil
+		case strings.Join(args, "\x00") == strings.Join([]string{"agent-deck", "session", "current", "--json"}, "\x00"):
+			return RunResult{ExitCode: 1, Stderr: "not in an agent-deck pane"}, nil
+		default:
+			t.Fatalf("unexpected command: %v", args)
+			return RunResult{}, nil
+		}
+	}
+
+	service := newService(Options{
+		MailboxServiceFactory: fakeMailboxServiceFactory{service: &fakeMailboxService{t: t}},
+		CommandRunner:         runner,
+		DisableWakeScheduler:  true,
+		DisableLeaseRenewLoop: true,
+	})
+	service.sessions.parentPID = func() int { return 4242 }
+
+	status := callServiceTool(t, service, "mailbox_status", nil)
+	warnings, ok := status["warnings"].([]any)
+	if !ok {
+		t.Fatalf("warnings = %#v, want warning list", status["warnings"])
+	}
+	for _, warning := range warnings {
+		if strings.Contains(fmt.Sprint(warning), "codex session auto-bind probe failed") {
+			t.Fatalf("warnings = %#v, want no Codex process probe failure warning on Windows", warnings)
 		}
 	}
 }
@@ -4451,7 +4509,7 @@ func TestAutoBindFindsClaudeCodeSessionFromEnv(t *testing.T) {
 
 func TestAutoBindFindsAgentDeckSessionFromCodexStateDB(t *testing.T) {
 	home := t.TempDir()
-	t.Setenv("HOME", home)
+	setTestHome(t, home)
 	t.Setenv("CODEX_THREAD_ID", "codex-session-123")
 	t.Setenv("AGENTDECK_INSTANCE_ID", "")
 	t.Setenv("AGENTDECK_PROFILE", "bad")
@@ -4490,7 +4548,7 @@ func TestAutoBindFindsAgentDeckSessionFromCodexStateDB(t *testing.T) {
 
 func TestAutoBindSkipsBadAgentDeckDBAndFallsBackToCodexOnly(t *testing.T) {
 	home := t.TempDir()
-	t.Setenv("HOME", home)
+	setTestHome(t, home)
 	t.Setenv("CODEX_THREAD_ID", "codex-session-123")
 	t.Setenv("AGENTDECK_INSTANCE_ID", "")
 	t.Setenv("AGENTDECK_PROFILE", "bad")
@@ -4526,7 +4584,7 @@ func TestAutoBindSkipsBadAgentDeckDBAndFallsBackToCodexOnly(t *testing.T) {
 
 func TestAutoBindRetriesAgentDeckAfterCodexOnlyFallback(t *testing.T) {
 	home := t.TempDir()
-	t.Setenv("HOME", home)
+	setTestHome(t, home)
 	t.Setenv("CODEX_THREAD_ID", "codex-session-123")
 	t.Setenv("AGENTDECK_INSTANCE_ID", "")
 	t.Setenv("AGENTDECK_PROFILE", "")
@@ -4582,7 +4640,7 @@ func TestAutoBindRetriesAgentDeckAfterCodexOnlyFallback(t *testing.T) {
 
 func TestAutoBindRetriesAgentDeckAfterCodexFallbackWithExtraToolAddress(t *testing.T) {
 	home := t.TempDir()
-	t.Setenv("HOME", home)
+	setTestHome(t, home)
 	t.Setenv("CODEX_THREAD_ID", "codex-session-123")
 	t.Setenv("CLAUDE_CODE_SESSION_ID", "claude-session-123")
 	t.Setenv("AGENTDECK_INSTANCE_ID", "")
@@ -4647,7 +4705,7 @@ func TestAutoBindRetriesAgentDeckAfterCodexFallbackWithExtraToolAddress(t *testi
 
 func TestAutoBindRetriesAgentDeckAfterClaudeOnlyFallback(t *testing.T) {
 	home := t.TempDir()
-	t.Setenv("HOME", home)
+	setTestHome(t, home)
 	t.Setenv("CODEX_THREAD_ID", "")
 	t.Setenv("CLAUDE_CODE_SESSION_ID", "claude-session-123")
 	t.Setenv("AGENTDECK_INSTANCE_ID", "")
@@ -4710,7 +4768,7 @@ func TestAutoBindRetriesAgentDeckAfterClaudeOnlyFallback(t *testing.T) {
 
 func TestMailboxBindDisablesAgentDeckRetryUpgrade(t *testing.T) {
 	home := t.TempDir()
-	t.Setenv("HOME", home)
+	setTestHome(t, home)
 	t.Setenv("CODEX_THREAD_ID", "codex-session-123")
 	t.Setenv("AGENTDECK_INSTANCE_ID", "")
 	t.Setenv("AGENTDECK_PROFILE", "")
@@ -4817,7 +4875,7 @@ func TestMailboxBindManualOverrideWarnsWhenNoToolAddressRemains(t *testing.T) {
 
 func TestAgentDeckRetryRechecksFallbackStateBeforeUpgrade(t *testing.T) {
 	home := t.TempDir()
-	t.Setenv("HOME", home)
+	setTestHome(t, home)
 	t.Setenv("CODEX_THREAD_ID", "codex-session-123")
 	t.Setenv("AGENTDECK_INSTANCE_ID", "")
 	t.Setenv("AGENTDECK_PROFILE", "")
@@ -4978,6 +5036,12 @@ func writeBrokenAgentDeckStateDB(t *testing.T, home, profile string) {
 	if _, err := db.Exec(`CREATE TABLE unrelated (id TEXT PRIMARY KEY)`); err != nil {
 		t.Fatalf("create broken state db table: %v", err)
 	}
+}
+
+func setTestHome(t *testing.T, home string) {
+	t.Helper()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
 }
 
 func writeAgentDeckStateDB(t *testing.T, home, profile, id, projectPath, codexSessionID string) {

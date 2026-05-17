@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"slices"
 	"strconv"
 	"strings"
@@ -528,6 +529,9 @@ func agentDeckDefaultProfile(configPath string) string {
 func (m *sessionManager) detectCurrentCodexSessionID(ctx context.Context) (string, []string) {
 	if sessionID := strings.TrimSpace(os.Getenv("CODEX_THREAD_ID")); sessionID != "" {
 		return sessionID, nil
+	}
+	if runtime.GOOS == "windows" {
+		return "", nil
 	}
 
 	var warnings []string
