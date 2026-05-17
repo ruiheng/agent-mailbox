@@ -99,7 +99,7 @@ func toolSessionEnvDiagnostics(lookup func(string) (string, bool)) map[string]an
 
 func debugEnvNames() []string {
 	names := append([]string(nil), toolSessionEnvNames()...)
-	return append(names, "TMUX")
+	return append(names, "AGENTDECK_INSTANCE_ID", "TMUX")
 }
 
 func isToolSessionEnvName(name string) bool {

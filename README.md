@@ -228,9 +228,9 @@ session environment diagnostics for `CODEX_THREAD_ID`,
 `CLAUDE_CODE_SESSION_ID`, `GEMINI_SESSION_ID`, and `OPENCODE_SESSION_ID`,
 including whether each value is present, accepted by validation, and what
 address it would produce. Its broader debug environment diagnostics also include
-`TMUX`. On Linux it inspects the parent process chain for those same allowlisted
-variables so callers can tell whether a tool omitted a variable or failed to pass
-it into the MCP process.
+`AGENTDECK_INSTANCE_ID` and `TMUX`. On Linux it inspects the parent process
+chain for those same allowlisted variables so callers can tell whether a tool
+omitted a variable or failed to pass it into the MCP process.
 
 `mailbox_send` always uses the fixed wakeup text for supported remote notify
 paths. Set `disable_notify_message = true` to skip only that immediate send-time
