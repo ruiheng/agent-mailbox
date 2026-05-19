@@ -79,8 +79,9 @@ type boundState struct {
 }
 
 type agentDeckDBMatch struct {
-	SessionID   string
-	ProjectPath string
+	SessionID      string
+	ProjectPath    string
+	CodexSessionID string
 }
 
 type sessionData struct {
@@ -235,6 +236,9 @@ func (m *sessionManager) tryAutoBindCurrentSession(ctx context.Context) error {
 		if snapshot.AutoBoundToolFallback && snapshot.DetectedAgentDeckSession == "" && len(detectedToolSessionAddresses(snapshot)) > 0 {
 			return m.tryUpgradeAgentDeckBinding(ctx, snapshot)
 		}
+		if snapshot.DetectedAgentDeckSession != "" && snapshot.DetectedAgentSession == "" {
+			return m.tryCompleteCodexBindingFromAgentDeckDB(ctx, snapshot)
+		}
 		return nil
 	}
 	if snapshot.AutoBindAttempted && !snapshot.AutoBindEmptyResult {
@@ -255,18 +259,32 @@ func (m *sessionManager) tryAutoBindCurrentSession(ctx context.Context) error {
 		return err
 	}
 	autoBindWarnings = append(autoBindWarnings, agentDeckWarnings...)
-
-	addresses := make([]string, 0, 5)
-	detectedAgentDeckSession := ""
 	if agentDeckSessionID != "" {
-		detectedAgentDeckSession = agentDeckSessionID
-		addresses = append(addresses, agentDeckAddress(agentDeckSessionID))
 		data, err := m.resolveSessionShowBestEffort(ctx, agentDeckSessionID)
 		if err != nil {
 			autoBindWarnings = append(autoBindWarnings, fmt.Sprintf("agent-deck session show returned invalid data during auto-bind: %v", err))
 		} else if data != nil && strings.TrimSpace(data.Path) != "" {
 			defaultWorkdir = strings.TrimSpace(data.Path)
 		}
+	}
+	if codexSessionID == "" && agentDeckSessionID != "" {
+		match, err := lookupAgentDeckSessionByWorkdir(ctx, firstNonEmpty(defaultWorkdir, currentWorkingDir()), agentDeckSessionID)
+		if err != nil {
+			return err
+		}
+		if match != nil {
+			codexSessionID = match.CodexSessionID
+			if strings.TrimSpace(match.ProjectPath) != "" && defaultWorkdir == "" {
+				defaultWorkdir = strings.TrimSpace(match.ProjectPath)
+			}
+		}
+	}
+
+	addresses := make([]string, 0, 5)
+	detectedAgentDeckSession := ""
+	if agentDeckSessionID != "" {
+		detectedAgentDeckSession = agentDeckSessionID
+		addresses = append(addresses, agentDeckAddress(agentDeckSessionID))
 	}
 
 	detectedAgentSession := ""
@@ -316,6 +334,32 @@ func (m *sessionManager) tryAutoBindCurrentSession(ctx context.Context) error {
 		m.state.defaultSender = opencodeAddress(opencodeSessionID)
 	}
 	m.state.autoBindAttempted = true
+	return nil
+}
+
+func (m *sessionManager) tryCompleteCodexBindingFromAgentDeckDB(ctx context.Context, snapshot stateSnapshot) error {
+	match, err := lookupAgentDeckSessionByWorkdir(ctx, firstNonEmpty(snapshot.DefaultWorkdir, currentWorkingDir()), snapshot.DetectedAgentDeckSession)
+	if err != nil {
+		return err
+	}
+	if match == nil || strings.TrimSpace(match.CodexSessionID) == "" {
+		return nil
+	}
+
+	m.state.mu.Lock()
+	defer m.state.mu.Unlock()
+	if m.state.detectedAgentDeckSession != snapshot.DetectedAgentDeckSession ||
+		m.state.detectedAgentSession != "" ||
+		!slices.Contains(m.state.boundAddresses, agentDeckAddress(snapshot.DetectedAgentDeckSession)) {
+		return nil
+	}
+	m.state.boundAddresses = dedupe(append(m.state.boundAddresses, codexAddress(match.CodexSessionID)))
+	m.state.detectedAgentSession = match.CodexSessionID
+	m.state.autoBindEmptyResult = false
+	m.state.autoBindWarnings = append(toolSessionEnvWarnings(), m.state.autoBindWarnings...)
+	if strings.TrimSpace(match.ProjectPath) != "" && m.state.defaultWorkdir == "" {
+		m.state.defaultWorkdir = strings.TrimSpace(match.ProjectPath)
+	}
 	return nil
 }
 
@@ -445,7 +489,7 @@ func lookupAgentDeckSessionByCodexIDInDB(ctx context.Context, dbPath, codexSessi
 	rows, err := db.QueryContext(ctx, `
 		SELECT id, project_path, tool_data
 		FROM instances
-		WHERE tool = 'codex' OR command LIKE '%codex%' OR tool_data LIKE '%codex_session_id%'
+		WHERE tool = 'codex' OR command LIKE '%codex%' OR tool_data LIKE '%codex_session_id%' OR tool_data LIKE '%codex_thread_id%'
 		ORDER BY last_accessed DESC, created_at DESC
 	`)
 	if err != nil {
@@ -458,16 +502,16 @@ func lookupAgentDeckSessionByCodexIDInDB(ctx context.Context, dbPath, codexSessi
 		if err := rows.Scan(&id, &projectPath, &rawToolData); err != nil {
 			return nil, fmt.Errorf("scan agent-deck state database: %w", err)
 		}
-		var toolData struct {
-			CodexSessionID string `json:"codex_session_id"`
-		}
-		if err := json.Unmarshal([]byte(rawToolData), &toolData); err != nil {
+		toolData, ok := parseAgentDeckToolData(rawToolData)
+		if !ok {
 			continue
 		}
-		if strings.TrimSpace(toolData.CodexSessionID) == codexSessionID {
+		sessionID := strings.TrimSpace(toolData.sessionID())
+		if sessionID == codexSessionID {
 			return &agentDeckDBMatch{
-				SessionID:   strings.TrimSpace(id),
-				ProjectPath: strings.TrimSpace(projectPath),
+				SessionID:      strings.TrimSpace(id),
+				ProjectPath:    strings.TrimSpace(projectPath),
+				CodexSessionID: sessionID,
 			}, nil
 		}
 	}
@@ -475,6 +519,113 @@ func lookupAgentDeckSessionByCodexIDInDB(ctx context.Context, dbPath, codexSessi
 		return nil, fmt.Errorf("read agent-deck state database: %w", err)
 	}
 	return nil, nil
+}
+
+func lookupAgentDeckSessionByWorkdir(ctx context.Context, workdir, agentDeckSessionID string) (*agentDeckDBMatch, error) {
+	workdir = strings.TrimSpace(workdir)
+	if workdir == "" {
+		return nil, nil
+	}
+	canonicalWorkdir, err := canonicalizeExistingPath(workdir)
+	if err != nil {
+		return nil, nil
+	}
+	for _, dbPath := range agentDeckStateDBPaths() {
+		match, err := lookupAgentDeckSessionByWorkdirInDB(ctx, dbPath, canonicalWorkdir, agentDeckSessionID)
+		if err != nil {
+			continue
+		}
+		if match != nil {
+			return match, nil
+		}
+	}
+	return nil, nil
+}
+
+func lookupAgentDeckSessionByWorkdirInDB(ctx context.Context, dbPath, canonicalWorkdir, agentDeckSessionID string) (*agentDeckDBMatch, error) {
+	if strings.TrimSpace(dbPath) == "" || strings.TrimSpace(canonicalWorkdir) == "" {
+		return nil, nil
+	}
+	agentDeckSessionID = strings.TrimSpace(agentDeckSessionID)
+	info, err := os.Stat(dbPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("stat agent-deck state database: %w", err)
+	}
+	if info.IsDir() {
+		return nil, nil
+	}
+
+	db, err := sql.Open("sqlite3", "file:"+dbPath+"?mode=ro&_busy_timeout=5000")
+	if err != nil {
+		return nil, fmt.Errorf("open agent-deck state database: %w", err)
+	}
+	defer db.Close()
+
+	rows, err := db.QueryContext(ctx, `
+		SELECT id, project_path, tool_data
+		FROM instances
+		WHERE tool = 'codex' OR command LIKE '%codex%' OR tool_data LIKE '%codex_session_id%' OR tool_data LIKE '%codex_thread_id%'
+		ORDER BY last_accessed DESC, created_at DESC
+	`)
+	if err != nil {
+		return nil, fmt.Errorf("query agent-deck state database: %w", err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var id, projectPath, rawToolData string
+		if err := rows.Scan(&id, &projectPath, &rawToolData); err != nil {
+			return nil, fmt.Errorf("scan agent-deck state database: %w", err)
+		}
+		canonicalProjectPath, err := canonicalizeExistingPath(projectPath)
+		if err != nil || !sameCanonicalPath(canonicalProjectPath, canonicalWorkdir) {
+			continue
+		}
+		if agentDeckSessionID != "" && strings.TrimSpace(id) != agentDeckSessionID {
+			continue
+		}
+		toolData, ok := parseAgentDeckToolData(rawToolData)
+		sessionID := strings.TrimSpace(toolData.sessionID())
+		if !ok || toolSessionIDValidationFailure(sessionID) != "" {
+			continue
+		}
+		return &agentDeckDBMatch{
+			SessionID:      strings.TrimSpace(id),
+			ProjectPath:    strings.TrimSpace(projectPath),
+			CodexSessionID: sessionID,
+		}, nil
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("read agent-deck state database: %w", err)
+	}
+	return nil, nil
+}
+
+type agentDeckToolData struct {
+	CodexSessionID string `json:"codex_session_id"`
+	CodexThreadID  string `json:"codex_thread_id"`
+}
+
+func (d agentDeckToolData) sessionID() string {
+	return firstNonEmpty(d.CodexThreadID, d.CodexSessionID)
+}
+
+func parseAgentDeckToolData(raw string) (agentDeckToolData, bool) {
+	var toolData agentDeckToolData
+	if err := json.Unmarshal([]byte(raw), &toolData); err != nil {
+		return agentDeckToolData{}, false
+	}
+	return toolData, true
+}
+
+func sameCanonicalPath(left, right string) bool {
+	if runtime.GOOS == "windows" {
+		return strings.EqualFold(left, right)
+	}
+	return left == right
 }
 
 func agentDeckStateDBPaths() []string {

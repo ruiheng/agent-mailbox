@@ -211,14 +211,17 @@ The Go MCP entrypoint keeps the existing tool names:
 
 Call `mailbox_status` first after starting each MCP server process. It
 auto-binds detectable session addresses from `agent-deck session current`,
-`CODEX_THREAD_ID`, `CLAUDE_CODE_SESSION_ID`, `GEMINI_SESSION_ID`, and
-`OPENCODE_SESSION_ID`, yielding addresses such as `agent-deck/<session-id>`,
-`codex/<session-id>`, `claude/<session-id>`, `gemini/<session-id>`, and
-`opencode/<session-id>`. All other tools fail until `mailbox_status` succeeds,
-so callers get the current binding state and any recovery warnings before they
-read, send, claim, ack, or alter mailbox state. If auto-bind cannot find a supported
-tool session address, use the warning details to expose the relevant environment
-variable or call `mailbox_bind` manually after `mailbox_status`.
+tool environment variables such as `CODEX_THREAD_ID`, `CLAUDE_CODE_SESSION_ID`,
+`GEMINI_SESSION_ID`, and `OPENCODE_SESSION_ID`. When an agent-deck session is
+already known, it can also use the agent-deck state database to fill in a Codex
+thread synced later for that same workdir and session.
+That yields addresses such as `agent-deck/<session-id>`, `codex/<session-id>`,
+`claude/<session-id>`, `gemini/<session-id>`, and `opencode/<session-id>`.
+All other tools fail until `mailbox_status` succeeds, so callers get the
+current binding state and any recovery warnings before they read, send, claim,
+ack, or alter mailbox state. If auto-bind cannot find a supported tool session
+address, call `mailbox_status` again after agent-deck has synced state for the
+current session or call `mailbox_bind` manually.
 Tool session environment variable values must look like hex session ids; invalid
 values are ignored and reported in the `mailbox_status` warnings.
 

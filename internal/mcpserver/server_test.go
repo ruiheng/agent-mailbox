@@ -4846,6 +4846,280 @@ func TestAutoBindFindsAgentDeckSessionFromCodexStateDB(t *testing.T) {
 	}
 }
 
+func TestAutoBindDoesNotChooseAgentDeckSessionFromStateDBByWorkdirAlone(t *testing.T) {
+	home := t.TempDir()
+	workdir := t.TempDir()
+	setTestHome(t, home)
+	t.Setenv("CODEX_THREAD_ID", "")
+	t.Setenv("AGENTDECK_INSTANCE_ID", "")
+	t.Setenv("AGENTDECK_PROFILE", "work")
+	writeAgentDeckStateDB(t, home, "work", "deck-session-1", workdir, "0123456789abcdef")
+
+	runner := &fakeRunner{t: t}
+	runner.handler = func(args []string, _ string) (RunResult, error) {
+		switch strings.Join(args, "\x00") {
+		case strings.Join([]string{"agent-deck", "session", "current", "--json"}, "\x00"):
+			return RunResult{ExitCode: 1, Stderr: "not in an agent-deck pane"}, nil
+		case strings.Join([]string{"agent-deck", "session", "show", "deck-session-1", "--json"}, "\x00"):
+			return RunResult{ExitCode: 1, Stderr: "not found"}, nil
+		default:
+			t.Fatalf("unexpected command: %v", args)
+			return RunResult{}, nil
+		}
+	}
+
+	service := newService(Options{
+		MailboxServiceFactory: fakeMailboxServiceFactory{service: &fakeMailboxService{t: t}},
+		CommandRunner:         runner,
+		DisableWakeScheduler:  true,
+		DisableLeaseRenewLoop: true,
+	})
+	service.state.defaultWorkdir = workdir
+
+	status := callServiceTool(t, service, "mailbox_status", nil)
+	if got := status["bound_addresses"]; got != nil && !reflect.DeepEqual(got, []any{}) {
+		t.Fatalf("bound_addresses = %v, want empty without current agent-deck session signal", got)
+	}
+	if got := status["default_sender"]; got != unsetValue {
+		t.Fatalf("default_sender = %v, want unset without current agent-deck session signal", got)
+	}
+}
+
+func TestAutoBindComplementsCurrentAgentDeckSessionFromStateDBByWorkdir(t *testing.T) {
+	home := t.TempDir()
+	workdir := t.TempDir()
+	setTestHome(t, home)
+	t.Setenv("CODEX_THREAD_ID", "")
+	t.Setenv("AGENTDECK_INSTANCE_ID", "")
+	t.Setenv("AGENTDECK_PROFILE", "work")
+	writeAgentDeckStateDB(t, home, "work", "deck-session-1", workdir, "0123456789abcdef")
+
+	runner := &fakeRunner{t: t}
+	runner.handler = func(args []string, _ string) (RunResult, error) {
+		switch strings.Join(args, "\x00") {
+		case strings.Join([]string{"agent-deck", "session", "current", "--json"}, "\x00"):
+			return RunResult{ExitCode: 0, Stdout: `{"id":"deck-session-1"}`}, nil
+		case strings.Join([]string{"agent-deck", "session", "show", "deck-session-1", "--json"}, "\x00"):
+			return RunResult{ExitCode: 1, Stderr: "not found"}, nil
+		default:
+			t.Fatalf("unexpected command: %v", args)
+			return RunResult{}, nil
+		}
+	}
+
+	service := newService(Options{
+		MailboxServiceFactory: fakeMailboxServiceFactory{service: &fakeMailboxService{t: t}},
+		CommandRunner:         runner,
+		DisableWakeScheduler:  true,
+		DisableLeaseRenewLoop: true,
+	})
+	service.state.defaultWorkdir = workdir
+
+	status := callServiceTool(t, service, "mailbox_status", nil)
+	wantAddresses := []any{"agent-deck/deck-session-1", "codex/0123456789abcdef"}
+	if !reflect.DeepEqual(status["bound_addresses"], wantAddresses) {
+		t.Fatalf("bound_addresses = %v, want %v", status["bound_addresses"], wantAddresses)
+	}
+	if got := status["default_sender"]; got != "agent-deck/deck-session-1" {
+		t.Fatalf("default_sender = %v, want agent-deck/deck-session-1", got)
+	}
+}
+
+func TestAutoBindUsesSessionShowPathBeforeStateDBWorkdirLookup(t *testing.T) {
+	home := t.TempDir()
+	workdir := t.TempDir()
+	setTestHome(t, home)
+	t.Setenv("CODEX_THREAD_ID", "")
+	t.Setenv("AGENTDECK_INSTANCE_ID", "")
+	t.Setenv("AGENTDECK_PROFILE", "work")
+	writeAgentDeckStateDB(t, home, "work", "deck-session-1", workdir, "0123456789abcdef")
+
+	runner := &fakeRunner{t: t}
+	runner.handler = func(args []string, _ string) (RunResult, error) {
+		switch strings.Join(args, "\x00") {
+		case strings.Join([]string{"agent-deck", "session", "current", "--json"}, "\x00"):
+			return RunResult{ExitCode: 0, Stdout: `{"id":"deck-session-1"}`}, nil
+		case strings.Join([]string{"agent-deck", "session", "show", "deck-session-1", "--json"}, "\x00"):
+			payload, err := json.Marshal(map[string]string{
+				"id":     "deck-session-1",
+				"status": "waiting",
+				"path":   workdir,
+			})
+			if err != nil {
+				t.Fatalf("marshal session show payload: %v", err)
+			}
+			return RunResult{ExitCode: 0, Stdout: string(payload)}, nil
+		default:
+			t.Fatalf("unexpected command: %v", args)
+			return RunResult{}, nil
+		}
+	}
+
+	service := newService(Options{
+		MailboxServiceFactory: fakeMailboxServiceFactory{service: &fakeMailboxService{t: t}},
+		CommandRunner:         runner,
+		DisableWakeScheduler:  true,
+		DisableLeaseRenewLoop: true,
+	})
+
+	status := callServiceTool(t, service, "mailbox_status", nil)
+	wantAddresses := []any{"agent-deck/deck-session-1", "codex/0123456789abcdef"}
+	if !reflect.DeepEqual(status["bound_addresses"], wantAddresses) {
+		t.Fatalf("bound_addresses = %v, want %v", status["bound_addresses"], wantAddresses)
+	}
+	if got := status["default_workdir"]; got != workdir {
+		t.Fatalf("default_workdir = %v, want %v", got, workdir)
+	}
+}
+
+func TestAutoBindFindsCurrentSessionWhenNewerCodexSessionSharesWorkdir(t *testing.T) {
+	home := t.TempDir()
+	workdir := t.TempDir()
+	setTestHome(t, home)
+	t.Setenv("CODEX_THREAD_ID", "")
+	t.Setenv("AGENTDECK_INSTANCE_ID", "")
+	t.Setenv("AGENTDECK_PROFILE", "work")
+	writeAgentDeckStateDBRows(t, home, "work", []agentDeckStateDBRow{
+		{
+			ID:             "newer-session",
+			ProjectPath:    workdir,
+			CodexSessionID: "fedcba9876543210",
+			CreatedAt:      2,
+			LastAccessed:   3,
+		},
+		{
+			ID:             "deck-session-1",
+			ProjectPath:    workdir,
+			CodexSessionID: "0123456789abcdef",
+			CreatedAt:      1,
+			LastAccessed:   2,
+		},
+	})
+
+	runner := &fakeRunner{t: t}
+	runner.handler = func(args []string, _ string) (RunResult, error) {
+		switch strings.Join(args, "\x00") {
+		case strings.Join([]string{"agent-deck", "session", "current", "--json"}, "\x00"):
+			return RunResult{ExitCode: 0, Stdout: `{"id":"deck-session-1"}`}, nil
+		case strings.Join([]string{"agent-deck", "session", "show", "deck-session-1", "--json"}, "\x00"):
+			return RunResult{ExitCode: 1, Stderr: "not found"}, nil
+		default:
+			t.Fatalf("unexpected command: %v", args)
+			return RunResult{}, nil
+		}
+	}
+
+	service := newService(Options{
+		MailboxServiceFactory: fakeMailboxServiceFactory{service: &fakeMailboxService{t: t}},
+		CommandRunner:         runner,
+		DisableWakeScheduler:  true,
+		DisableLeaseRenewLoop: true,
+	})
+	service.state.defaultWorkdir = workdir
+
+	status := callServiceTool(t, service, "mailbox_status", nil)
+	wantAddresses := []any{"agent-deck/deck-session-1", "codex/0123456789abcdef"}
+	if !reflect.DeepEqual(status["bound_addresses"], wantAddresses) {
+		t.Fatalf("bound_addresses = %v, want %v", status["bound_addresses"], wantAddresses)
+	}
+	if got := status["detected_agent_session_id"]; got != "0123456789abcdef" {
+		t.Fatalf("detected_agent_session_id = %v, want 0123456789abcdef", got)
+	}
+}
+
+func TestAutoBindDoesNotRetryStateDBAfterEmptyResultWithoutAgentDeckSignal(t *testing.T) {
+	home := t.TempDir()
+	workdir := t.TempDir()
+	setTestHome(t, home)
+	t.Setenv("CODEX_THREAD_ID", "")
+	t.Setenv("AGENTDECK_INSTANCE_ID", "")
+	t.Setenv("AGENTDECK_PROFILE", "work")
+
+	runner := &fakeRunner{t: t}
+	runner.handler = func(args []string, _ string) (RunResult, error) {
+		switch strings.Join(args, "\x00") {
+		case strings.Join([]string{"agent-deck", "session", "current", "--json"}, "\x00"):
+			return RunResult{ExitCode: 1, Stderr: "not in an agent-deck pane"}, nil
+		case strings.Join([]string{"agent-deck", "session", "show", "deck-session-1", "--json"}, "\x00"):
+			return RunResult{ExitCode: 1, Stderr: "not found"}, nil
+		default:
+			t.Fatalf("unexpected command: %v", args)
+			return RunResult{}, nil
+		}
+	}
+
+	service := newService(Options{
+		MailboxServiceFactory: fakeMailboxServiceFactory{service: &fakeMailboxService{t: t}},
+		CommandRunner:         runner,
+		DisableWakeScheduler:  true,
+		DisableLeaseRenewLoop: true,
+	})
+	service.state.defaultWorkdir = workdir
+
+	first := callServiceTool(t, service, "mailbox_status", nil)
+	if got := first["bound_addresses"]; got != nil && !reflect.DeepEqual(got, []any{}) {
+		t.Fatalf("first bound_addresses = %#v, want empty", got)
+	}
+
+	writeAgentDeckStateDB(t, home, "work", "deck-session-1", workdir, "0123456789abcdef")
+	second := callServiceTool(t, service, "mailbox_status", nil)
+	if got := second["bound_addresses"]; got != nil && !reflect.DeepEqual(got, []any{}) {
+		t.Fatalf("second bound_addresses = %#v, want empty without current agent-deck session signal", got)
+	}
+	if got := second["default_sender"]; got != unsetValue {
+		t.Fatalf("second default_sender = %v, want unset without current agent-deck session signal", got)
+	}
+}
+
+func TestAutoBindRetriesAgentDeckStateDBAfterAgentDeckOnlyResult(t *testing.T) {
+	home := t.TempDir()
+	workdir := t.TempDir()
+	setTestHome(t, home)
+	t.Setenv("CODEX_THREAD_ID", "")
+	t.Setenv("AGENTDECK_INSTANCE_ID", "")
+	t.Setenv("AGENTDECK_PROFILE", "work")
+
+	runner := &fakeRunner{t: t}
+	runner.handler = func(args []string, _ string) (RunResult, error) {
+		switch strings.Join(args, "\x00") {
+		case strings.Join([]string{"agent-deck", "session", "current", "--json"}, "\x00"):
+			return RunResult{ExitCode: 0, Stdout: `{"id":"deck-session-1"}`}, nil
+		case strings.Join([]string{"agent-deck", "session", "show", "deck-session-1", "--json"}, "\x00"):
+			return RunResult{ExitCode: 1, Stderr: "not found"}, nil
+		default:
+			t.Fatalf("unexpected command: %v", args)
+			return RunResult{}, nil
+		}
+	}
+
+	service := newService(Options{
+		MailboxServiceFactory: fakeMailboxServiceFactory{service: &fakeMailboxService{t: t}},
+		CommandRunner:         runner,
+		DisableWakeScheduler:  true,
+		DisableLeaseRenewLoop: true,
+	})
+	service.state.defaultWorkdir = workdir
+
+	first := callServiceTool(t, service, "mailbox_status", nil)
+	wantFirst := []any{"agent-deck/deck-session-1"}
+	if !reflect.DeepEqual(first["bound_addresses"], wantFirst) {
+		t.Fatalf("first bound_addresses = %v, want %v", first["bound_addresses"], wantFirst)
+	}
+	if got := first["detected_agent_session_id"]; got != nil {
+		t.Fatalf("first detected_agent_session_id = %v, want nil", got)
+	}
+
+	writeAgentDeckStateDB(t, home, "work", "deck-session-1", workdir, "0123456789abcdef")
+	second := callServiceTool(t, service, "mailbox_status", nil)
+	wantSecond := []any{"agent-deck/deck-session-1", "codex/0123456789abcdef"}
+	if !reflect.DeepEqual(second["bound_addresses"], wantSecond) {
+		t.Fatalf("second bound_addresses = %v, want %v", second["bound_addresses"], wantSecond)
+	}
+	if got := second["detected_agent_session_id"]; got != "0123456789abcdef" {
+		t.Fatalf("second detected_agent_session_id = %v, want 0123456789abcdef", got)
+	}
+}
+
 func TestAutoBindSkipsBadAgentDeckDBAndFallsBackToCodexOnly(t *testing.T) {
 	home := t.TempDir()
 	setTestHome(t, home)
@@ -5344,7 +5618,28 @@ func setTestHome(t *testing.T, home string) {
 	t.Setenv("USERPROFILE", home)
 }
 
+type agentDeckStateDBRow struct {
+	ID             string
+	ProjectPath    string
+	CodexSessionID string
+	CreatedAt      int
+	LastAccessed   int
+}
+
 func writeAgentDeckStateDB(t *testing.T, home, profile, id, projectPath, codexSessionID string) {
+	t.Helper()
+	writeAgentDeckStateDBRows(t, home, profile, []agentDeckStateDBRow{
+		{
+			ID:             id,
+			ProjectPath:    projectPath,
+			CodexSessionID: codexSessionID,
+			CreatedAt:      1,
+			LastAccessed:   2,
+		},
+	})
+}
+
+func writeAgentDeckStateDBRows(t *testing.T, home, profile string, rows []agentDeckStateDBRow) {
 	t.Helper()
 	dbPath := filepath.Join(home, ".agent-deck", "profiles", profile, "state.db")
 	if err := os.MkdirAll(filepath.Dir(dbPath), 0700); err != nil {
@@ -5368,15 +5663,17 @@ func writeAgentDeckStateDB(t *testing.T, home, profile, id, projectPath, codexSe
 	`); err != nil {
 		t.Fatalf("create instances: %v", err)
 	}
-	toolData, err := json.Marshal(map[string]string{"codex_session_id": codexSessionID})
-	if err != nil {
-		t.Fatalf("marshal tool data: %v", err)
-	}
-	if _, err := db.Exec(`
-		INSERT INTO instances (id, project_path, tool, command, created_at, last_accessed, tool_data)
-		VALUES (?, ?, 'codex', 'codex', 1, 2, ?)
-	`, id, projectPath, string(toolData)); err != nil {
-		t.Fatalf("insert instance: %v", err)
+	for _, row := range rows {
+		toolData, err := json.Marshal(map[string]string{"codex_session_id": row.CodexSessionID})
+		if err != nil {
+			t.Fatalf("marshal tool data: %v", err)
+		}
+		if _, err := db.Exec(`
+			INSERT INTO instances (id, project_path, tool, command, created_at, last_accessed, tool_data)
+			VALUES (?, ?, 'codex', 'codex', ?, ?, ?)
+		`, row.ID, row.ProjectPath, row.CreatedAt, row.LastAccessed, string(toolData)); err != nil {
+			t.Fatalf("insert instance: %v", err)
+		}
 	}
 }
 
