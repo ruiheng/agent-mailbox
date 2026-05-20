@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -51,9 +52,16 @@ type mailboxWaitInput struct {
 }
 
 type mailboxRecvInput struct {
-	Addresses []string `json:"addresses,omitempty"`
-	AsPerson  string   `json:"as_person,omitempty"`
-	Timeout   string   `json:"timeout,omitempty"`
+	Addresses        []string `json:"addresses,omitempty"`
+	AsPerson         string   `json:"as_person,omitempty"`
+	Timeout          string   `json:"timeout,omitempty"`
+	KnownDeliveryIDs []string `json:"known_delivery_ids,omitempty"`
+}
+
+type mailboxClaimHistoryInput struct {
+	DeliveryID        string `json:"delivery_id,omitempty"`
+	IncludeTerminal   bool   `json:"include_terminal,omitempty"`
+	IncludeLeaseToken bool   `json:"include_lease_token,omitempty"`
 }
 
 type mailboxListInput struct {
@@ -139,8 +147,12 @@ func (s *Service) registerMailboxTools(server *mcp.Server) {
 	}, s.mailboxWait)
 	addToolRequiringMailboxStatus(server, s, &mcp.Tool{
 		Name:        "mailbox_recv",
-		Description: "Receive mail, optionally waiting with timeout before claiming. If addresses is omitted, receive from all bound addresses; pass addresses only to override that inbox set for this call. After ack, use mailbox_read to reread persisted deliveries when context is lost.",
+		Description: "Receive currently available mail immediately and claim it; recv never blocks. Use mailbox_wait to wait for availability without claiming. If this MCP process already holds unacknowledged leases, recv returns a hint immediately; pass known_delivery_ids to suppress leases the caller already knows about. If addresses is omitted, receive from all bound addresses; pass addresses only to override that inbox set for this call. After ack, use mailbox_read to reread persisted deliveries when context is lost.",
 	}, s.mailboxRecv)
+	addToolRequiringMailboxStatus(server, s, &mcp.Tool{
+		Name:        "mailbox_claim_history",
+		Description: "List deliveries this MCP process has claimed during its current lifetime. By default returns active claims without lease tokens; pass delivery_id and include_lease_token=true to recover a token the agent lost.",
+	}, s.mailboxClaimHistory)
 	addToolRequiringMailboxStatus(server, s, &mcp.Tool{
 		Name:        "mailbox_list",
 		Description: "List persisted deliveries for one inbox. Use state='acked' to find deliveries that were already received and acknowledged before rereading them with mailbox_read.",
@@ -476,16 +488,26 @@ func (s *Service) mailboxRecv(ctx context.Context, _ *mcp.CallToolRequest, input
 	if err != nil {
 		return nil, nil, err
 	}
-	timeout, err := parseOptionalMailboxTimeout(input.Timeout)
-	if err != nil {
-		return nil, nil, err
-	}
 	if person := strings.TrimSpace(input.AsPerson); person != "" {
-		return s.mailboxRecvGroup(ctx, addresses, person, timeout)
+		return s.mailboxRecvGroup(ctx, addresses, person, input.Timeout)
 	}
 	warnings := s.mailboxReceiveWarnings(ctx, len(input.Addresses) > 0)
+	warnings = appendRecvTimeoutIgnoredWarning(warnings, input.Timeout)
+	activeLeaseIDs := s.activeLeaseHintDeliveryIDs(addresses, input.KnownDeliveryIDs)
+	if len(activeLeaseIDs) > 0 {
+		return s.mailboxToolResult(ctx, map[string]any{
+			"status":                 "active_leases",
+			"addresses":              addresses,
+			"active_lease_count":     len(activeLeaseIDs),
+			"claimed_delivery_ids":   activeLeaseIDs,
+			"known_delivery_ids":     normalizedKnownDeliveryIDs(input.KnownDeliveryIDs),
+			"claim_history_tool":     "mailbox_claim_history",
+			"known_delivery_id_hint": "If you are already handling these deliveries, retry mailbox_recv with known_delivery_ids set to claimed_delivery_ids. If you lost the lease token, call mailbox_claim_history with delivery_id and include_lease_token=true.",
+			"warnings":               warnings,
+		})
+	}
 
-	delivery, err := s.receivePersonalWithOptionalWait(ctx, addresses, timeout)
+	delivery, err := s.receivePersonalNow(ctx, addresses)
 	if errors.Is(err, mailbox.ErrNoMessage) {
 		return s.mailboxToolResult(ctx, map[string]any{
 			"status":    "no_message",
@@ -496,7 +518,7 @@ func (s *Service) mailboxRecv(ctx context.Context, _ *mcp.CallToolRequest, input
 	if err != nil {
 		return nil, nil, err
 	}
-	s.activeLeases.trackReceive(delivery)
+	s.activeLeases.trackReceive(delivery, s.now().Format(time.RFC3339Nano))
 	s.startLeaseRenewLoop()
 	return s.mailboxMutationToolResult(ctx, map[string]any{
 		"status":    "received",
@@ -506,17 +528,123 @@ func (s *Service) mailboxRecv(ctx context.Context, _ *mcp.CallToolRequest, input
 	})
 }
 
-func (s *Service) mailboxRecvGroup(ctx context.Context, addresses []string, person string, timeout time.Duration) (*mcp.CallToolResult, map[string]any, error) {
+func appendRecvTimeoutIgnoredWarning(warnings []string, timeoutText string) []string {
+	if strings.TrimSpace(timeoutText) == "" {
+		return warnings
+	}
+	return append(warnings, "mailbox_recv ignores timeout and never blocks; use mailbox_wait to wait without claiming before calling mailbox_recv")
+}
+
+func (s *Service) activeLeaseHintDeliveryIDs(addresses []string, knownDeliveryIDs []string) []string {
+	leases := s.activeLeases.snapshot()
+	if len(leases) == 0 {
+		return nil
+	}
+	sort.Slice(leases, func(i, j int) bool {
+		return leases[i].DeliveryID < leases[j].DeliveryID
+	})
+
+	addressSet := make(map[string]struct{}, len(addresses))
+	for _, address := range addresses {
+		addressSet[address] = struct{}{}
+	}
+	knownSet := knownDeliveryIDSet(knownDeliveryIDs)
+	deliveryIDs := make([]string, 0, len(leases))
+	for _, lease := range leases {
+		if _, known := knownSet[lease.DeliveryID]; known {
+			continue
+		}
+		if _, wanted := addressSet[lease.RecipientAddress]; !wanted {
+			continue
+		}
+		deliveryIDs = append(deliveryIDs, lease.DeliveryID)
+	}
+	return deliveryIDs
+}
+
+func knownDeliveryIDSet(deliveryIDs []string) map[string]struct{} {
+	knownSet := make(map[string]struct{}, len(deliveryIDs))
+	for _, deliveryID := range deliveryIDs {
+		deliveryID = strings.TrimSpace(deliveryID)
+		if deliveryID == "" {
+			continue
+		}
+		knownSet[deliveryID] = struct{}{}
+	}
+	return knownSet
+}
+
+func normalizedKnownDeliveryIDs(deliveryIDs []string) []string {
+	known := make([]string, 0, len(deliveryIDs))
+	for deliveryID := range knownDeliveryIDSet(deliveryIDs) {
+		known = append(known, deliveryID)
+	}
+	sort.Strings(known)
+	return known
+}
+
+func (s *Service) mailboxClaimHistory(ctx context.Context, _ *mcp.CallToolRequest, input mailboxClaimHistoryInput) (*mcp.CallToolResult, map[string]any, error) {
+	deliveryID := strings.TrimSpace(input.DeliveryID)
+	if input.IncludeLeaseToken && deliveryID == "" {
+		return nil, nil, errors.New("include_lease_token requires delivery_id")
+	}
+	leases := s.activeLeases.historySnapshot(input.IncludeTerminal || deliveryID != "")
+	sort.Slice(leases, func(i, j int) bool {
+		return leases[i].DeliveryID < leases[j].DeliveryID
+	})
+
+	items := make([]map[string]any, 0, len(leases))
+	for _, lease := range leases {
+		if deliveryID != "" && lease.DeliveryID != deliveryID {
+			continue
+		}
+		item := map[string]any{
+			"delivery_id":       lease.DeliveryID,
+			"recipient_address": lease.RecipientAddress,
+			"lease_expires_at":  lease.LeaseExpiresAt,
+			"subject":           lease.Subject,
+			"content_type":      lease.ContentType,
+			"claimed_at":        lease.ClaimedAt,
+			"last_renewed_at":   nilIfEmpty(lease.LastRenewedAt),
+			"status":            lease.Status,
+			"terminal_at":       nilIfEmpty(lease.TerminalAt),
+		}
+		if input.IncludeLeaseToken {
+			item["lease_token"] = lease.LeaseToken
+		}
+		items = append(items, item)
+	}
+	if deliveryID != "" && len(items) == 0 {
+		return s.mailboxToolResult(ctx, map[string]any{
+			"status":      "not_found",
+			"delivery_id": deliveryID,
+			"items":       items,
+		})
+	}
+	return s.mailboxToolResult(ctx, map[string]any{
+		"status":                 "listed",
+		"items":                  items,
+		"include_terminal":       input.IncludeTerminal,
+		"lease_tokens_included":  input.IncludeLeaseToken,
+		"lease_token_hint":       "Pass delivery_id and include_lease_token=true only when recovering a token this MCP process previously returned.",
+		"current_process_only":   true,
+		"claimed_delivery_count": len(items),
+	})
+}
+
+func (s *Service) mailboxRecvGroup(ctx context.Context, addresses []string, person, timeoutText string) (*mcp.CallToolResult, map[string]any, error) {
 	address, err := singleGroupAddress(addresses, "mailbox_recv")
 	if err != nil {
 		return nil, nil, err
 	}
-	message, err := s.receiveGroupWithOptionalWait(ctx, address, person, timeout)
+	warnings := appendRecvTimeoutIgnoredWarning(nil, timeoutText)
+	message, err := s.receiveGroupNow(ctx, address, person)
 	if errors.Is(err, mailbox.ErrNoMessage) {
 		return s.mailboxToolResult(ctx, map[string]any{
 			"status":    "no_message",
 			"addresses": []string{address},
 			"as_person": person,
+			"warnings":  warnings,
 		})
 	}
 	if err != nil {
@@ -527,44 +655,19 @@ func (s *Service) mailboxRecvGroup(ctx context.Context, addresses []string, pers
 		"addresses": []string{address},
 		"as_person": person,
 		"message":   mailbox.CompactGroupReceivedMessage(message),
+		"warnings":  warnings,
 	})
 }
 
-func parseOptionalMailboxTimeout(timeoutText string) (time.Duration, error) {
-	timeoutText = strings.TrimSpace(timeoutText)
-	if timeoutText == "" {
-		return 0, nil
-	}
-	timeout, err := time.ParseDuration(timeoutText)
-	if err != nil {
-		return 0, fmt.Errorf("parse timeout: %w", err)
-	}
-	if timeout < 0 {
-		return 0, errors.New("timeout must not be negative")
-	}
-	return timeout, nil
-}
-
-func (s *Service) receivePersonalWithOptionalWait(ctx context.Context, addresses []string, timeout time.Duration) (mailbox.ReceiveResult, error) {
+func (s *Service) receivePersonalNow(ctx context.Context, addresses []string) (mailbox.ReceiveResult, error) {
 	claimMetadata := s.receiveClaimMetadata(addresses)
 	return withMailboxService(ctx, s.mailboxServices, func(service mailboxService) (mailbox.ReceiveResult, error) {
-		receiveOnce := func(attemptCtx context.Context) (mailbox.ReceiveResult, error) {
-			// MCP intentionally claims work with a short liveness window and relies on
-			// in-process renewals while this Service instance is alive. This keeps
-			// abandoned work reclaimable quickly after MCP death or long stalls instead
-			// of inheriting the mailbox core's legacy 5m receive lease.
-			return service.ReceiveBatchWithLeaseTTL(mailbox.WithClaimMetadata(attemptCtx, claimMetadata), mailbox.ReceiveBatchParams{
-				Addresses: addresses,
-				Max:       1,
-			}, s.mcpLeaseTTL)
-		}
-		if timeout <= 0 {
-			return receiveOnce(ctx)
-		}
-		waitUntilVisible := func(attemptCtx context.Context) (bool, error) {
-			return service.HasVisibleDelivery(attemptCtx, mailbox.WaitParams{Addresses: addresses})
-		}
-		return pollUntilMailboxMessage(ctx, timeout, waitUntilVisible, receiveOnce)
+		// MCP claims only immediately visible work. Waiting stays in mailbox_wait so
+		// abandoned tool calls cannot later claim mail into an unreachable result.
+		return service.ReceiveBatchWithLeaseTTL(mailbox.WithClaimMetadata(ctx, claimMetadata), mailbox.ReceiveBatchParams{
+			Addresses: addresses,
+			Max:       1,
+		}, s.mcpLeaseTTL)
 	})
 }
 
@@ -580,90 +683,13 @@ func (s *Service) receiveClaimMetadata(addresses []string) mailbox.ClaimMetadata
 	}
 }
 
-func (s *Service) receiveGroupWithOptionalWait(ctx context.Context, address, person string, timeout time.Duration) (mailbox.GroupReceivedMessage, error) {
+func (s *Service) receiveGroupNow(ctx context.Context, address, person string) (mailbox.GroupReceivedMessage, error) {
 	return withMailboxService(ctx, s.mailboxServices, func(service mailboxService) (mailbox.GroupReceivedMessage, error) {
-		receiveOnce := func(attemptCtx context.Context) (mailbox.GroupReceivedMessage, error) {
-			return service.ReceiveGroupMessage(attemptCtx, mailbox.GroupReceiveParams{
-				Address: address,
-				Person:  person,
-			})
-		}
-		if timeout <= 0 {
-			return receiveOnce(ctx)
-		}
-		waitUntilVisible := func(attemptCtx context.Context) (bool, error) {
-			_, err := service.WaitGroupMessage(attemptCtx, mailbox.GroupWaitParams{
-				Address: address,
-				Person:  person,
-			})
-			if errors.Is(err, mailbox.ErrNoMessage) {
-				return false, nil
-			}
-			return err == nil, err
-		}
-		return pollUntilMailboxMessage(ctx, timeout, waitUntilVisible, receiveOnce)
+		return service.ReceiveGroupMessage(ctx, mailbox.GroupReceiveParams{
+			Address: address,
+			Person:  person,
+		})
 	})
-}
-
-func pollUntilMailboxMessage[T any](ctx context.Context, timeout time.Duration, waitUntilVisible func(context.Context) (bool, error), receiveOnce func(context.Context) (T, error)) (T, error) {
-	var zero T
-	waitCtx, cancel := context.WithTimeout(ctx, timeout)
-	defer cancel()
-
-	delay := 50 * time.Millisecond
-	const maxDelay = time.Second
-	for {
-		select {
-		case <-ctx.Done():
-			return zero, ctx.Err()
-		case <-waitCtx.Done():
-			if errors.Is(waitCtx.Err(), context.DeadlineExceeded) && ctx.Err() == nil {
-				return zero, mailbox.ErrNoMessage
-			}
-			return zero, waitCtx.Err()
-		default:
-		}
-
-		visible, err := waitUntilVisible(waitCtx)
-		if err != nil {
-			if errors.Is(err, context.DeadlineExceeded) && ctx.Err() == nil {
-				return zero, mailbox.ErrNoMessage
-			}
-			return zero, err
-		}
-		if visible {
-			result, err := receiveOnce(ctx)
-			if err == nil {
-				return result, nil
-			}
-			if !errors.Is(err, mailbox.ErrNoMessage) {
-				return zero, err
-			}
-		}
-
-		timer := time.NewTimer(delay)
-		select {
-		case <-waitCtx.Done():
-			if !timer.Stop() {
-				select {
-				case <-timer.C:
-				default:
-				}
-			}
-			if errors.Is(waitCtx.Err(), context.DeadlineExceeded) && ctx.Err() == nil {
-				return zero, mailbox.ErrNoMessage
-			}
-			return zero, waitCtx.Err()
-		case <-timer.C:
-		}
-
-		if delay < maxDelay {
-			delay *= 2
-			if delay > maxDelay {
-				delay = maxDelay
-			}
-		}
-	}
 }
 
 func singleGroupAddress(addresses []string, toolName string) (string, error) {
@@ -847,7 +873,7 @@ func (s *Service) mailboxAck(ctx context.Context, _ *mcp.CallToolRequest, input 
 	if err != nil {
 		return nil, nil, err
 	}
-	s.activeLeases.remove(input.DeliveryID)
+	s.activeLeases.markTerminal(input.DeliveryID, "acked", s.now().Format(time.RFC3339Nano))
 	return s.mailboxMutationToolResult(ctx, map[string]any{"status": "acked", "delivery_id": input.DeliveryID})
 }
 
@@ -861,7 +887,7 @@ func (s *Service) mailboxRelease(ctx context.Context, _ *mcp.CallToolRequest, in
 	if err != nil {
 		return nil, nil, err
 	}
-	s.activeLeases.remove(input.DeliveryID)
+	s.activeLeases.markTerminal(input.DeliveryID, "released", s.now().Format(time.RFC3339Nano))
 	return s.mailboxMutationToolResult(ctx, map[string]any{"status": "released", "delivery_id": input.DeliveryID})
 }
 
@@ -879,7 +905,7 @@ func (s *Service) mailboxDefer(ctx context.Context, _ *mcp.CallToolRequest, inpu
 	if err != nil {
 		return nil, nil, err
 	}
-	s.activeLeases.remove(input.DeliveryID)
+	s.activeLeases.markTerminal(input.DeliveryID, "deferred", s.now().Format(time.RFC3339Nano))
 	return s.mailboxMutationToolResult(ctx, map[string]any{"status": "deferred", "delivery_id": input.DeliveryID, "until": input.Until})
 }
 
@@ -893,7 +919,7 @@ func (s *Service) mailboxFail(ctx context.Context, _ *mcp.CallToolRequest, input
 	if err != nil {
 		return nil, nil, err
 	}
-	s.activeLeases.remove(input.DeliveryID)
+	s.activeLeases.markTerminal(input.DeliveryID, "failed", s.now().Format(time.RFC3339Nano))
 	return s.mailboxMutationToolResult(ctx, map[string]any{"status": "failed", "delivery_id": input.DeliveryID, "reason": input.Reason})
 }
 

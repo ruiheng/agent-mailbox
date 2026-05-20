@@ -46,7 +46,7 @@ func (s *Service) processLeaseRenewals(ctx context.Context) error {
 			}
 			continue
 		}
-		s.activeLeases.updateRenewed(renewed)
+		s.activeLeases.updateRenewed(renewed, s.now().Format(time.RFC3339Nano))
 	}
 	return firstErr
 }
