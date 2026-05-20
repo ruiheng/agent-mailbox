@@ -139,6 +139,51 @@ func TestRenewExtendsActiveLeaseAndLogsEvent(t *testing.T) {
 	}
 }
 
+func TestReceiveLogsClaimMetadata(t *testing.T) {
+	t.Parallel()
+
+	runtime, store := newLeaseTestStore(t)
+	defer runtime.Close()
+
+	sent := mustSendMessage(t, store, "workflow/reviewer/task-123", "agent/sender", "review request", "hello reviewer")
+	ctx := WithClaimMetadata(context.Background(), ClaimMetadata{
+		Source:             "mcp",
+		Tool:               "mailbox_recv",
+		BoundAddresses:     []string{"workflow/reviewer/task-123"},
+		AgentDeckSessionID: "session-123",
+		AgentSessionID:     "codex-session-456",
+		Workdir:            "test-workdir",
+	})
+
+	if _, err := store.Receive(ctx, ReceiveParams{Address: "workflow/reviewer/task-123"}); err != nil {
+		t.Fatalf("Receive() error = %v", err)
+	}
+
+	detail := readDeliveryEventDetail(t, runtime, sent.DeliveryID, "delivery_leased")
+	if detail["claim_source"] != "mcp" {
+		t.Fatalf("claim_source = %v, want mcp", detail["claim_source"])
+	}
+	if detail["claim_tool"] != "mailbox_recv" {
+		t.Fatalf("claim_tool = %v, want mailbox_recv", detail["claim_tool"])
+	}
+	if detail["claim_agent_deck_session_id"] != "session-123" {
+		t.Fatalf("claim_agent_deck_session_id = %v, want session-123", detail["claim_agent_deck_session_id"])
+	}
+	if detail["claim_agent_session_id"] != "codex-session-456" {
+		t.Fatalf("claim_agent_session_id = %v, want codex-session-456", detail["claim_agent_session_id"])
+	}
+	if detail["claim_workdir"] != "test-workdir" {
+		t.Fatalf("claim_workdir = %v, want test-workdir", detail["claim_workdir"])
+	}
+	if detail["claim_pid"] == nil {
+		t.Fatal("claim_pid missing")
+	}
+	addresses, ok := detail["claim_bound_addresses"].([]any)
+	if !ok || len(addresses) != 1 || addresses[0] != "workflow/reviewer/task-123" {
+		t.Fatalf("claim_bound_addresses = %#v, want [workflow/reviewer/task-123]", detail["claim_bound_addresses"])
+	}
+}
+
 func TestRenewExtendsExpiredLeaseWhenTokenIsStillCurrent(t *testing.T) {
 	t.Parallel()
 

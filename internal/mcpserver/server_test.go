@@ -113,6 +113,21 @@ func TestMailboxRecvSchemaExposesTimeout(t *testing.T) {
 	if _, ok := schema.Properties["timeout"]; !ok {
 		t.Fatalf("schema.Properties missing timeout: %v", schema.Properties)
 	}
+	if _, ok := schema.Properties["known_delivery_ids"]; !ok {
+		t.Fatalf("schema.Properties missing known_delivery_ids: %v", schema.Properties)
+	}
+}
+
+func TestMailboxClaimHistorySchemaExposesRecoveryFields(t *testing.T) {
+	schema, err := jsonschema.For[mailboxClaimHistoryInput](nil)
+	if err != nil {
+		t.Fatalf("jsonschema.For() error = %v", err)
+	}
+	for _, field := range []string{"delivery_id", "include_terminal", "include_lease_token"} {
+		if _, ok := schema.Properties[field]; !ok {
+			t.Fatalf("schema.Properties missing %s: %v", field, schema.Properties)
+		}
+	}
 }
 
 func (f *fakeMailboxService) Send(ctx context.Context, params mailbox.SendParams) (mailbox.SendResult, error) {
@@ -2621,6 +2636,17 @@ func TestMailboxLifecycleToolsUseDirectMailboxService(t *testing.T) {
 	if message["body"] != "body" {
 		t.Fatalf("recv body = %v, want body", message["body"])
 	}
+	claimDetail := readMCPDeliveryEventDetail(t, stateDir, deliveryID, "delivery_leased")
+	if claimDetail["claim_source"] != "mcp" {
+		t.Fatalf("claim_source = %v, want mcp", claimDetail["claim_source"])
+	}
+	if claimDetail["claim_tool"] != "mailbox_recv" {
+		t.Fatalf("claim_tool = %v, want mailbox_recv", claimDetail["claim_tool"])
+	}
+	addresses, ok := claimDetail["claim_bound_addresses"].([]any)
+	if !ok || len(addresses) != 1 || addresses[0] != "agent-deck/self" {
+		t.Fatalf("claim_bound_addresses = %#v, want [agent-deck/self]", claimDetail["claim_bound_addresses"])
+	}
 
 	ack := callServiceTool(t, service, "mailbox_ack", map[string]any{
 		"delivery_id": deliveryID,
@@ -2685,20 +2711,18 @@ func TestMailboxRecvWithTimeoutClaimsMessageSentLater(t *testing.T) {
 	service.state.defaultSender = "agent-deck/self"
 	service.state.autoBindAttempted = true
 
-	type recvResult struct {
-		output map[string]any
-		err    error
+	recv := callServiceTool(t, service, "mailbox_recv", map[string]any{
+		"addresses": []string{"agent-deck/self"},
+		"timeout":   "500ms",
+	})
+	if got := recv["status"]; got != "no_message" {
+		t.Fatalf("recv status = %v, want no_message", got)
 	}
-	resultCh := make(chan recvResult, 1)
-	go func() {
-		_, output, err := service.mailboxRecv(context.Background(), nil, mailboxRecvInput{
-			Addresses: []string{"agent-deck/self"},
-			Timeout:   "500ms",
-		})
-		resultCh <- recvResult{output: output, err: err}
-	}()
+	assertHasRecvTimeoutIgnoredWarning(t, recv)
+	if service.activeLeases.hasTrackedLeases() {
+		t.Fatal("empty recv tracked active lease")
+	}
 
-	time.Sleep(75 * time.Millisecond)
 	send := callServiceTool(t, service, "mailbox_send", map[string]any{
 		"to_address": "agent-deck/self",
 		"subject":    "blocking recv",
@@ -2706,34 +2730,129 @@ func TestMailboxRecvWithTimeoutClaimsMessageSentLater(t *testing.T) {
 	})
 	deliveryID := send["delivery_id"].(string)
 
-	result := <-resultCh
-	if result.err != nil {
-		t.Fatalf("mailboxRecv error = %v", result.err)
+	wait := callServiceTool(t, service, "mailbox_wait", map[string]any{
+		"addresses": []string{"agent-deck/self"},
+	})
+	if got := wait["status"]; got != "message_available" {
+		t.Fatalf("wait status = %v, want message_available", got)
 	}
-	if got := result.output["status"]; got != "received" {
-		t.Fatalf("recv status = %v, want received", got)
+	delivery := wait["delivery"].(map[string]any)
+	if got := delivery["delivery_id"]; got != deliveryID {
+		t.Fatalf("wait delivery_id = %v, want %s", got, deliveryID)
 	}
-	encodedDelivery, err := json.Marshal(result.output["delivery"])
-	if err != nil {
-		t.Fatalf("marshal recv delivery: %v", err)
+}
+
+func TestMailboxRecvReportsActiveLeaseBeforeBlockingWait(t *testing.T) {
+	t.Parallel()
+
+	stateDir := filepath.Join(t.TempDir(), "mailbox-state")
+	service := newService(Options{
+		StateDir: stateDir,
+		CommandRunner: &fakeRunner{t: t, handler: func(args []string, input string) (RunResult, error) {
+			t.Fatalf("unexpected command call: %v", args)
+			return RunResult{}, nil
+		}},
+		DisableWakeScheduler:  true,
+		DisableLeaseRenewLoop: true,
+	})
+	service.state.boundAddresses = []string{"agent-deck/self"}
+	service.state.defaultSender = "agent-deck/self"
+	service.state.autoBindAttempted = true
+
+	send := callServiceTool(t, service, "mailbox_send", map[string]any{
+		"to_address": "agent-deck/self",
+		"subject":    "active lease",
+		"body":       "body",
+	})
+	deliveryID := send["delivery_id"].(string)
+	firstRecv := callServiceTool(t, service, "mailbox_recv", map[string]any{
+		"addresses": []string{"agent-deck/self"},
+	})
+	firstMessage := firstRecv["delivery"].(map[string]any)["messages"].([]any)[0].(map[string]any)
+	leaseToken := firstMessage["lease_token"].(string)
+
+	startedAt := time.Now()
+	secondRecv := callServiceTool(t, service, "mailbox_recv", map[string]any{
+		"addresses": []string{"agent-deck/self"},
+		"timeout":   "2s",
+	})
+	if elapsed := time.Since(startedAt); elapsed > 500*time.Millisecond {
+		t.Fatalf("recv elapsed = %s, want active lease fallback before blocking wait", elapsed)
 	}
-	var received map[string]any
-	if err := json.Unmarshal(encodedDelivery, &received); err != nil {
-		t.Fatalf("unmarshal recv delivery: %v", err)
+	if got := secondRecv["status"]; got != "active_leases" {
+		t.Fatalf("recv status = %v, want active_leases", got)
 	}
-	messages := received["messages"].([]any)
-	if len(messages) != 1 {
-		t.Fatalf("recv messages = %d, want 1", len(messages))
+	if _, ok := secondRecv["active_leases"]; ok {
+		t.Fatalf("active_leases unexpectedly present: %v", secondRecv["active_leases"])
 	}
-	message := messages[0].(map[string]any)
-	if got := message["delivery_id"]; got != deliveryID {
-		t.Fatalf("recv delivery_id = %v, want %s", got, deliveryID)
+	claimedDeliveryIDs := secondRecv["claimed_delivery_ids"].([]any)
+	if len(claimedDeliveryIDs) != 1 {
+		t.Fatalf("claimed_delivery_ids = %v, want one id", claimedDeliveryIDs)
 	}
-	if got := message["body"]; got != "body" {
-		t.Fatalf("recv body = %v, want body", got)
+	if got := claimedDeliveryIDs[0]; got != deliveryID {
+		t.Fatalf("claimed_delivery_ids[0] = %v, want %s", got, deliveryID)
 	}
-	if !service.activeLeases.hasTrackedLeases() {
-		t.Fatal("recv with timeout did not track active lease")
+	if _, ok := secondRecv["lease_token"]; ok {
+		t.Fatalf("recv hint unexpectedly included lease_token")
+	}
+	if _, ok := secondRecv["body"]; ok {
+		t.Fatalf("recv hint unexpectedly included body")
+	}
+
+	history := callServiceTool(t, service, "mailbox_claim_history", map[string]any{
+		"delivery_id":         deliveryID,
+		"include_lease_token": true,
+	})
+	items := history["items"].([]any)
+	if len(items) != 1 {
+		t.Fatalf("claim history items = %d, want 1", len(items))
+	}
+	item := items[0].(map[string]any)
+	if got := item["lease_token"]; got != leaseToken {
+		t.Fatalf("claim history lease_token = %v, want original token", got)
+	}
+	if _, ok := item["body"]; ok {
+		t.Fatalf("claim history unexpectedly included body")
+	}
+}
+
+func TestMailboxRecvKnownDeliveryIDsSuppressActiveLeaseReport(t *testing.T) {
+	t.Parallel()
+
+	stateDir := filepath.Join(t.TempDir(), "mailbox-state")
+	service := newService(Options{
+		StateDir: stateDir,
+		CommandRunner: &fakeRunner{t: t, handler: func(args []string, input string) (RunResult, error) {
+			t.Fatalf("unexpected command call: %v", args)
+			return RunResult{}, nil
+		}},
+		DisableWakeScheduler:  true,
+		DisableLeaseRenewLoop: true,
+	})
+	service.state.boundAddresses = []string{"agent-deck/self"}
+	service.state.defaultSender = "agent-deck/self"
+	service.state.autoBindAttempted = true
+
+	send := callServiceTool(t, service, "mailbox_send", map[string]any{
+		"to_address": "agent-deck/self",
+		"subject":    "known active lease",
+		"body":       "body",
+	})
+	deliveryID := send["delivery_id"].(string)
+	callServiceTool(t, service, "mailbox_recv", map[string]any{
+		"addresses": []string{"agent-deck/self"},
+	})
+
+	secondRecv := callServiceTool(t, service, "mailbox_recv", map[string]any{
+		"addresses":          []string{"agent-deck/self"},
+		"known_delivery_ids": []string{deliveryID},
+		"timeout":            "25ms",
+	})
+	if got := secondRecv["status"]; got != "no_message" {
+		t.Fatalf("recv status = %v, want no_message", got)
+	}
+	if _, ok := secondRecv["active_leases"]; ok {
+		t.Fatalf("active_leases unexpectedly present: %v", secondRecv["active_leases"])
 	}
 }
 
@@ -2774,6 +2893,7 @@ func TestMailboxRecvWithTimeoutClaimsWithParentContext(t *testing.T) {
 			t.Fatalf("unexpected command call: %v", args)
 			return RunResult{}, nil
 		}},
+		DisableLeaseRenewLoop: true,
 	})
 	service.state.boundAddresses = []string{"agent-deck/self"}
 	service.state.defaultSender = "agent-deck/self"
@@ -2797,15 +2917,14 @@ func TestMailboxRecvWithTimeoutReturnsNoMessage(t *testing.T) {
 	callCount := 0
 	mailboxService := &fakeMailboxService{t: t}
 	mailboxService.hasVisibleDeliveryFunc = func(ctx context.Context, params mailbox.WaitParams) (bool, error) {
-		callCount++
-		if !reflect.DeepEqual(params.Addresses, []string{"agent-deck/self"}) {
-			t.Fatalf("HasVisibleDelivery addresses = %v, want [agent-deck/self]", params.Addresses)
-		}
 		return false, nil
 	}
 	mailboxService.receiveBatchFunc = func(_ context.Context, params mailbox.ReceiveBatchParams) (mailbox.ReceiveResult, error) {
-		t.Fatalf("ReceiveBatch called without visible delivery: %+v", params)
-		return mailbox.ReceiveResult{}, nil
+		callCount++
+		if !reflect.DeepEqual(params.Addresses, []string{"agent-deck/self"}) {
+			t.Fatalf("ReceiveBatch addresses = %v, want [agent-deck/self]", params.Addresses)
+		}
+		return mailbox.ReceiveResult{}, mailbox.ErrNoMessage
 	}
 
 	service := newService(Options{
@@ -2826,8 +2945,9 @@ func TestMailboxRecvWithTimeoutReturnsNoMessage(t *testing.T) {
 	if got := output["status"]; got != "no_message" {
 		t.Fatalf("recv status = %v, want no_message", got)
 	}
-	if callCount == 0 {
-		t.Fatal("ReceiveBatch was not called")
+	assertHasRecvTimeoutIgnoredWarning(t, output)
+	if callCount != 1 {
+		t.Fatalf("ReceiveBatch calls = %d, want 1", callCount)
 	}
 	if service.activeLeases.hasTrackedLeases() {
 		t.Fatal("no-message recv tracked active lease")
@@ -2839,15 +2959,10 @@ func TestMailboxRecvWithTimeoutBoundsAvailabilityCheck(t *testing.T) {
 
 	mailboxService := &fakeMailboxService{t: t}
 	mailboxService.hasVisibleDeliveryFunc = func(ctx context.Context, params mailbox.WaitParams) (bool, error) {
-		if _, hasDeadline := ctx.Deadline(); !hasDeadline {
-			return false, nil
-		}
-		<-ctx.Done()
-		return false, ctx.Err()
+		return false, nil
 	}
 	mailboxService.receiveBatchFunc = func(_ context.Context, params mailbox.ReceiveBatchParams) (mailbox.ReceiveResult, error) {
-		t.Fatalf("ReceiveBatch called after availability timeout: %+v", params)
-		return mailbox.ReceiveResult{}, nil
+		return mailbox.ReceiveResult{}, mailbox.ErrNoMessage
 	}
 
 	service := newService(Options{
@@ -2870,7 +2985,7 @@ func TestMailboxRecvWithTimeoutBoundsAvailabilityCheck(t *testing.T) {
 		t.Fatalf("recv status = %v, want no_message", got)
 	}
 	if elapsed := time.Since(startedAt); elapsed > 500*time.Millisecond {
-		t.Fatalf("recv timeout elapsed = %s, want bounded by availability timeout", elapsed)
+		t.Fatalf("recv timeout elapsed = %s, want immediate non-blocking receive", elapsed)
 	}
 }
 
@@ -3313,24 +3428,8 @@ func TestMailboxRecvAsPersonWithTimeoutUsesGroupWaitThenRecv(t *testing.T) {
 	recvCalled := false
 	mailboxService.waitGroupMessageFunc = func(ctx context.Context, params mailbox.GroupWaitParams) (mailbox.GroupListedMessage, error) {
 		waitCalled = true
-		if _, hasDeadline := ctx.Deadline(); !hasDeadline {
-			t.Fatal("WaitGroupMessage got parent context, want timeout context")
-		}
-		if params.Address != "group/review" || params.Person != "alice" || params.Timeout != 0 {
-			t.Fatalf("WaitGroupMessage params = %+v", params)
-		}
-		return mailbox.GroupListedMessage{
-			MessageID:        "msg_group",
-			GroupID:          "grp_1",
-			GroupAddress:     "group/review",
-			Person:           "alice",
-			MessageCreatedAt: "2026-04-18T00:00:00Z",
-			Subject:          "review",
-			ContentType:      "text/plain",
-			Read:             false,
-			ReadCount:        0,
-			EligibleCount:    1,
-		}, nil
+		t.Fatalf("WaitGroupMessage called by non-blocking recv: %+v", params)
+		return mailbox.GroupListedMessage{}, nil
 	}
 	mailboxService.receiveGroupMessageFunc = func(ctx context.Context, params mailbox.GroupReceiveParams) (mailbox.GroupReceivedMessage, error) {
 		recvCalled = true
@@ -3378,12 +3477,13 @@ func TestMailboxRecvAsPersonWithTimeoutUsesGroupWaitThenRecv(t *testing.T) {
 	if got := message["body"]; got != "body" {
 		t.Fatalf("body = %v, want body", got)
 	}
-	if !waitCalled {
-		t.Fatal("WaitGroupMessage was not called")
+	if waitCalled {
+		t.Fatal("WaitGroupMessage was called by non-blocking recv")
 	}
 	if !recvCalled {
 		t.Fatal("ReceiveGroupMessage was not called")
 	}
+	assertHasRecvTimeoutIgnoredWarning(t, recv)
 	if service.activeLeases.hasTrackedLeases() {
 		t.Fatal("group recv tracked a personal delivery lease")
 	}
@@ -5690,6 +5790,33 @@ func callServiceToolWithoutStatusBootstrap(t *testing.T, service *Service, name 
 	return callTool(t, service.Server(), name, args)
 }
 
+func readMCPDeliveryEventDetail(t *testing.T, stateDir, deliveryID, eventType string) map[string]any {
+	t.Helper()
+
+	runtime, err := mailbox.OpenRuntime(context.Background(), stateDir)
+	if err != nil {
+		t.Fatalf("OpenRuntime() error = %v", err)
+	}
+	defer runtime.Close()
+
+	var raw string
+	if err := runtime.DB().QueryRow(`
+SELECT detail_json
+FROM events
+WHERE delivery_id = ? AND event_type = ?
+ORDER BY rowid DESC
+LIMIT 1
+`, deliveryID, eventType).Scan(&raw); err != nil {
+		t.Fatalf("QueryRow(event detail) error = %v", err)
+	}
+
+	var detail map[string]any
+	if err := json.Unmarshal([]byte(raw), &detail); err != nil {
+		t.Fatalf("json.Unmarshal(event detail) error = %v; raw = %q", err, raw)
+	}
+	return detail
+}
+
 func callTool(t *testing.T, server *mcp.Server, name string, args map[string]any) map[string]any {
 	t.Helper()
 
@@ -5835,6 +5962,20 @@ func assertHasInvalidToolSessionEnvWarning(t *testing.T, output map[string]any, 
 	t.Fatalf("warnings = %#v, want invalid %s warning", warnings, envName)
 }
 
+func assertHasRecvTimeoutIgnoredWarning(t *testing.T, output map[string]any) {
+	t.Helper()
+	warnings, ok := output["warnings"].([]any)
+	if !ok {
+		t.Fatalf("warnings = %#v, want warning list", output["warnings"])
+	}
+	for _, warning := range warnings {
+		if strings.Contains(fmt.Sprint(warning), "mailbox_recv ignores timeout") {
+			return
+		}
+	}
+	t.Fatalf("warnings = %#v, want recv timeout ignored warning", warnings)
+}
+
 func requiresMailboxStatusToolName(name string) bool {
 	for _, required := range requiresMailboxStatusToolNames() {
 		if name == required {
@@ -5851,6 +5992,7 @@ func requiresMailboxStatusToolNames() []string {
 		"mailbox_send",
 		"mailbox_forward",
 		"mailbox_recv",
+		"mailbox_claim_history",
 		"mailbox_list",
 		"mailbox_read",
 		"mailbox_ack",

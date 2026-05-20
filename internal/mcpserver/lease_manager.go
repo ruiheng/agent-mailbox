@@ -9,9 +9,16 @@ import (
 )
 
 type activeLease struct {
-	DeliveryID     string
-	LeaseToken     string
-	LeaseExpiresAt string
+	DeliveryID       string
+	RecipientAddress string
+	LeaseToken       string
+	LeaseExpiresAt   string
+	Subject          string
+	ContentType      string
+	ClaimedAt        string
+	LastRenewedAt    string
+	Status           string
+	TerminalAt       string
 }
 
 type leaseRenewalFailure struct {
@@ -31,6 +38,7 @@ func (e *leaseRenewalFailure) Unwrap() error {
 type activeLeaseManager struct {
 	mu        sync.Mutex
 	leases    map[string]activeLease
+	history   map[string]activeLease
 	failures  map[string]leaseRenewalFailure
 	lastError error
 }
@@ -38,25 +46,33 @@ type activeLeaseManager struct {
 func newActiveLeaseManager() *activeLeaseManager {
 	return &activeLeaseManager{
 		leases:   map[string]activeLease{},
+		history:  map[string]activeLease{},
 		failures: map[string]leaseRenewalFailure{},
 	}
 }
 
-func (m *activeLeaseManager) trackReceive(result mailbox.ReceiveResult) {
+func (m *activeLeaseManager) trackReceive(result mailbox.ReceiveResult, claimedAt string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
 	for _, message := range result.Messages {
-		m.leases[message.DeliveryID] = activeLease{
-			DeliveryID:     message.DeliveryID,
-			LeaseToken:     message.LeaseToken,
-			LeaseExpiresAt: message.LeaseExpiresAt,
+		lease := activeLease{
+			DeliveryID:       message.DeliveryID,
+			RecipientAddress: message.RecipientAddress,
+			LeaseToken:       message.LeaseToken,
+			LeaseExpiresAt:   message.LeaseExpiresAt,
+			Subject:          message.Subject,
+			ContentType:      message.ContentType,
+			ClaimedAt:        claimedAt,
+			Status:           "active",
 		}
+		m.leases[message.DeliveryID] = lease
+		m.history[message.DeliveryID] = lease
 		delete(m.failures, message.DeliveryID)
 	}
 }
 
-func (m *activeLeaseManager) updateRenewed(result mailbox.LeaseRenewResult) {
+func (m *activeLeaseManager) updateRenewed(result mailbox.LeaseRenewResult, renewedAt string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -66,18 +82,30 @@ func (m *activeLeaseManager) updateRenewed(result mailbox.LeaseRenewResult) {
 	}
 	lease.LeaseToken = result.LeaseToken
 	lease.LeaseExpiresAt = result.LeaseExpiresAt
+	lease.LastRenewedAt = renewedAt
 	m.leases[result.DeliveryID] = lease
+	if history, ok := m.history[result.DeliveryID]; ok {
+		history.LeaseToken = result.LeaseToken
+		history.LeaseExpiresAt = result.LeaseExpiresAt
+		history.LastRenewedAt = renewedAt
+		m.history[result.DeliveryID] = history
+	}
 	delete(m.failures, result.DeliveryID)
 	if len(m.failures) == 0 {
 		m.lastError = nil
 	}
 }
 
-func (m *activeLeaseManager) remove(deliveryID string) {
+func (m *activeLeaseManager) markTerminal(deliveryID, status, terminalAt string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	delete(m.leases, deliveryID)
 	delete(m.failures, deliveryID)
+	if history, ok := m.history[deliveryID]; ok {
+		history.Status = status
+		history.TerminalAt = terminalAt
+		m.history[deliveryID] = history
+	}
 }
 
 func (m *activeLeaseManager) snapshot() []activeLease {
@@ -86,6 +114,20 @@ func (m *activeLeaseManager) snapshot() []activeLease {
 
 	leases := make([]activeLease, 0, len(m.leases))
 	for _, lease := range m.leases {
+		leases = append(leases, lease)
+	}
+	return leases
+}
+
+func (m *activeLeaseManager) historySnapshot(includeTerminal bool) []activeLease {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	leases := make([]activeLease, 0, len(m.history))
+	for _, lease := range m.history {
+		if !includeTerminal && lease.Status != "active" {
+			continue
+		}
 		leases = append(leases, lease)
 	}
 	return leases
@@ -104,6 +146,10 @@ func (m *activeLeaseManager) markRenewalFailure(lease activeLease, cause error) 
 	definitive := renewalFailureDefinitive(cause)
 	if definitive {
 		delete(m.leases, lease.DeliveryID)
+		if history, ok := m.history[lease.DeliveryID]; ok {
+			history.Status = "renewal_failed"
+			m.history[lease.DeliveryID] = history
+		}
 	}
 	failure := &leaseRenewalFailure{
 		DeliveryID: lease.DeliveryID,
