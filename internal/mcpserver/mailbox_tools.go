@@ -546,13 +546,14 @@ func parseOptionalMailboxTimeout(timeoutText string) (time.Duration, error) {
 }
 
 func (s *Service) receivePersonalWithOptionalWait(ctx context.Context, addresses []string, timeout time.Duration) (mailbox.ReceiveResult, error) {
+	claimMetadata := s.receiveClaimMetadata(addresses)
 	return withMailboxService(ctx, s.mailboxServices, func(service mailboxService) (mailbox.ReceiveResult, error) {
 		receiveOnce := func(attemptCtx context.Context) (mailbox.ReceiveResult, error) {
 			// MCP intentionally claims work with a short liveness window and relies on
 			// in-process renewals while this Service instance is alive. This keeps
 			// abandoned work reclaimable quickly after MCP death or long stalls instead
 			// of inheriting the mailbox core's legacy 5m receive lease.
-			return service.ReceiveBatchWithLeaseTTL(attemptCtx, mailbox.ReceiveBatchParams{
+			return service.ReceiveBatchWithLeaseTTL(mailbox.WithClaimMetadata(attemptCtx, claimMetadata), mailbox.ReceiveBatchParams{
 				Addresses: addresses,
 				Max:       1,
 			}, s.mcpLeaseTTL)
@@ -565,6 +566,18 @@ func (s *Service) receivePersonalWithOptionalWait(ctx context.Context, addresses
 		}
 		return pollUntilMailboxMessage(ctx, timeout, waitUntilVisible, receiveOnce)
 	})
+}
+
+func (s *Service) receiveClaimMetadata(addresses []string) mailbox.ClaimMetadata {
+	snapshot := s.sessions.snapshotState()
+	return mailbox.ClaimMetadata{
+		Source:             "mcp",
+		Tool:               "mailbox_recv",
+		BoundAddresses:     addresses,
+		AgentDeckSessionID: snapshot.DetectedAgentDeckSession,
+		AgentSessionID:     snapshot.DetectedAgentSession,
+		Workdir:            snapshot.DefaultWorkdir,
+	}
 }
 
 func (s *Service) receiveGroupWithOptionalWait(ctx context.Context, address, person string, timeout time.Duration) (mailbox.GroupReceivedMessage, error) {

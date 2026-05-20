@@ -196,15 +196,20 @@ func (a *App) prepareRecvCommand(args []string) (preparedCommand, error) {
 			return a.writeGroupReceiveOutput(format, full, message)
 		}
 
+		claimCtx := WithClaimMetadata(ctx, ClaimMetadata{
+			Source:         "cli",
+			Tool:           "agent-mailbox recv",
+			BoundAddresses: normalizedAddresses,
+		})
 		if !maxProvided {
-			message, err := store.Receive(ctx, ReceiveParams{Addresses: normalizedAddresses})
+			message, err := store.Receive(claimCtx, ReceiveParams{Addresses: normalizedAddresses})
 			if err != nil {
 				return err
 			}
 			return a.writeReceiveOutput(format, full, message)
 		}
 
-		result, err := ops.ReceiveBatch(ctx, params)
+		result, err := ops.ReceiveBatch(claimCtx, params)
 		if err != nil {
 			return err
 		}

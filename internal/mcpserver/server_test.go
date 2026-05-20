@@ -2606,6 +2606,17 @@ func TestMailboxLifecycleToolsUseDirectMailboxService(t *testing.T) {
 	if message["body"] != "body" {
 		t.Fatalf("recv body = %v, want body", message["body"])
 	}
+	claimDetail := readMCPDeliveryEventDetail(t, stateDir, deliveryID, "delivery_leased")
+	if claimDetail["claim_source"] != "mcp" {
+		t.Fatalf("claim_source = %v, want mcp", claimDetail["claim_source"])
+	}
+	if claimDetail["claim_tool"] != "mailbox_recv" {
+		t.Fatalf("claim_tool = %v, want mailbox_recv", claimDetail["claim_tool"])
+	}
+	addresses, ok := claimDetail["claim_bound_addresses"].([]any)
+	if !ok || len(addresses) != 1 || addresses[0] != "agent-deck/self" {
+		t.Fatalf("claim_bound_addresses = %#v, want [agent-deck/self]", claimDetail["claim_bound_addresses"])
+	}
 
 	ack := callServiceTool(t, service, "mailbox_ack", map[string]any{
 		"delivery_id": deliveryID,
@@ -5319,6 +5330,33 @@ func callServiceTool(t *testing.T, service *Service, name string, args map[strin
 func callServiceToolWithoutStatusBootstrap(t *testing.T, service *Service, name string, args map[string]any) map[string]any {
 	t.Helper()
 	return callTool(t, service.Server(), name, args)
+}
+
+func readMCPDeliveryEventDetail(t *testing.T, stateDir, deliveryID, eventType string) map[string]any {
+	t.Helper()
+
+	runtime, err := mailbox.OpenRuntime(context.Background(), stateDir)
+	if err != nil {
+		t.Fatalf("OpenRuntime() error = %v", err)
+	}
+	defer runtime.Close()
+
+	var raw string
+	if err := runtime.DB().QueryRow(`
+SELECT detail_json
+FROM events
+WHERE delivery_id = ? AND event_type = ?
+ORDER BY rowid DESC
+LIMIT 1
+`, deliveryID, eventType).Scan(&raw); err != nil {
+		t.Fatalf("QueryRow(event detail) error = %v", err)
+	}
+
+	var detail map[string]any
+	if err := json.Unmarshal([]byte(raw), &detail); err != nil {
+		t.Fatalf("json.Unmarshal(event detail) error = %v; raw = %q", err, raw)
+	}
+	return detail
 }
 
 func callTool(t *testing.T, server *mcp.Server, name string, args map[string]any) map[string]any {

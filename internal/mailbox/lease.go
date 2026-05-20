@@ -496,12 +496,7 @@ WHERE delivery_id = ?
 		}
 
 		address := scope.addressByEndpointID[candidate.RecipientEndpointID]
-		if err := insertDeliveryEvent(ctx, tx, "delivery_leased", candidate.RecipientEndpointID, candidate.MessageID, candidate.DeliveryID, map[string]any{
-			"previous_state":    candidate.State,
-			"recipient_address": address,
-			"lease_expires_at":  leaseExpiresAt,
-			"reclaimed":         candidate.State == "leased",
-		}, nowText); err != nil {
+		if err := insertDeliveryEvent(ctx, tx, "delivery_leased", candidate.RecipientEndpointID, candidate.MessageID, candidate.DeliveryID, deliveryLeasedEventDetail(ctx, candidate.State, address, leaseExpiresAt), nowText); err != nil {
 			_ = tx.Rollback()
 			return ReceivedMessage{}, err
 		}
@@ -546,6 +541,38 @@ WHERE delivery_id = ?
 		}
 		return message, nil
 	}
+}
+
+func deliveryLeasedEventDetail(ctx context.Context, previousState, recipientAddress, leaseExpiresAt string) map[string]any {
+	metadata := claimMetadataFromContext(ctx)
+	source := metadata.Source
+	if source == "" {
+		source = "unknown"
+	}
+	detail := map[string]any{
+		"previous_state":    previousState,
+		"recipient_address": recipientAddress,
+		"lease_expires_at":  leaseExpiresAt,
+		"reclaimed":         previousState == "leased",
+		"claim_source":      source,
+		"claim_pid":         os.Getpid(),
+	}
+	if metadata.Tool != "" {
+		detail["claim_tool"] = metadata.Tool
+	}
+	if len(metadata.BoundAddresses) > 0 {
+		detail["claim_bound_addresses"] = metadata.BoundAddresses
+	}
+	if metadata.AgentDeckSessionID != "" {
+		detail["claim_agent_deck_session_id"] = metadata.AgentDeckSessionID
+	}
+	if metadata.AgentSessionID != "" {
+		detail["claim_agent_session_id"] = metadata.AgentSessionID
+	}
+	if metadata.Workdir != "" {
+		detail["claim_workdir"] = metadata.Workdir
+	}
+	return detail
 }
 
 func waitForClaimRetry(ctx context.Context) error {
