@@ -387,13 +387,17 @@ func (m *sessionManager) detectCurrentAgentDeckSessionID(ctx context.Context, co
 		}
 	}
 
-	if agentDeckSessionID == "" && codexSessionID != "" {
+	if envAgentDeckID == "" && codexSessionID != "" {
 		match, err := lookupAgentDeckSessionByCodexID(ctx, codexSessionID)
 		if err != nil {
 			return "", defaultWorkdir, probeCompleted, warnings, err
 		}
-		if match != nil {
-			agentDeckSessionID = match.SessionID
+		if match != nil && strings.TrimSpace(match.SessionID) != "" {
+			matchedSessionID := strings.TrimSpace(match.SessionID)
+			if agentDeckSessionID != "" && agentDeckSessionID != matchedSessionID {
+				warnings = append(warnings, fmt.Sprintf("agent-deck session current returned %q, but state database maps current codex session to %q; using codex-linked session", agentDeckSessionID, matchedSessionID))
+			}
+			agentDeckSessionID = matchedSessionID
 			if strings.TrimSpace(match.ProjectPath) != "" && defaultWorkdir == "" {
 				defaultWorkdir = strings.TrimSpace(match.ProjectPath)
 			}

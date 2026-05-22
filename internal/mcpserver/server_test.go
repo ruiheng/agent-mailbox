@@ -4880,6 +4880,57 @@ func TestAutoBindFindsAgentDeckSessionFromCodexStateDB(t *testing.T) {
 	}
 }
 
+func TestAutoBindPrefersCodexLinkedAgentDeckSessionOverAmbientCurrent(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("CODEX_THREAD_ID", "0123456789abcdef")
+	t.Setenv("AGENTDECK_INSTANCE_ID", "")
+	t.Setenv("AGENTDECK_PROFILE", "")
+	writeAgentDeckStateDB(t, home, "default", "deck-session-1", "/tmp/project", "0123456789abcdef")
+
+	runner := &fakeRunner{t: t}
+	runner.handler = func(args []string, _ string) (RunResult, error) {
+		switch strings.Join(args, "\x00") {
+		case strings.Join([]string{"agent-deck", "session", "current", "--json"}, "\x00"):
+			return RunResult{ExitCode: 0, Stdout: `{"id":"deck-session-2"}`}, nil
+		case strings.Join([]string{"agent-deck", "session", "show", "deck-session-1", "--json"}, "\x00"):
+			return RunResult{ExitCode: 1, Stderr: "not found"}, nil
+		case strings.Join([]string{"agent-deck", "session", "show", "deck-session-2", "--json"}, "\x00"):
+			t.Fatalf("should not resolve ambient agent-deck current session: %v", args)
+			return RunResult{}, nil
+		default:
+			t.Fatalf("unexpected command: %v", args)
+			return RunResult{}, nil
+		}
+	}
+
+	service := newService(Options{
+		MailboxServiceFactory: fakeMailboxServiceFactory{service: &fakeMailboxService{t: t}},
+		CommandRunner:         runner,
+		DisableWakeScheduler:  true,
+		DisableLeaseRenewLoop: true,
+	})
+	status := callServiceTool(t, service, "mailbox_status", nil)
+
+	if got := status["default_sender"]; got != "agent-deck/deck-session-1" {
+		t.Fatalf("default_sender = %v, want agent-deck/deck-session-1", got)
+	}
+	wantAddresses := []any{"agent-deck/deck-session-1", "codex/0123456789abcdef"}
+	if !reflect.DeepEqual(status["bound_addresses"], wantAddresses) {
+		t.Fatalf("bound_addresses = %v, want %v", status["bound_addresses"], wantAddresses)
+	}
+	warnings, ok := status["warnings"].([]any)
+	if !ok {
+		t.Fatalf("warnings = %#v, want warning list", status["warnings"])
+	}
+	for _, warning := range warnings {
+		if strings.Contains(fmt.Sprint(warning), "using codex-linked session") {
+			return
+		}
+	}
+	t.Fatalf("warnings = %#v, want ambient current mismatch warning", warnings)
+}
+
 func TestAutoBindSkipsBadAgentDeckDBAndFallsBackToCodexOnly(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
