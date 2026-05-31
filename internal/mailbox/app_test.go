@@ -1223,7 +1223,12 @@ func TestHelpCLIPathsDoNotCreateRuntimeState(t *testing.T) {
 		{
 			name:         "group help",
 			args:         []string{"group", "--help"},
-			wantContains: "Usage:\n  agent-mailbox group <subcommand> [options]",
+			wantContains: "  list                List group addresses",
+		},
+		{
+			name:         "group list help",
+			args:         []string{"group", "list", "--help"},
+			wantContains: "Usage:\n  agent-mailbox group list [--json | --yaml]",
 		},
 		{
 			name:         "group create help",

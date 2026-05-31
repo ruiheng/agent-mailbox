@@ -313,6 +313,27 @@ func TestGroupControlPlaneCLI(t *testing.T) {
 		t.Fatalf("group address = %q, want group/ops", group.Address)
 	}
 
+	listStdout := &bytes.Buffer{}
+	listApp := NewApp(strings.NewReader(""), listStdout, &bytes.Buffer{})
+	if err := listApp.RunWithStateDir(context.Background(), stateDir, []string{
+		"group",
+		"list",
+		"--json",
+	}); err != nil {
+		t.Fatalf("group list error = %v", err)
+	}
+
+	var groups []GroupRecord
+	if err := json.Unmarshal(listStdout.Bytes(), &groups); err != nil {
+		t.Fatalf("json.Unmarshal(group list) error = %v", err)
+	}
+	if len(groups) != 1 {
+		t.Fatalf("len(group list) = %d, want 1", len(groups))
+	}
+	if groups[0].Address != "group/ops" {
+		t.Fatalf("group list address = %q, want group/ops", groups[0].Address)
+	}
+
 	addStdout := &bytes.Buffer{}
 	addApp := NewApp(strings.NewReader(""), addStdout, &bytes.Buffer{})
 	if err := addApp.RunWithStateDir(context.Background(), stateDir, []string{

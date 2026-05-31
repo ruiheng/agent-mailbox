@@ -10,7 +10,7 @@ import (
 
 func (a *App) prepareGroupCommand(args []string) (preparedCommand, error) {
 	if len(args) == 0 {
-		return nil, errors.New("expected a group subcommand: create, add-member, remove-member, or members")
+		return nil, errors.New("expected a group subcommand: create, list, add-member, remove-member, or members")
 	}
 	if isHelpArg(args[0]) {
 		a.writeGroupHelp()
@@ -20,6 +20,8 @@ func (a *App) prepareGroupCommand(args []string) (preparedCommand, error) {
 	switch args[0] {
 	case "create":
 		return a.prepareGroupCreateCommand(args[1:])
+	case "list":
+		return a.prepareGroupListCommand(args[1:])
 	case "add-member":
 		return a.prepareGroupAddMemberCommand(args[1:])
 	case "remove-member":
@@ -29,6 +31,44 @@ func (a *App) prepareGroupCommand(args []string) (preparedCommand, error) {
 	default:
 		return nil, fmt.Errorf("unknown group subcommand %q", args[0])
 	}
+}
+
+func (a *App) prepareGroupListCommand(args []string) (preparedCommand, error) {
+	fs := flag.NewFlagSet("agent-mailbox group list", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+
+	var formats outputFlags
+	formats.register(fs, "emit JSON", "emit YAML")
+
+	if err := a.parseCommandFlags(fs, args, a.writeGroupListHelp); err != nil {
+		return nil, err
+	}
+	format, err := formats.resolve()
+	if err != nil {
+		return nil, err
+	}
+
+	return func(ctx context.Context, store *Store) error {
+		groups, err := store.ListGroups(ctx)
+		if err != nil {
+			return err
+		}
+		if format != outputFormatText {
+			return a.writeStructuredOutput(format, groups)
+		}
+		for _, group := range groups {
+			if _, err := fmt.Fprintf(
+				a.stdout,
+				"group_id=%s address=%s created_at=%s\n",
+				group.GroupID,
+				group.Address,
+				group.CreatedAt,
+			); err != nil {
+				return err
+			}
+		}
+		return nil
+	}, nil
 }
 
 func (a *App) prepareGroupCreateCommand(args []string) (preparedCommand, error) {
@@ -233,9 +273,21 @@ func (a *App) writeGroupHelp() {
 		"",
 		"Subcommands:",
 		"  create              Create a group address",
+		"  list                List group addresses",
 		"  add-member          Add a person to a group",
 		"  remove-member       Remove a person from a group",
 		"  members             List current and historical memberships",
+	})
+}
+
+func (a *App) writeGroupListHelp() {
+	writeHelp(a.stdout, []string{
+		"Usage:",
+		"  agent-mailbox group list [--json | --yaml]",
+		"",
+		"Options:",
+		"  --json              Emit JSON",
+		"  --yaml              Emit YAML",
 	})
 }
 
