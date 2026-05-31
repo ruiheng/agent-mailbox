@@ -337,6 +337,31 @@ ORDER BY gm.joined_at ASC, gm.membership_id ASC
 	return memberships, nil
 }
 
+func (s *Store) ListGroups(ctx context.Context) ([]GroupRecord, error) {
+	rows, err := s.readDB.QueryContext(ctx, `
+SELECT group_id, address, created_at
+FROM groups
+ORDER BY created_at ASC, address ASC
+`)
+	if err != nil {
+		return nil, fmt.Errorf("query groups: %w", err)
+	}
+	defer rows.Close()
+
+	records := make([]GroupRecord, 0)
+	for rows.Next() {
+		var record GroupRecord
+		if err := rows.Scan(&record.GroupID, &record.Address, &record.CreatedAt); err != nil {
+			return nil, fmt.Errorf("scan group row: %w", err)
+		}
+		records = append(records, record)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate groups: %w", err)
+	}
+	return records, nil
+}
+
 func (s *Store) AddGroupNotificationSubscriber(ctx context.Context, groupAddress, notifyAddress, person string) (GroupNotificationSubscriberRecord, error) {
 	rawGroupAddress := groupAddress
 	groupAddress, err := NormalizeGroupAddress(rawGroupAddress)
@@ -586,6 +611,123 @@ func (s *Store) ListGroupMessages(ctx context.Context, params GroupListParams) (
 	messages := make([]GroupListedMessage, 0, len(records))
 	for _, record := range records {
 		messages = append(messages, buildGroupListedMessage(scope.viewer, record))
+	}
+	return messages, nil
+}
+
+func (s *Store) ListGroupTranscript(ctx context.Context, params GroupTranscriptParams) ([]GroupTranscriptMessage, error) {
+	rawAddress := params.Address
+	groupAddress, err := NormalizeGroupAddress(rawAddress)
+	if err != nil {
+		if strings.TrimSpace(rawAddress) == "" {
+			return nil, errors.New("group address is required")
+		}
+		return nil, err
+	}
+
+	group, found, err := lookupGroupRecord(ctx, s.readDB, groupAddress)
+	if err != nil {
+		return nil, fmt.Errorf("load group %q: %w", groupAddress, err)
+	}
+	if !found {
+		return nil, fmt.Errorf("group %q: %w", groupAddress, ErrGroupNotFound)
+	}
+
+	rows, err := s.readDB.QueryContext(ctx, `
+SELECT
+  gm.message_id,
+  m.forwarded_message_id,
+  m.forwarded_from_address,
+  m.sender_endpoint_id,
+  (
+    SELECT sender_ea.address
+    FROM endpoint_addresses AS sender_ea
+    WHERE sender_ea.endpoint_id = m.sender_endpoint_id
+    ORDER BY sender_ea.created_at ASC, sender_ea.address ASC
+    LIMIT 1
+  ) AS sender_address,
+  gm.created_at,
+  m.subject,
+  m.content_type,
+  m.schema_version,
+  m.body_blob_ref,
+  m.body_size,
+  m.body_sha256,
+  (
+    SELECT COUNT(*)
+    FROM group_message_eligibility AS ge
+    JOIN group_reads AS gr
+      ON gr.message_id = ge.message_id
+     AND gr.person_id = ge.person_id
+    WHERE ge.message_id = gm.message_id
+  ) AS read_count,
+  gm.eligible_count
+FROM group_messages AS gm
+JOIN messages AS m ON m.message_id = gm.message_id
+WHERE gm.group_id = ?
+ORDER BY gm.created_at ASC, gm.message_id ASC
+`, group.GroupID)
+	if err != nil {
+		return nil, fmt.Errorf("query group transcript for %q: %w", group.Address, err)
+	}
+	defer rows.Close()
+
+	messages := make([]GroupTranscriptMessage, 0)
+	for rows.Next() {
+		var message GroupTranscriptMessage
+		var forwardedMessageID sql.NullString
+		var forwardedFromAddress sql.NullString
+		var senderEndpointID sql.NullString
+		var senderAddress sql.NullString
+		var bodyBlobRef string
+		var bodySize int64
+		var bodySHA256 string
+		if err := rows.Scan(
+			&message.MessageID,
+			&forwardedMessageID,
+			&forwardedFromAddress,
+			&senderEndpointID,
+			&senderAddress,
+			&message.MessageCreatedAt,
+			&message.Subject,
+			&message.ContentType,
+			&message.SchemaVersion,
+			&bodyBlobRef,
+			&bodySize,
+			&bodySHA256,
+			&message.ReadCount,
+			&message.EligibleCount,
+		); err != nil {
+			return nil, fmt.Errorf("scan group transcript row: %w", err)
+		}
+		body, err := s.readBlob(bodyBlobRef, bodySize, bodySHA256)
+		if err != nil {
+			return nil, err
+		}
+		message.GroupID = group.GroupID
+		message.GroupAddress = group.Address
+		message.Body = string(body)
+		message.DisplaySender = "unknown"
+		if forwardedMessageID.Valid {
+			message.ForwardedMessageID = &forwardedMessageID.String
+		}
+		if forwardedFromAddress.Valid {
+			message.ForwardedFromAddress = &forwardedFromAddress.String
+			message.DisplaySender = forwardedFromAddress.String
+		}
+		if senderEndpointID.Valid {
+			message.SenderEndpointID = &senderEndpointID.String
+		}
+		if senderAddress.Valid {
+			message.SenderAddress = &senderAddress.String
+			if message.DisplaySender == "unknown" {
+				message.DisplaySender = senderAddress.String
+			}
+		}
+		messages = append(messages, message)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate group transcript: %w", err)
 	}
 	return messages, nil
 }

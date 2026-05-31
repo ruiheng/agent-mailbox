@@ -28,6 +28,14 @@ func (o *Operations) ListGroupMessages(ctx context.Context, params GroupListPara
 	return o.store.ListGroupMessages(ctx, params)
 }
 
+func (o *Operations) ListGroups(ctx context.Context) ([]GroupRecord, error) {
+	return o.store.ListGroups(ctx)
+}
+
+func (o *Operations) ListGroupTranscript(ctx context.Context, params GroupTranscriptParams) ([]GroupTranscriptMessage, error) {
+	return o.store.ListGroupTranscript(ctx, params)
+}
+
 func (o *Operations) WaitGroupMessage(ctx context.Context, params GroupWaitParams) (GroupListedMessage, error) {
 	return o.store.WaitGroupMessage(ctx, params)
 }

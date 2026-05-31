@@ -1247,6 +1247,101 @@ func TestGroupReadCLIShapesStayExplicitWithAs(t *testing.T) {
 	}
 }
 
+func TestGroupTranscriptReadsBodiesWithoutMarkingRead(t *testing.T) {
+	t.Parallel()
+
+	runtime, err := OpenRuntime(context.Background(), filepath.Join(t.TempDir(), "mailbox-state"))
+	if err != nil {
+		t.Fatalf("OpenRuntime() error = %v", err)
+	}
+	defer runtime.Close()
+
+	store := runtime.Store()
+	group, err := store.CreateGroup(context.Background(), "group/transcript")
+	if err != nil {
+		t.Fatalf("CreateGroup() error = %v", err)
+	}
+	if _, err := store.AddGroupMember(context.Background(), group.Address, "alice"); err != nil {
+		t.Fatalf("AddGroupMember(alice) error = %v", err)
+	}
+	if _, err := store.AddGroupMember(context.Background(), group.Address, "bob"); err != nil {
+		t.Fatalf("AddGroupMember(bob) error = %v", err)
+	}
+
+	sent := mustSendGroupMessage(t, store, group.Address, "agent/alice", "first", "hello transcript")
+	messages, err := store.ListGroupTranscript(context.Background(), GroupTranscriptParams{Address: group.Address})
+	if err != nil {
+		t.Fatalf("ListGroupTranscript() error = %v", err)
+	}
+	if len(messages) != 1 {
+		t.Fatalf("len(ListGroupTranscript()) = %d, want 1", len(messages))
+	}
+	if messages[0].MessageID != sent.MessageID {
+		t.Fatalf("transcript message_id = %q, want %q", messages[0].MessageID, sent.MessageID)
+	}
+	if messages[0].Body != "hello transcript" {
+		t.Fatalf("transcript body = %q, want body", messages[0].Body)
+	}
+	if messages[0].DisplaySender != "agent/alice" {
+		t.Fatalf("display_sender = %q, want agent/alice", messages[0].DisplaySender)
+	}
+	if messages[0].ReadCount != 0 || messages[0].EligibleCount != 2 {
+		t.Fatalf("read counts = (%d, %d), want (0, 2)", messages[0].ReadCount, messages[0].EligibleCount)
+	}
+
+	var readCount int
+	if err := runtime.DB().QueryRow(`SELECT COUNT(*) FROM group_reads`).Scan(&readCount); err != nil {
+		t.Fatalf("count group_reads error = %v", err)
+	}
+	if readCount != 0 {
+		t.Fatalf("group_reads count = %d, want 0", readCount)
+	}
+}
+
+func TestGroupTranscriptDisplaySenderPrefersForwardedFromAddress(t *testing.T) {
+	t.Parallel()
+
+	runtime, err := OpenRuntime(context.Background(), filepath.Join(t.TempDir(), "mailbox-state"))
+	if err != nil {
+		t.Fatalf("OpenRuntime() error = %v", err)
+	}
+	defer runtime.Close()
+
+	store := runtime.Store()
+	group, err := store.CreateGroup(context.Background(), "group/forwarded-transcript")
+	if err != nil {
+		t.Fatalf("CreateGroup() error = %v", err)
+	}
+
+	_, err = store.Send(context.Background(), SendParams{
+		ToAddress:            group.Address,
+		FromAddress:          "agent/forwarder",
+		Subject:              "forwarded",
+		ContentType:          "text/plain",
+		SchemaVersion:        "v1",
+		ForwardedFromAddress: "agent/original",
+		Body:                 []byte("forwarded body"),
+		Group:                true,
+	})
+	if err != nil {
+		t.Fatalf("Send(forwarded group) error = %v", err)
+	}
+
+	messages, err := store.ListGroupTranscript(context.Background(), GroupTranscriptParams{Address: group.Address})
+	if err != nil {
+		t.Fatalf("ListGroupTranscript() error = %v", err)
+	}
+	if len(messages) != 1 {
+		t.Fatalf("len(ListGroupTranscript()) = %d, want 1", len(messages))
+	}
+	if messages[0].DisplaySender != "agent/original" {
+		t.Fatalf("display_sender = %q, want forwarded source", messages[0].DisplaySender)
+	}
+	if messages[0].SenderAddress == nil || *messages[0].SenderAddress != "agent/forwarder" {
+		t.Fatalf("sender_address = %v, want agent/forwarder", messages[0].SenderAddress)
+	}
+}
+
 func mustSendGroupMessage(t *testing.T, store *Store, toAddress, fromAddress, subject, body string) SendResult {
 	t.Helper()
 

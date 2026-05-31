@@ -87,6 +87,10 @@ type GroupListParams struct {
 	Person  string
 }
 
+type GroupTranscriptParams struct {
+	Address string
+}
+
 type ListedDelivery struct {
 	DeliveryID           string  `json:"delivery_id"`
 	MessageID            string  `json:"message_id"`
@@ -159,6 +163,24 @@ type GroupListedMessage struct {
 	SchemaVersion        string  `json:"schema_version"`
 	Read                 bool    `json:"read"`
 	FirstReadAt          *string `json:"first_read_at,omitempty"`
+	ReadCount            int     `json:"read_count"`
+	EligibleCount        int     `json:"eligible_count"`
+}
+
+type GroupTranscriptMessage struct {
+	MessageID            string  `json:"message_id"`
+	ForwardedMessageID   *string `json:"-"`
+	ForwardedFromAddress *string `json:"forwarded_from_address,omitempty"`
+	GroupID              string  `json:"group_id"`
+	GroupAddress         string  `json:"group_address"`
+	SenderEndpointID     *string `json:"sender_endpoint_id,omitempty"`
+	SenderAddress        *string `json:"sender_address,omitempty"`
+	DisplaySender        string  `json:"display_sender"`
+	MessageCreatedAt     string  `json:"message_created_at"`
+	Subject              string  `json:"subject"`
+	ContentType          string  `json:"content_type"`
+	SchemaVersion        string  `json:"schema_version"`
+	Body                 string  `json:"body"`
 	ReadCount            int     `json:"read_count"`
 	EligibleCount        int     `json:"eligible_count"`
 }

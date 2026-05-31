@@ -31,6 +31,18 @@ You can also override it per command:
 agent-mailbox --state-dir /tmp/mailbox-demo list --for workflow/reviewer/task-123
 ```
 
+## Web Transcript UI
+
+Run a local read-only UI for group mail:
+
+```bash
+agent-mailbox --state-dir /tmp/mailbox-demo web --group group/ops
+```
+
+By default it listens on `127.0.0.1:8765`. The UI reads group message bodies and
+streams updates without using `recv`, so it does not mark any participant's
+group messages as read.
+
 ## Typical Flow
 
 Send a message:

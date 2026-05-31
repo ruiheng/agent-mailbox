@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/ruiheng/agent-mailbox/internal/mailbox"
+	"github.com/ruiheng/agent-mailbox/internal/webui"
 )
 
 func TestRunRootHelpIncludesMCP(t *testing.T) {
@@ -22,6 +23,9 @@ func TestRunRootHelpIncludesMCP(t *testing.T) {
 	}
 	if !strings.Contains(stdout.String(), "mcp") {
 		t.Fatalf("root help = %q, want mcp command", stdout.String())
+	}
+	if !strings.Contains(stdout.String(), "web") {
+		t.Fatalf("root help = %q, want web command", stdout.String())
 	}
 }
 
@@ -111,6 +115,40 @@ func TestRunMCPForwardsStateDir(t *testing.T) {
 	}
 	if gotStateDir != stateDir {
 		t.Fatalf("mcp state dir = %q, want %q", gotStateDir, stateDir)
+	}
+}
+
+func TestRunWebForwardsOptions(t *testing.T) {
+	t.Parallel()
+
+	var got webui.Options
+	app := &App{
+		stdin:  strings.NewReader(""),
+		stdout: &bytes.Buffer{},
+		stderr: &bytes.Buffer{},
+		runWeb: func(_ context.Context, opts webui.Options) error {
+			got = opts
+			return nil
+		},
+	}
+
+	stateDir := t.TempDir()
+	if err := app.Run(context.Background(), []string{
+		"--state-dir", stateDir,
+		"web",
+		"--listen", "127.0.0.1:0",
+		"--group", "group/review",
+	}); err != nil {
+		t.Fatalf("Run(web) error = %v", err)
+	}
+	if got.StateDir != stateDir {
+		t.Fatalf("web state dir = %q, want %q", got.StateDir, stateDir)
+	}
+	if got.Listen != "127.0.0.1:0" {
+		t.Fatalf("web listen = %q, want 127.0.0.1:0", got.Listen)
+	}
+	if got.Group != "group/review" {
+		t.Fatalf("web group = %q, want group/review", got.Group)
 	}
 }
 

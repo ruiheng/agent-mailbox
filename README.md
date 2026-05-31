@@ -328,6 +328,17 @@ Group send keeps personal send semantics unchanged: plain `send --to <address>`
 still targets the personal queue path and fails if `<address>` is already a
 known group address.
 
+Open a local read-only transcript UI for group mail:
+
+```bash
+agent-mailbox --state-dir /tmp/mailbox-demo \
+  web --group group/ops
+```
+
+The web UI listens on `127.0.0.1:8765` by default and shows group messages
+without marking them read. Use `--listen 127.0.0.1:0` to let the OS choose a
+free local port.
+
 Forward a stored message to a new recipient by message id or delivery id:
 
 ```bash
