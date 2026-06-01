@@ -36,12 +36,13 @@ agent-mailbox --state-dir /tmp/mailbox-demo list --for workflow/reviewer/task-12
 Run a local read-only UI for group mail:
 
 ```bash
-agent-mailbox --state-dir /tmp/mailbox-demo web --group group/ops
+agent-mailbox --state-dir /tmp/mailbox-demo group web --group group/ops
 ```
 
-By default it listens on `127.0.0.1:8765`. The UI reads group message bodies and
-streams updates without using `recv`, so it does not mark any participant's
-group messages as read.
+By default it listens on `127.0.0.1:0`, so the OS chooses a free local port and
+the command prints the actual URL. The UI reads group message bodies and streams
+updates without using `recv`, so it does not mark any participant's group
+messages as read.
 
 ## Typical Flow
 

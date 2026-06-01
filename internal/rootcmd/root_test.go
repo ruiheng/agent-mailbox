@@ -24,8 +24,8 @@ func TestRunRootHelpIncludesMCP(t *testing.T) {
 	if !strings.Contains(stdout.String(), "mcp") {
 		t.Fatalf("root help = %q, want mcp command", stdout.String())
 	}
-	if !strings.Contains(stdout.String(), "web") {
-		t.Fatalf("root help = %q, want web command", stdout.String())
+	if strings.Contains(stdout.String(), "  web") {
+		t.Fatalf("root help = %q, want no top-level web command", stdout.String())
 	}
 }
 
@@ -118,7 +118,7 @@ func TestRunMCPForwardsStateDir(t *testing.T) {
 	}
 }
 
-func TestRunWebForwardsOptions(t *testing.T) {
+func TestRunGroupWebForwardsOptions(t *testing.T) {
 	t.Parallel()
 
 	var got webui.Options
@@ -135,11 +135,12 @@ func TestRunWebForwardsOptions(t *testing.T) {
 	stateDir := t.TempDir()
 	if err := app.Run(context.Background(), []string{
 		"--state-dir", stateDir,
+		"group",
 		"web",
 		"--listen", "127.0.0.1:0",
 		"--group", "group/review",
 	}); err != nil {
-		t.Fatalf("Run(web) error = %v", err)
+		t.Fatalf("Run(group web) error = %v", err)
 	}
 	if got.StateDir != stateDir {
 		t.Fatalf("web state dir = %q, want %q", got.StateDir, stateDir)
@@ -149,6 +150,21 @@ func TestRunWebForwardsOptions(t *testing.T) {
 	}
 	if got.Group != "group/review" {
 		t.Fatalf("web group = %q, want group/review", got.Group)
+	}
+}
+
+func TestRunGroupWebHelp(t *testing.T) {
+	t.Parallel()
+
+	var stdout bytes.Buffer
+	app := New(strings.NewReader(""), &stdout, &bytes.Buffer{})
+
+	err := app.Run(context.Background(), []string{"group", "web", "--help"})
+	if !errors.Is(err, mailbox.ErrHelpRequested) {
+		t.Fatalf("Run(group web --help) error = %v, want ErrHelpRequested", err)
+	}
+	if !strings.Contains(stdout.String(), "agent-mailbox [--state-dir PATH] group web") {
+		t.Fatalf("group web help = %q, want usage text", stdout.String())
 	}
 }
 

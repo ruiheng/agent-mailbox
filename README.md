@@ -332,12 +332,12 @@ Open a local read-only transcript UI for group mail:
 
 ```bash
 agent-mailbox --state-dir /tmp/mailbox-demo \
-  web --group group/ops
+  group web --group group/ops
 ```
 
-The web UI listens on `127.0.0.1:8765` by default and shows group messages
-without marking them read. Use `--listen 127.0.0.1:0` to let the OS choose a
-free local port.
+The web UI listens on `127.0.0.1:0` by default, so the OS chooses a free local
+port. It prints the actual URL on startup and shows group messages without
+marking them read. Use `--listen 127.0.0.1:8765` if you want a stable port.
 
 Forward a stored message to a new recipient by message id or delivery id:
 

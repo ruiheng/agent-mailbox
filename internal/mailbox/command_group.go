@@ -10,7 +10,7 @@ import (
 
 func (a *App) prepareGroupCommand(args []string) (preparedCommand, error) {
 	if len(args) == 0 {
-		return nil, errors.New("expected a group subcommand: create, list, add-member, remove-member, or members")
+		return nil, errors.New("expected a group subcommand: create, list, web, add-member, remove-member, or members")
 	}
 	if isHelpArg(args[0]) {
 		a.writeGroupHelp()
@@ -274,6 +274,7 @@ func (a *App) writeGroupHelp() {
 		"Subcommands:",
 		"  create              Create a group address",
 		"  list                List group addresses",
+		"  web                 Run the local read-only group transcript UI",
 		"  add-member          Add a person to a group",
 		"  remove-member       Remove a person from a group",
 		"  members             List current and historical memberships",

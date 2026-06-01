@@ -16,7 +16,7 @@ import (
 )
 
 const (
-	defaultListenAddress = "127.0.0.1:8765"
+	defaultListenAddress = "127.0.0.1:0"
 	ssePollInterval      = time.Second
 )
 
@@ -49,7 +49,7 @@ func Run(ctx context.Context, opts Options) error {
 	}
 
 	if opts.Stdout != nil {
-		fmt.Fprintf(opts.Stdout, "agent-mailbox web listening on http://%s\n", listener.Addr().String())
+		fmt.Fprintf(opts.Stdout, "agent-mailbox group web listening on http://%s\n", listener.Addr().String())
 	}
 
 	errCh := make(chan error, 1)

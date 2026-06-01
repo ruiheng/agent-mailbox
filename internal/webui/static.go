@@ -119,26 +119,66 @@ const indexHTML = `<!doctype html>
     }
     .error { color: var(--warn); }
     .message {
-      display: grid;
-      grid-template-columns: 180px minmax(0, 740px);
-      gap: 22px;
-      padding: 18px 0;
-      border-bottom: 1px solid var(--line);
+      max-width: 920px;
+      padding: 14px 0;
       animation: rise 160ms ease-out;
     }
-    .speaker {
+    .message-header {
+      display: grid;
+      grid-template-columns: minmax(150px, 0.9fr) minmax(0, 1.6fr) minmax(148px, auto) auto;
+      gap: 14px;
+      align-items: start;
+      padding: 12px 14px;
+      background: #e9e2d7;
+      border: 1px solid var(--line);
+      border-bottom: 0;
+      border-radius: 6px 6px 0 0;
+    }
+    .message-body {
+      position: relative;
+      padding: 16px 14px 18px;
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 0 0 6px 6px;
+    }
+    .copy-button {
+      position: absolute;
+      top: 10px;
+      right: 10px;
+      border: 1px solid var(--line);
+      border-radius: 5px;
+      background: #f6f4ef;
+      color: var(--muted);
+      cursor: pointer;
+      font-size: 12px;
+      line-height: 1;
+      padding: 6px 8px;
+    }
+    .copy-button:hover {
+      color: var(--ink);
+      border-color: #bfb6a8;
+    }
+    .header-field {
+      min-width: 0;
+    }
+    .header-label {
+      color: var(--muted);
+      font-size: 11px;
       font-weight: 700;
+      letter-spacing: 0;
+      text-transform: uppercase;
+      margin-bottom: 4px;
+    }
+    .header-value {
+      color: var(--ink);
+      font-size: 13px;
+      font-weight: 650;
       overflow-wrap: anywhere;
     }
-    .time {
+    .header-detail {
       color: var(--muted);
       font-size: 12px;
       margin-top: 5px;
-    }
-    .subject {
-      font-size: 13px;
-      color: var(--muted);
-      margin-bottom: 8px;
       overflow-wrap: anywhere;
     }
     .body {
@@ -146,11 +186,10 @@ const indexHTML = `<!doctype html>
       overflow-wrap: anywhere;
       line-height: 1.52;
       font-size: 15px;
+      padding-right: 62px;
     }
     .read {
-      color: var(--muted);
-      font-size: 12px;
-      margin-top: 10px;
+      white-space: nowrap;
     }
     @keyframes rise {
       from { opacity: 0; transform: translateY(6px); }
@@ -172,10 +211,11 @@ const indexHTML = `<!doctype html>
         width: auto;
       }
       header, .timeline { padding-left: 16px; padding-right: 16px; }
-      .message {
+      .message-header {
         grid-template-columns: 1fr;
         gap: 8px;
       }
+      .read { white-space: normal; }
       .title-row {
         align-items: flex-start;
         flex-direction: column;
@@ -296,23 +336,99 @@ const indexHTML = `<!doctype html>
       row.className = "message";
       const when = new Date(message.message_created_at);
       row.innerHTML = [
-        '<div>',
-          '<div class="speaker"></div>',
-          '<div class="time"></div>',
+        '<div class="message-header">',
+        '<div class="header-field">',
+          '<div class="header-label">From</div>',
+          '<div class="header-value from"></div>',
+          '<div class="header-detail via"></div>',
         '</div>',
-        '<div>',
-          '<div class="subject"></div>',
+        '<div class="header-field">',
+          '<div class="header-label">Subject</div>',
+          '<div class="header-value subject"></div>',
+        '</div>',
+        '<div class="header-field">',
+          '<div class="header-label">Time</div>',
+          '<div class="header-value time"></div>',
+        '</div>',
+        '<div class="header-field read">',
+          '<div class="header-label">Read</div>',
+          '<div class="header-value read-value"></div>',
+        '</div>',
+        '</div>',
+        '<div class="message-body">',
+          '<button class="copy-button" type="button">Copy</button>',
           '<div class="body"></div>',
-          '<div class="read"></div>',
-        '</div>'
+        '</div>',
       ].join("");
-      row.querySelector(".speaker").textContent = message.display_sender || "unknown";
-      row.querySelector(".time").textContent = isNaN(when) ? message.message_created_at : when.toLocaleString();
+      row.querySelector(".from").textContent = message.display_sender || "unknown";
+      const via = senderVia(message);
+      row.querySelector(".via").textContent = via ? "Via: " + via : "";
+      row.querySelector(".time").textContent = formatTimestamp(when, message.message_created_at);
       row.querySelector(".subject").textContent = message.subject || "(no subject)";
       row.querySelector(".body").textContent = message.body || "";
-      row.querySelector(".read").textContent = "read " + message.read_count + "/" + message.eligible_count;
+      row.querySelector(".read-value").textContent = message.read_count + "/" + message.eligible_count;
+      row.querySelector(".copy-button").addEventListener("click", (event) => {
+        copyBody(message.body || "", event.currentTarget);
+      });
       timelineEl.appendChild(row);
       timelineEl.scrollTop = timelineEl.scrollHeight;
+    }
+
+    function senderVia(message) {
+      if (!message.forwarded_from_address || !message.sender_address) return "";
+      if (message.forwarded_from_address === message.sender_address) return "";
+      return message.sender_address;
+    }
+
+    function formatTimestamp(date, fallback) {
+      if (isNaN(date)) return fallback || "";
+      const pad = (value) => String(value).padStart(2, "0");
+      return [
+        date.getFullYear(),
+        "-",
+        pad(date.getMonth() + 1),
+        "-",
+        pad(date.getDate()),
+        " ",
+        pad(date.getHours()),
+        ":",
+        pad(date.getMinutes()),
+        ":",
+        pad(date.getSeconds())
+      ].join("");
+    }
+
+    async function copyBody(text, button) {
+      try {
+        if (navigator.clipboard && window.isSecureContext) {
+          await navigator.clipboard.writeText(text);
+        } else {
+          fallbackCopy(text);
+        }
+        flashCopyButton(button, "Copied");
+      } catch (error) {
+        flashCopyButton(button, "Failed");
+      }
+    }
+
+    function fallbackCopy(text) {
+      const textarea = document.createElement("textarea");
+      textarea.value = text;
+      textarea.setAttribute("readonly", "");
+      textarea.style.position = "fixed";
+      textarea.style.top = "-1000px";
+      document.body.appendChild(textarea);
+      textarea.select();
+      document.execCommand("copy");
+      textarea.remove();
+    }
+
+    function flashCopyButton(button, label) {
+      const previous = button.textContent;
+      button.textContent = label;
+      window.setTimeout(() => {
+        button.textContent = previous;
+      }, 1100);
     }
 
     loadGroups().catch((error) => {
