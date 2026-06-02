@@ -200,6 +200,31 @@ function New-InstallVersion {
     return $version
 }
 
+function Resolve-InstallVersion {
+    param(
+        [string]$RequestedVersion,
+        [string]$VersionsRoot,
+        [bool]$AllowSuffix
+    )
+
+    $version = $RequestedVersion
+    $versionRoot = Join-Path $VersionsRoot $version
+    if (-not $AllowSuffix -or -not (Test-Path -LiteralPath $versionRoot)) {
+        return $version
+    }
+
+    $timestamp = Get-Date -Format "yyyyMMddHHmmssfff"
+    for ($attempt = 1; $attempt -le 100; $attempt++) {
+        $candidate = "$RequestedVersion-$timestamp-$attempt"
+        $candidateRoot = Join-Path $VersionsRoot $candidate
+        if (-not (Test-Path -LiteralPath $candidateRoot)) {
+            return $candidate
+        }
+    }
+
+    throw "Could not find an unused install version directory under '$VersionsRoot'."
+}
+
 function Move-FileReplacing {
     param(
         [string]$Source,
@@ -215,6 +240,17 @@ function Move-FileReplacing {
         return
     }
     [System.IO.File]::Move($Source, $Destination)
+}
+
+function Copy-FileReplacing {
+    param(
+        [string]$Source,
+        [string]$Destination
+    )
+
+    $tempPath = "$Destination.tmp-$PID"
+    Copy-Item -LiteralPath $Source -Destination $tempPath -Force
+    Move-FileReplacing -Source $tempPath -Destination $Destination
 }
 
 function Write-ActiveVersionManifest {
@@ -373,13 +409,16 @@ switch ($Target) {
     "install" {
         $destinationRoot = Resolve-InstallDestinationRoot -InstallDir $installDir -DestDir $destDir
         $destinationAppRoot = Resolve-InstallDestinationRoot -InstallDir $appRoot -DestDir $destDir
-        $version = New-InstallVersion
+        $requestedVersion = New-InstallVersion
+        $versionWasExplicit = -not [string]::IsNullOrWhiteSpace($env:VERSION)
         $versionsRoot = Join-Path $destinationAppRoot "versions"
+        $version = Resolve-InstallVersion -RequestedVersion $requestedVersion -VersionsRoot $versionsRoot -AllowSuffix (-not $versionWasExplicit)
         $versionRoot = Join-Path $versionsRoot $version
         $versionedBinary = Join-Path $versionRoot $binaryName
         $manifestPath = Join-Path $destinationAppRoot "active-version.json"
         $launcherDestination = Join-Path $destinationRoot $binaryName
         $launcherBuildOutput = Join-Path $binDir "agent-mailbox-launcher.exe"
+        $cliBuildOutput = Join-Path $binDir "agent-mailbox-install-$PID.exe"
         $manifestExecutable = Join-Path (Join-Path "versions" $version) $binaryName
         $existingLauncherCanContinue = Test-Path -LiteralPath $manifestPath
 
@@ -390,10 +429,15 @@ switch ($Target) {
         Initialize-GoCache
         Assert-CgoRequired
         Initialize-CgoToolchain
-        Invoke-Go @("build", "-o", $versionedBinary, $cmdPath)
-        Invoke-Go @("build", "-o", $launcherBuildOutput, $launcherCmdPath)
-        Install-Launcher -LauncherOutput $launcherBuildOutput -Destination $launcherDestination -ExistingLauncherCanContinue $existingLauncherCanContinue
-        Write-ActiveVersionManifest -ManifestPath $manifestPath -Version $version -Executable $manifestExecutable
+        try {
+            Invoke-Go @("build", "-o", $cliBuildOutput, $cmdPath)
+            Invoke-Go @("build", "-o", $launcherBuildOutput, $launcherCmdPath)
+            Copy-FileReplacing -Source $cliBuildOutput -Destination $versionedBinary
+            Install-Launcher -LauncherOutput $launcherBuildOutput -Destination $launcherDestination -ExistingLauncherCanContinue $existingLauncherCanContinue
+            Write-ActiveVersionManifest -ManifestPath $manifestPath -Version $version -Executable $manifestExecutable
+        } finally {
+            Remove-Item -LiteralPath $cliBuildOutput -Force -ErrorAction SilentlyContinue
+        }
 
         if ([string]::IsNullOrWhiteSpace($destDir)) {
             Remove-OldVersions -VersionsRoot $versionsRoot -ActiveVersion $version
