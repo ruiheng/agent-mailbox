@@ -42,7 +42,7 @@ agent-mailbox --state-dir /tmp/mailbox-demo group web --group group/ops
 By default it listens on `127.0.0.1:0`, so the OS chooses a free local port and
 the command prints the actual URL. The UI reads group message bodies and streams
 updates without using `recv`, so it does not mark any participant's group
-messages as read.
+messages as read. In an interactive terminal it offers to open or copy the URL.
 
 ## Typical Flow
 

@@ -1,6 +1,7 @@
 package webui
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"errors"
@@ -9,6 +10,8 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"os/exec"
+	"runtime"
 	"strings"
 	"time"
 
@@ -21,10 +24,14 @@ const (
 )
 
 type Options struct {
-	StateDir string
-	Listen   string
-	Group    string
-	Stdout   io.Writer
+	StateDir    string
+	Listen      string
+	Group       string
+	Stdin       io.Reader
+	Stdout      io.Writer
+	Interactive bool
+	OpenURL     func(context.Context, string) error
+	CopyText    func(context.Context, string) error
 }
 
 type Server struct {
@@ -48,14 +55,15 @@ func Run(ctx context.Context, opts Options) error {
 		return fmt.Errorf("listen on %q: %w", listen, err)
 	}
 
-	if opts.Stdout != nil {
-		fmt.Fprintf(opts.Stdout, "agent-mailbox group web listening on http://%s\n", listener.Addr().String())
-	}
+	webURL := "http://" + listener.Addr().String()
+	writeLine(opts.Stdout, "agent-mailbox group web listening on "+webURL)
 
 	errCh := make(chan error, 1)
 	go func() {
 		errCh <- server.Serve(listener)
 	}()
+
+	promptForURLAction(ctx, opts, webURL)
 
 	select {
 	case <-ctx.Done():
@@ -71,6 +79,94 @@ func Run(ctx context.Context, opts Options) error {
 		}
 		return err
 	}
+}
+
+func promptForURLAction(ctx context.Context, opts Options, webURL string) {
+	if !opts.Interactive || opts.Stdin == nil || opts.Stdout == nil {
+		return
+	}
+
+	fmt.Fprint(opts.Stdout, "Open URL [o], copy URL [c], or press Enter to continue: ")
+	choice, err := bufio.NewReader(opts.Stdin).ReadString('\n')
+	if err != nil && !errors.Is(err, io.EOF) {
+		writeLine(opts.Stdout, "unable to read choice: "+err.Error())
+		return
+	}
+	switch strings.ToLower(strings.TrimSpace(choice)) {
+	case "o", "open":
+		openURL := opts.OpenURL
+		if openURL == nil {
+			openURL = openURLWithSystemCommand
+		}
+		if err := openURL(ctx, webURL); err != nil {
+			writeLine(opts.Stdout, "unable to open URL: "+err.Error())
+			return
+		}
+		writeLine(opts.Stdout, "opened "+webURL)
+	case "c", "copy":
+		copyText := opts.CopyText
+		if copyText == nil {
+			copyText = copyTextWithSystemCommand
+		}
+		if err := copyText(ctx, webURL); err != nil {
+			writeLine(opts.Stdout, "unable to copy URL: "+err.Error())
+			return
+		}
+		writeLine(opts.Stdout, "copied "+webURL)
+	default:
+	}
+}
+
+func openURLWithSystemCommand(ctx context.Context, webURL string) error {
+	switch runtime.GOOS {
+	case "darwin":
+		return exec.CommandContext(ctx, "open", webURL).Start()
+	case "windows":
+		return exec.CommandContext(ctx, "rundll32", "url.dll,FileProtocolHandler", webURL).Start()
+	default:
+		path, err := exec.LookPath("xdg-open")
+		if err != nil {
+			return errors.New("xdg-open not found")
+		}
+		return exec.CommandContext(ctx, path, webURL).Start()
+	}
+}
+
+func copyTextWithSystemCommand(ctx context.Context, text string) error {
+	var candidates [][]string
+	switch runtime.GOOS {
+	case "darwin":
+		candidates = [][]string{{"pbcopy"}}
+	case "windows":
+		candidates = [][]string{{"clip"}}
+	default:
+		candidates = [][]string{{"wl-copy"}, {"xclip", "-selection", "clipboard"}, {"xsel", "--clipboard", "--input"}}
+	}
+	failures := make([]string, 0, len(candidates))
+	for _, candidate := range candidates {
+		path, err := exec.LookPath(candidate[0])
+		if err != nil {
+			continue
+		}
+		cmd := exec.CommandContext(ctx, path, candidate[1:]...)
+		cmd.Stdin = strings.NewReader(text)
+		if err := cmd.Run(); err != nil {
+			failures = append(failures, fmt.Sprintf("%s: %v", candidate[0], err))
+			continue
+		}
+		return nil
+	}
+	if len(failures) > 0 {
+		return fmt.Errorf("clipboard commands failed: %s", strings.Join(failures, "; "))
+	}
+	return errors.New("no clipboard command found")
+}
+
+func writeLine(w io.Writer, text string) {
+	if w == nil {
+		return
+	}
+	fmt.Fprintln(w, text)
 }
 
 func NewServer(stateDir, group string) http.Handler {

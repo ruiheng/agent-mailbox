@@ -337,7 +337,8 @@ agent-mailbox --state-dir /tmp/mailbox-demo \
 
 The web UI listens on `127.0.0.1:0` by default, so the OS chooses a free local
 port. It prints the actual URL on startup and shows group messages without
-marking them read. Use `--listen 127.0.0.1:8765` if you want a stable port.
+marking them read. In an interactive terminal it also offers to open or copy the
+URL. Use `--listen 127.0.0.1:8765` if you want a stable port.
 
 Forward a stored message to a new recipient by message id or delivery id:
 

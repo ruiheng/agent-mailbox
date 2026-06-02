@@ -6,6 +6,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"os"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/ruiheng/agent-mailbox/internal/mailbox"
@@ -104,15 +105,33 @@ func (a *App) runGroupWebCommand(ctx context.Context, stateDir string, args []st
 		return fmt.Errorf("group web does not accept positional arguments")
 	}
 	return a.runWeb(ctx, webui.Options{
-		StateDir: stateDir,
-		Listen:   listen,
-		Group:    group,
-		Stdout:   a.stdout,
+		StateDir:    stateDir,
+		Listen:      listen,
+		Group:       group,
+		Stdin:       a.stdin,
+		Stdout:      a.stdout,
+		Interactive: isInteractiveTerminal(a.stdin, a.stdout),
 	})
 }
 
 func isHelpArg(value string) bool {
 	return value == "-h" || value == "--help"
+}
+
+func isInteractiveTerminal(stdin io.Reader, stdout io.Writer) bool {
+	return isTerminalFile(stdin) && isTerminalFile(stdout)
+}
+
+func isTerminalFile(value any) bool {
+	file, ok := value.(*os.File)
+	if !ok {
+		return false
+	}
+	info, err := file.Stat()
+	if err != nil {
+		return false
+	}
+	return info.Mode()&os.ModeCharDevice != 0
 }
 
 func (a *App) writeRootHelp() {

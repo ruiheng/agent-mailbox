@@ -2,12 +2,15 @@ package webui
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -52,6 +55,95 @@ func TestGroupsEndpointListsGroups(t *testing.T) {
 	}
 	if len(payload.Groups) != 1 || payload.Groups[0].Address != "group/web" {
 		t.Fatalf("groups = %+v, want group/web", payload.Groups)
+	}
+}
+
+func TestPromptForURLActionOpensURL(t *testing.T) {
+	t.Parallel()
+
+	var stdout bytes.Buffer
+	var opened string
+	promptForURLAction(context.Background(), Options{
+		Stdin:       strings.NewReader("o\n"),
+		Stdout:      &stdout,
+		Interactive: true,
+		OpenURL: func(_ context.Context, webURL string) error {
+			opened = webURL
+			return nil
+		},
+	}, "http://127.0.0.1:12345")
+
+	if opened != "http://127.0.0.1:12345" {
+		t.Fatalf("opened URL = %q, want URL", opened)
+	}
+	if !strings.Contains(stdout.String(), "opened http://127.0.0.1:12345") {
+		t.Fatalf("stdout = %q, want opened notice", stdout.String())
+	}
+}
+
+func TestPromptForURLActionCopiesURL(t *testing.T) {
+	t.Parallel()
+
+	var copied string
+	promptForURLAction(context.Background(), Options{
+		Stdin:       strings.NewReader("c\n"),
+		Stdout:      &bytes.Buffer{},
+		Interactive: true,
+		CopyText: func(_ context.Context, text string) error {
+			copied = text
+			return nil
+		},
+	}, "http://127.0.0.1:23456")
+
+	if copied != "http://127.0.0.1:23456" {
+		t.Fatalf("copied URL = %q, want URL", copied)
+	}
+}
+
+func TestPromptForURLActionSkipsWhenNonInteractive(t *testing.T) {
+	t.Parallel()
+
+	called := false
+	promptForURLAction(context.Background(), Options{
+		Stdin:       strings.NewReader("o\n"),
+		Stdout:      &bytes.Buffer{},
+		Interactive: false,
+		OpenURL: func(context.Context, string) error {
+			called = true
+			return nil
+		},
+	}, "http://127.0.0.1:34567")
+
+	if called {
+		t.Fatal("non-interactive prompt called opener")
+	}
+}
+
+func TestCopyTextWithSystemCommandContinuesAfterCommandFailure(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("linux clipboard fallback order test")
+	}
+
+	binDir := t.TempDir()
+	outputPath := filepath.Join(t.TempDir(), "copied.txt")
+	if err := os.WriteFile(filepath.Join(binDir, "wl-copy"), []byte("#!/bin/sh\nexit 1\n"), 0o755); err != nil {
+		t.Fatalf("write wl-copy stub error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(binDir, "xclip"), []byte("#!/bin/sh\n/bin/cat > \"$COPY_OUT\"\n"), 0o755); err != nil {
+		t.Fatalf("write xclip stub error = %v", err)
+	}
+	t.Setenv("PATH", binDir)
+	t.Setenv("COPY_OUT", outputPath)
+
+	if err := copyTextWithSystemCommand(context.Background(), "http://127.0.0.1:12345"); err != nil {
+		t.Fatalf("copyTextWithSystemCommand() error = %v", err)
+	}
+	copied, err := os.ReadFile(outputPath)
+	if err != nil {
+		t.Fatalf("read copied output error = %v", err)
+	}
+	if string(copied) != "http://127.0.0.1:12345" {
+		t.Fatalf("copied text = %q, want URL", string(copied))
 	}
 }
 

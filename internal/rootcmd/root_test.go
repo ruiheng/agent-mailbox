@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"os"
 	"strings"
 	"testing"
 
@@ -150,6 +151,26 @@ func TestRunGroupWebForwardsOptions(t *testing.T) {
 	}
 	if got.Group != "group/review" {
 		t.Fatalf("web group = %q, want group/review", got.Group)
+	}
+	if got.Stdin == nil {
+		t.Fatal("web stdin = nil, want forwarded stdin")
+	}
+	if got.Interactive {
+		t.Fatal("web interactive = true for non-terminal test stdin, want false")
+	}
+}
+
+func TestInteractiveTerminalRequiresTerminalOutput(t *testing.T) {
+	t.Parallel()
+
+	input, err := os.Open(os.DevNull)
+	if err != nil {
+		t.Fatalf("open dev null error = %v", err)
+	}
+	defer input.Close()
+
+	if isInteractiveTerminal(input, &bytes.Buffer{}) {
+		t.Fatal("interactive terminal = true with non-terminal stdout, want false")
 	}
 }
 
