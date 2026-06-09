@@ -5025,6 +5025,7 @@ func TestAutoBindDoesNotChooseAgentDeckSessionFromStateDBByWorkdirAlone(t *testi
 		DisableWakeScheduler:  true,
 		DisableLeaseRenewLoop: true,
 	})
+	service.sessions.parentPID = func() int { return 1 }
 	service.state.defaultWorkdir = workdir
 
 	status := callServiceTool(t, service, "mailbox_status", nil)
@@ -5064,6 +5065,7 @@ func TestAutoBindComplementsCurrentAgentDeckSessionFromStateDBByWorkdir(t *testi
 		DisableWakeScheduler:  true,
 		DisableLeaseRenewLoop: true,
 	})
+	service.sessions.parentPID = func() int { return 1 }
 	service.state.defaultWorkdir = workdir
 
 	status := callServiceTool(t, service, "mailbox_status", nil)
@@ -5112,6 +5114,7 @@ func TestAutoBindUsesSessionShowPathBeforeStateDBWorkdirLookup(t *testing.T) {
 		DisableWakeScheduler:  true,
 		DisableLeaseRenewLoop: true,
 	})
+	service.sessions.parentPID = func() int { return 1 }
 
 	status := callServiceTool(t, service, "mailbox_status", nil)
 	wantAddresses := []any{"agent-deck/deck-session-1", "codex/0123456789abcdef"}
@@ -5166,6 +5169,7 @@ func TestAutoBindFindsCurrentSessionWhenNewerCodexSessionSharesWorkdir(t *testin
 		DisableWakeScheduler:  true,
 		DisableLeaseRenewLoop: true,
 	})
+	service.sessions.parentPID = func() int { return 1 }
 	service.state.defaultWorkdir = workdir
 
 	status := callServiceTool(t, service, "mailbox_status", nil)
@@ -5205,6 +5209,7 @@ func TestAutoBindDoesNotRetryStateDBAfterEmptyResultWithoutAgentDeckSignal(t *te
 		DisableWakeScheduler:  true,
 		DisableLeaseRenewLoop: true,
 	})
+	service.sessions.parentPID = func() int { return 1 }
 	service.state.defaultWorkdir = workdir
 
 	first := callServiceTool(t, service, "mailbox_status", nil)
@@ -5249,6 +5254,7 @@ func TestAutoBindRetriesAgentDeckStateDBAfterAgentDeckOnlyResult(t *testing.T) {
 		DisableWakeScheduler:  true,
 		DisableLeaseRenewLoop: true,
 	})
+	service.sessions.parentPID = func() int { return 1 }
 	service.state.defaultWorkdir = workdir
 
 	first := callServiceTool(t, service, "mailbox_status", nil)
