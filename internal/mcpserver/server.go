@@ -33,7 +33,7 @@ const (
 	defaultAgentDeckCooldown     = 5 * time.Minute
 	defaultNotifyDelay           = 2 * time.Second
 	defaultStartupInstruction    = ""
-	defaultNotifyMessage         = "Use the check-agent-mail skill now. Receive the pending message and execute its requested action."
+	defaultNotifyMessage         = "Use the check-agent-mail skill once. Receive the pending message and execute its requested action."
 	defaultMailHint              = "mailbox_recv"
 	mailboxRecoveryHint          = "If you forget the mailbox details or next action after ack, use `mailbox_read` on the latest `acked` delivery for this session. For older mail, use `mailbox_list` with `state: acked` and then `mailbox_read` by delivery id."
 	agentDeckBindRecoveryHint    = "agent-deck address auto-bind did not find your current session; run `agent-deck session current --json` to find your `agent-deck/<session-id>` address, then call `mailbox_bind` with that address."
