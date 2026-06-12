@@ -992,7 +992,7 @@ func (m *sessionManager) createSession(ctx context.Context, input agentDeckCreat
 		return nil, fmt.Errorf("target session already exists: %s", input.EnsureTitle)
 	}
 
-	targetGroupPath, launchParentSessionID, launchNoParentLink, err := m.prepareCreateSessionLaunch(ctx, input)
+	targetGroupPath, launchParentSessionID, launchNoParentLink, moveToRootGroupAfterLaunch, err := m.prepareCreateSessionLaunch(ctx, input)
 	if err != nil {
 		return nil, err
 	}
@@ -1018,6 +1018,18 @@ func (m *sessionManager) createSession(ctx context.Context, input agentDeckCreat
 	data, err := parseSessionData(launchResult.Stdout, "agent-deck launch")
 	if err != nil {
 		return nil, err
+	}
+	if moveToRootGroupAfterLaunch {
+		if _, err := runCommand(ctx, m.runner, []string{"agent-deck", "group", "move", data.ID, ""}, runOptions{}); err != nil {
+			return nil, err
+		}
+		refreshed, err := m.resolveSessionShow(ctx, data.ID, ensureSessionShowTimeout)
+		if err != nil {
+			return nil, err
+		}
+		if refreshed != nil {
+			data = refreshed
+		}
 	}
 
 	out := sessionInfoMap(data, input.EnsureTitle)
@@ -1096,54 +1108,60 @@ func validateExistingSessionWorkdir(data *sessionData, requestedWorkdir, canonic
 	return nil
 }
 
-func (m *sessionManager) prepareCreateSessionLaunch(ctx context.Context, input agentDeckCreateSessionInput) (string, string, bool, error) {
+func (m *sessionManager) prepareCreateSessionLaunch(ctx context.Context, input agentDeckCreateSessionInput) (string, string, bool, bool, error) {
 	targetGroupPath := strings.TrimSpace(input.GroupPath)
 	noParentLink := input.NoParentLink
 	if noParentLink && strings.TrimSpace(input.ParentSessionID) != "" {
-		return "", "", false, errors.New("no_parent_link cannot be combined with parent_session_id")
+		return "", "", false, false, errors.New("no_parent_link cannot be combined with parent_session_id")
 	}
 
 	if targetGroupPath == "" && strings.TrimSpace(input.GroupParentSessionID) != "" {
 		parentData, err := m.resolveSessionShow(ctx, input.GroupParentSessionID, ensureSessionShowTimeout)
 		if err != nil {
-			return "", "", false, err
+			return "", "", false, false, err
 		}
 		if parentData == nil {
-			return "", "", false, fmt.Errorf("group_parent_session_id not found: %s", input.GroupParentSessionID)
+			return "", "", false, false, fmt.Errorf("group_parent_session_id not found: %s", input.GroupParentSessionID)
 		}
 		childGroupName := firstNonEmpty(input.ChildGroupName, input.EnsureTitle)
 		targetGroupPath, err = deriveGroupPathFromParentGroup(strings.TrimSpace(parentData.Group), childGroupName)
 		if err != nil {
-			return "", "", false, err
+			return "", "", false, false, err
 		}
 	}
 
 	launchParentSessionID := strings.TrimSpace(input.ParentSessionID)
 	launchNoParentLink := noParentLink
 	if launchParentSessionID == "" && targetGroupPath == "" && !launchNoParentLink {
-		return "", "", false, errors.New("creating a target session requires either group_path/group_parent_session_id or parent_session_id")
+		return "", "", false, false, errors.New("creating a target session requires either group_path/group_parent_session_id or parent_session_id")
 	}
 	if launchParentSessionID == "" {
-		return targetGroupPath, launchParentSessionID, launchNoParentLink, nil
+		return targetGroupPath, launchParentSessionID, launchNoParentLink, false, nil
 	}
 
 	parentData, err := m.resolveSessionShow(ctx, launchParentSessionID, ensureSessionShowTimeout)
 	if err != nil {
-		return "", "", false, err
+		return "", "", false, false, err
 	}
 	if parentData == nil {
-		return "", "", false, fmt.Errorf("parent_session_id not found: %s", input.ParentSessionID)
+		return "", "", false, false, fmt.Errorf("parent_session_id not found: %s", input.ParentSessionID)
 	}
 	if strings.TrimSpace(parentData.ParentSessionID) == "" {
-		return targetGroupPath, launchParentSessionID, launchNoParentLink, nil
+		if targetGroupPath == "" {
+			targetGroupPath = strings.TrimSpace(parentData.Group)
+			if targetGroupPath == "" {
+				return targetGroupPath, launchParentSessionID, launchNoParentLink, true, nil
+			}
+		}
+		return targetGroupPath, launchParentSessionID, launchNoParentLink, false, nil
 	}
 	if targetGroupPath == "" {
 		targetGroupPath, err = deriveGroupPathFromParentGroup(strings.TrimSpace(parentData.Group), firstNonEmpty(parentData.Title, input.ParentSessionID, parentData.ID))
 		if err != nil {
-			return "", "", false, err
+			return "", "", false, false, err
 		}
 	}
-	return targetGroupPath, "", true, nil
+	return targetGroupPath, "", true, false, nil
 }
 
 func (m *sessionManager) startSessionIfNeeded(ctx context.Context, data *sessionData, startupInstruction string) (*sessionData, bool, bool, string, error) {
