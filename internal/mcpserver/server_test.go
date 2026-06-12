@@ -407,6 +407,17 @@ func TestResolveWakeNotifyMessageUsesFixedWakeText(t *testing.T) {
 	}
 }
 
+func TestWakeNotifyMessageResumesInterruptedWork(t *testing.T) {
+	if !strings.Contains(defaultNotifyMessage, "resume any prior local work") {
+		t.Fatalf("defaultNotifyMessage = %q, want prior-work resume instruction", defaultNotifyMessage)
+	}
+
+	got := ensureCheckAgentMailHint("custom wake text", defaultNotifyMessage)
+	if !strings.Contains(got, "resume any prior local work") {
+		t.Fatalf("ensureCheckAgentMailHint() = %q, want prior-work resume instruction", got)
+	}
+}
+
 func TestMailboxSendNotifiesWorkerTarget(t *testing.T) {
 	mailboxService := &fakeMailboxService{t: t}
 	mailboxService.sendFunc = func(_ context.Context, params mailbox.SendParams) (mailbox.SendResult, error) {

@@ -287,7 +287,7 @@ func ensureCheckAgentMailHint(message, defaultMessage string) string {
 	if strings.Contains(trimmed, "check-agent-mail") {
 		return trimmed
 	}
-	return trimmed + "\nWhen a wakeup message arrives, use the 'check-agent-mail' skill and execute its requested action."
+	return trimmed + "\nWhen a wakeup message arrives, use the 'check-agent-mail' skill, complete its requested action, then resume any prior local work that remains."
 }
 
 func ensureMailboxRecoveryHint(message string) string {
