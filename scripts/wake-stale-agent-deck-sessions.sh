@@ -167,7 +167,7 @@ older_than=""
 confirm_delay_seconds=2
 profile=""
 state_dir=""
-readonly fixed_wake_message="Use the check-agent-mail skill now. Receive the pending message, complete its requested action, then resume any prior local work that remains."
+readonly fixed_wake_message="NOTICE: There might be new mail in agent-mailbox."
 list_all=0
 
 while [[ $# -gt 0 ]]; do

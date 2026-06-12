@@ -33,9 +33,8 @@ const (
 	defaultAgentDeckCooldown     = 5 * time.Minute
 	defaultNotifyDelay           = 2 * time.Second
 	defaultStartupInstruction    = ""
-	defaultNotifyMessage         = "Use the check-agent-mail skill now. Receive the pending message, complete its requested action, then resume any prior local work that remains."
+	defaultNotifyMessage         = "NOTICE: There might be new mail in agent-mailbox."
 	defaultMailHint              = "mailbox_recv"
-	mailboxRecoveryHint          = "If you forget the mailbox details or next action after ack, use `mailbox_read` on the latest `acked` delivery for this session. For older mail, use `mailbox_list` with `state: acked` and then `mailbox_read` by delivery id."
 	agentDeckBindRecoveryHint    = "agent-deck address auto-bind did not find your current session; run `agent-deck session current --json` to find your `agent-deck/<session-id>` address, then call `mailbox_bind` with that address."
 	toolSessionBindRecoveryHint  = "AI tool session auto-bind did not find codex/..., claude/..., gemini/..., or opencode/...; expose CODEX_THREAD_ID, CLAUDE_CODE_SESSION_ID, GEMINI_SESSION_ID, or OPENCODE_SESSION_ID, wait for agent-deck state sync for the current session, then call `mailbox_status` again or call `mailbox_bind` manually."
 	serverInstructions           = "Bootstrap this MCP process once per agent-managed session. The first tool call must be `mailbox_status`; it auto-binds any detectable agent-deck/codex/claude/gemini/opencode address and reports warnings. All other tools fail until `mailbox_status` has been called."

@@ -395,6 +395,12 @@ func TestResolveWakeNotifyMessageUsesFixedWakeText(t *testing.T) {
 	if got := resolveWakeNotifyMessage(nil, defaultNotifyMessage); got != defaultNotifyMessage {
 		t.Fatalf("resolveWakeNotifyMessage(nil) = %q, want %q", got, defaultNotifyMessage)
 	}
+	if !strings.Contains(defaultNotifyMessage, "NOTICE:") {
+		t.Fatalf("defaultNotifyMessage = %q, want notification-only notice", defaultNotifyMessage)
+	}
+	if strings.Contains(defaultNotifyMessage, "check-agent-mail") || strings.Contains(defaultNotifyMessage, "requested action") {
+		t.Fatalf("defaultNotifyMessage = %q, want no workflow action instruction", defaultNotifyMessage)
+	}
 
 	disabled := true
 	if got := resolveWakeNotifyMessage(&disabled, defaultNotifyMessage); got != "" {
@@ -404,17 +410,6 @@ func TestResolveWakeNotifyMessageUsesFixedWakeText(t *testing.T) {
 	enabled := false
 	if got := resolveWakeNotifyMessage(&enabled, defaultNotifyMessage); got != defaultNotifyMessage {
 		t.Fatalf("resolveWakeNotifyMessage(false) = %q, want %q", got, defaultNotifyMessage)
-	}
-}
-
-func TestWakeNotifyMessageResumesInterruptedWork(t *testing.T) {
-	if !strings.Contains(defaultNotifyMessage, "resume any prior local work") {
-		t.Fatalf("defaultNotifyMessage = %q, want prior-work resume instruction", defaultNotifyMessage)
-	}
-
-	got := ensureCheckAgentMailHint("custom wake text", defaultNotifyMessage)
-	if !strings.Contains(got, "resume any prior local work") {
-		t.Fatalf("ensureCheckAgentMailHint() = %q, want prior-work resume instruction", got)
 	}
 }
 
