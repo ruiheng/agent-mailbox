@@ -78,6 +78,7 @@ type mailboxService interface {
 	Renew(context.Context, string, string, time.Duration) (mailbox.LeaseRenewResult, error)
 	Release(context.Context, string, string) (mailbox.DeliveryTransitionResult, error)
 	Defer(context.Context, string, string, time.Time) (mailbox.DeliveryTransitionResult, error)
+	Undefer(context.Context, string) (mailbox.DeliveryTransitionResult, error)
 	Fail(context.Context, string, string, string) (mailbox.DeliveryTransitionResult, error)
 }
 

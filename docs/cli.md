@@ -195,7 +195,7 @@ Rules:
 - add or remove members with `group add-member` and `group remove-member`
 - use `send --to <group-address> --group` for group messages
 - use `list|wait|recv --for <group-address> --as <person>` for group reads
-- `watch`, `ack`, `renew`, `release`, `defer`, and `fail` stay personal-mailbox-only
+- `watch`, `ack`, `renew`, `release`, `defer`, `undefer`, and `fail` stay personal-mailbox-only
 - `--as` is caller-asserted identity in the trusted local workflow environment;
   it is not an authentication boundary
 
@@ -488,6 +488,20 @@ agent-mailbox defer \
   --lease-token <lease_token> \
   --until 2026-03-18T12:00:00Z
 ```
+
+### `undefer`
+
+Make a deferred queued delivery visible immediately.
+
+```bash
+agent-mailbox undefer --delivery <delivery_id>
+```
+
+Notes:
+
+- `undefer` does not restore the old lease or acknowledge the delivery
+- after `undefer`, call `recv` again and use the new lease token for `ack`
+- if the delivery is already visible, call `recv` instead of `undefer`
 
 ### `fail`
 

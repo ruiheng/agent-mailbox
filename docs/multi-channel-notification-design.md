@@ -561,6 +561,7 @@ Minimum trigger points:
 - `mailbox_ack`
 - `mailbox_release`
 - `mailbox_defer`
+- `mailbox_undefer`
 - `mailbox_fail`
 
 This is intentionally a hint channel only. Missing an update notification must

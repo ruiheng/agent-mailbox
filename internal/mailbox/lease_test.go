@@ -539,6 +539,67 @@ func TestReleaseDeferAndReceiveTimeout(t *testing.T) {
 	}
 }
 
+func TestUndeferMakesDeferredDeliveryClaimableWithoutRevivingOldLease(t *testing.T) {
+	t.Parallel()
+
+	runtime, store := newLeaseTestStore(t)
+	defer runtime.Close()
+
+	current := time.Date(2026, 3, 18, 13, 20, 0, 0, time.UTC)
+	store.now = func() time.Time {
+		return current
+	}
+
+	sent := mustSendMessage(t, store, "workflow/reviewer/task-123", "agent/sender", "review request", "hello reviewer")
+	received, err := store.Receive(context.Background(), ReceiveParams{Address: "workflow/reviewer/task-123"})
+	if err != nil {
+		t.Fatalf("Receive() error = %v", err)
+	}
+
+	until := current.Add(10 * time.Minute)
+	if _, err := store.Defer(context.Background(), received.DeliveryID, received.LeaseToken, until); err != nil {
+		t.Fatalf("Defer() error = %v", err)
+	}
+	if _, err := store.Ack(context.Background(), received.DeliveryID, received.LeaseToken); err == nil {
+		t.Fatal("Ack(old deferred lease) error = nil, want non-nil")
+	}
+
+	current = current.Add(time.Minute)
+	undeferred, err := store.Undefer(context.Background(), received.DeliveryID)
+	if err != nil {
+		t.Fatalf("Undefer() error = %v", err)
+	}
+	if undeferred.State != "queued" {
+		t.Fatalf("Undefer() state = %q, want queued", undeferred.State)
+	}
+	if undeferred.VisibleAt != formatTimestamp(current) {
+		t.Fatalf("Undefer() visible_at = %q, want %q", undeferred.VisibleAt, formatTimestamp(current))
+	}
+
+	next, err := store.Receive(context.Background(), ReceiveParams{Address: "workflow/reviewer/task-123"})
+	if err != nil {
+		t.Fatalf("Receive(after undefer) error = %v", err)
+	}
+	if next.DeliveryID != received.DeliveryID {
+		t.Fatalf("Receive(after undefer) delivery id = %q, want %q", next.DeliveryID, received.DeliveryID)
+	}
+	if next.LeaseToken == received.LeaseToken {
+		t.Fatal("Receive(after undefer) reused old lease token")
+	}
+	if _, err := store.Ack(context.Background(), next.DeliveryID, next.LeaseToken); err != nil {
+		t.Fatalf("Ack(new lease) error = %v", err)
+	}
+
+	assertStringSlicesEqual(t, readDeliveryEventTypes(t, runtime, sent.DeliveryID), []string{
+		"delivery_queued",
+		"delivery_leased",
+		"delivery_deferred",
+		"delivery_undeferred",
+		"delivery_leased",
+		"delivery_acked",
+	})
+}
+
 func TestReceiveMultipleAddressesOrdersUnionOldestFirst(t *testing.T) {
 	t.Parallel()
 

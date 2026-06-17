@@ -291,6 +291,73 @@ func (s *Store) Defer(ctx context.Context, deliveryID, leaseToken string, until 
 	})
 }
 
+func (s *Store) Undefer(ctx context.Context, deliveryID string) (DeliveryTransitionResult, error) {
+	deliveryID, err := validateDeliveryIDInput(deliveryID)
+	if err != nil {
+		return DeliveryTransitionResult{}, err
+	}
+
+	now := s.now()
+	visibleAt := formatTimestamp(now)
+	tx, err := s.writeDB.BeginTx(ctx, nil)
+	if err != nil {
+		return DeliveryTransitionResult{}, fmt.Errorf("begin undefer transaction: %w", err)
+	}
+	defer tx.Rollback()
+
+	delivery, err := loadDeliveryRecord(ctx, tx, deliveryID)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return DeliveryTransitionResult{}, fmt.Errorf("delivery %q not found", deliveryID)
+		}
+		return DeliveryTransitionResult{}, fmt.Errorf("load delivery %q: %w", deliveryID, err)
+	}
+	if delivery.State != "queued" {
+		return DeliveryTransitionResult{}, fmt.Errorf("delivery %q is in state %q, want queued", deliveryID, delivery.State)
+	}
+	if delivery.VisibleAt <= visibleAt {
+		return DeliveryTransitionResult{}, fmt.Errorf("delivery %q is already visible", deliveryID)
+	}
+
+	result, err := tx.ExecContext(ctx, `
+UPDATE deliveries
+SET visible_at = ?
+WHERE delivery_id = ?
+  AND state = 'queued'
+  AND visible_at = ?
+`, visibleAt, delivery.DeliveryID, delivery.VisibleAt)
+	if err != nil {
+		return DeliveryTransitionResult{}, fmt.Errorf("undefer delivery %q: %w", deliveryID, err)
+	}
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return DeliveryTransitionResult{}, fmt.Errorf("read undefer rows affected for %q: %w", deliveryID, err)
+	}
+	if rowsAffected == 0 {
+		return DeliveryTransitionResult{}, fmt.Errorf("delivery %q changed while undeferring", deliveryID)
+	}
+
+	eventTimestamp := formatTimestamp(now)
+	if err := insertDeliveryEvent(ctx, tx, "delivery_undeferred", delivery.RecipientEndpointID, delivery.MessageID, delivery.DeliveryID, map[string]any{
+		"previous_state":      delivery.State,
+		"previous_visible_at": delivery.VisibleAt,
+		"visible_at":          visibleAt,
+	}, eventTimestamp); err != nil {
+		return DeliveryTransitionResult{}, err
+	}
+
+	if err := tx.Commit(); err != nil {
+		return DeliveryTransitionResult{}, fmt.Errorf("commit undefer for %q: %w", deliveryID, err)
+	}
+
+	return DeliveryTransitionResult{
+		DeliveryID:   delivery.DeliveryID,
+		State:        "queued",
+		VisibleAt:    visibleAt,
+		AttemptCount: delivery.AttemptCount,
+	}, nil
+}
+
 func (s *Store) Fail(ctx context.Context, deliveryID, leaseToken, reason string) (DeliveryTransitionResult, error) {
 	reason = strings.TrimSpace(reason)
 	if reason == "" {
@@ -721,15 +788,23 @@ WHERE delivery_id = ?
 }
 
 func validateLeaseMutationInput(deliveryID, leaseToken string) (string, string, error) {
-	deliveryID = strings.TrimSpace(deliveryID)
-	leaseToken = strings.TrimSpace(leaseToken)
-	if deliveryID == "" {
-		return "", "", errors.New("delivery id is required")
+	deliveryID, err := validateDeliveryIDInput(deliveryID)
+	if err != nil {
+		return "", "", err
 	}
+	leaseToken = strings.TrimSpace(leaseToken)
 	if leaseToken == "" {
 		return "", "", errors.New("lease token is required")
 	}
 	return deliveryID, leaseToken, nil
+}
+
+func validateDeliveryIDInput(deliveryID string) (string, error) {
+	deliveryID = strings.TrimSpace(deliveryID)
+	if deliveryID == "" {
+		return "", errors.New("delivery id is required")
+	}
+	return deliveryID, nil
 }
 
 func loadCurrentLease(ctx context.Context, tx *sql.Tx, deliveryID, leaseToken string) (leasedDeliveryRecord, error) {
@@ -762,6 +837,10 @@ func isSQLiteBusy(err error) bool {
 }
 
 func loadLeasedDeliveryRecord(ctx context.Context, tx *sql.Tx, deliveryID string) (leasedDeliveryRecord, error) {
+	return loadDeliveryRecord(ctx, tx, deliveryID)
+}
+
+func loadDeliveryRecord(ctx context.Context, tx *sql.Tx, deliveryID string) (leasedDeliveryRecord, error) {
 	var delivery leasedDeliveryRecord
 	err := tx.QueryRowContext(ctx, `
 SELECT delivery_id, message_id, recipient_endpoint_id, state, visible_at, lease_token, lease_expires_at, attempt_count

@@ -29,7 +29,7 @@ func (a *App) Run(ctx context.Context, args []string) error {
 
 func (a *App) RunWithStateDir(ctx context.Context, stateDir string, args []string) error {
 	if len(args) == 0 {
-		return errors.New("expected a command: send, forward, recv, wait, watch, read, ack, renew, release, defer, fail, list, stale, group, or address")
+		return errors.New("expected a command: send, forward, recv, wait, watch, read, ack, renew, release, defer, undefer, fail, list, stale, group, or address")
 	}
 
 	command, err := a.prepareCommand(args)
@@ -48,7 +48,7 @@ func (a *App) RunWithStateDir(ctx context.Context, stateDir string, args []strin
 
 func (a *App) prepareCommand(args []string) (preparedCommand, error) {
 	if len(args) == 0 {
-		return nil, errors.New("expected a command: send, forward, recv, wait, watch, read, ack, renew, release, defer, fail, list, stale, group, or address")
+		return nil, errors.New("expected a command: send, forward, recv, wait, watch, read, ack, renew, release, defer, undefer, fail, list, stale, group, or address")
 	}
 
 	switch args[0] {
@@ -72,6 +72,8 @@ func (a *App) prepareCommand(args []string) (preparedCommand, error) {
 		return a.prepareReleaseCommand(args[1:])
 	case "defer":
 		return a.prepareDeferCommand(args[1:])
+	case "undefer":
+		return a.prepareUndeferCommand(args[1:])
 	case "fail":
 		return a.prepareFailCommand(args[1:])
 	case "list":

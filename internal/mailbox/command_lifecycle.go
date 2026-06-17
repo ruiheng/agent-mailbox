@@ -140,6 +140,30 @@ func (a *App) prepareDeferCommand(args []string) (preparedCommand, error) {
 	}, nil
 }
 
+func (a *App) prepareUndeferCommand(args []string) (preparedCommand, error) {
+	fs := flag.NewFlagSet("agent-mailbox undefer", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+
+	var deliveryID string
+	fs.StringVar(&deliveryID, "delivery", "", "delivery id")
+
+	if err := a.parseCommandFlags(fs, args, a.writeUndeferHelp); err != nil {
+		return nil, err
+	}
+	if err := requireFlag(deliveryID, "--delivery"); err != nil {
+		return nil, err
+	}
+
+	return func(ctx context.Context, store *Store) error {
+		ops := NewOperations(store)
+		result, err := ops.Undefer(ctx, deliveryID)
+		if err != nil {
+			return err
+		}
+		return a.writeDeliveryTransitionResultText(result)
+	}, nil
+}
+
 func (a *App) prepareFailCommand(args []string) (preparedCommand, error) {
 	fs := flag.NewFlagSet("agent-mailbox fail", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
@@ -199,6 +223,13 @@ func (a *App) writeDeferHelp() {
 	writeHelp(a.stdout, []string{
 		"Usage:",
 		"  agent-mailbox defer --delivery ID --lease-token TOKEN --until RFC3339",
+	})
+}
+
+func (a *App) writeUndeferHelp() {
+	writeHelp(a.stdout, []string{
+		"Usage:",
+		"  agent-mailbox undefer --delivery ID",
 	})
 }
 

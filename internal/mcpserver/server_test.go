@@ -50,6 +50,7 @@ type fakeMailboxService struct {
 	renewFunc                 func(context.Context, string, string, time.Duration) (mailbox.LeaseRenewResult, error)
 	releaseFunc               func(context.Context, string, string) (mailbox.DeliveryTransitionResult, error)
 	deferFunc                 func(context.Context, string, string, time.Time) (mailbox.DeliveryTransitionResult, error)
+	undeferFunc               func(context.Context, string) (mailbox.DeliveryTransitionResult, error)
 	failFunc                  func(context.Context, string, string, string) (mailbox.DeliveryTransitionResult, error)
 }
 
@@ -127,6 +128,16 @@ func TestMailboxClaimHistorySchemaExposesRecoveryFields(t *testing.T) {
 		if _, ok := schema.Properties[field]; !ok {
 			t.Fatalf("schema.Properties missing %s: %v", field, schema.Properties)
 		}
+	}
+}
+
+func TestMailboxUndeferSchemaExposesDeliveryID(t *testing.T) {
+	schema, err := jsonschema.For[mailboxUndeferInput](nil)
+	if err != nil {
+		t.Fatalf("jsonschema.For() error = %v", err)
+	}
+	if _, ok := schema.Properties["delivery_id"]; !ok {
+		t.Fatalf("schema.Properties missing delivery_id: %v", schema.Properties)
 	}
 }
 
@@ -320,6 +331,13 @@ func (f *fakeMailboxService) Defer(ctx context.Context, deliveryID, leaseToken s
 		f.t.Fatalf("unexpected Defer call: delivery=%q lease=%q until=%s", deliveryID, leaseToken, until)
 	}
 	return f.deferFunc(ctx, deliveryID, leaseToken, until)
+}
+
+func (f *fakeMailboxService) Undefer(ctx context.Context, deliveryID string) (mailbox.DeliveryTransitionResult, error) {
+	if f.undeferFunc == nil {
+		f.t.Fatalf("unexpected Undefer call: delivery=%q", deliveryID)
+	}
+	return f.undeferFunc(ctx, deliveryID)
 }
 
 func (f *fakeMailboxService) Fail(ctx context.Context, deliveryID, leaseToken, reason string) (mailbox.DeliveryTransitionResult, error) {
@@ -4128,6 +4146,33 @@ func TestMailboxReleaseDeferAndFailUseDirectMailboxService(t *testing.T) {
 		t.Fatalf("wait status after defer = %v, want no_message", got)
 	}
 
+	undeferResult := callServiceTool(t, service, "mailbox_undefer", map[string]any{
+		"delivery_id": firstSend["delivery_id"],
+	})
+	if got := undeferResult["status"]; got != "undeferred" {
+		t.Fatalf("undefer status = %v, want undeferred", got)
+	}
+
+	undeferWait := callServiceTool(t, service, "mailbox_wait", map[string]any{
+		"addresses": []string{"agent-deck/self"},
+	})
+	if got := undeferWait["status"]; got != "message_available" {
+		t.Fatalf("wait status after undefer = %v, want message_available", got)
+	}
+	undeferWaitDelivery := undeferWait["delivery"].(map[string]any)
+	if got := undeferWaitDelivery["delivery_id"]; got != firstSend["delivery_id"] {
+		t.Fatalf("wait delivery after undefer = %v, want %v", got, firstSend["delivery_id"])
+	}
+
+	undeferRecv := callServiceTool(t, service, "mailbox_recv", map[string]any{
+		"addresses": []string{"agent-deck/self"},
+	})
+	undeferMessage := undeferRecv["delivery"].(map[string]any)["messages"].([]any)[0].(map[string]any)
+	callServiceTool(t, service, "mailbox_ack", map[string]any{
+		"delivery_id": firstSend["delivery_id"],
+		"lease_token": undeferMessage["lease_token"],
+	})
+
 	secondSend := callServiceTool(t, service, "mailbox_send", map[string]any{
 		"to_address": "agent-deck/self",
 		"subject":    "fail",
@@ -6104,6 +6149,7 @@ func requiresMailboxStatusToolNames() []string {
 		"mailbox_ack",
 		"mailbox_release",
 		"mailbox_defer",
+		"mailbox_undefer",
 		"mailbox_fail",
 		"mailbox_group_create",
 		"mailbox_group_add_member",

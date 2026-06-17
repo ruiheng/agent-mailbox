@@ -142,6 +142,10 @@ func (o *Operations) Defer(ctx context.Context, deliveryID, leaseToken string, u
 	return o.store.Defer(ctx, deliveryID, leaseToken, until)
 }
 
+func (o *Operations) Undefer(ctx context.Context, deliveryID string) (DeliveryTransitionResult, error) {
+	return o.store.Undefer(ctx, deliveryID)
+}
+
 func (o *Operations) Fail(ctx context.Context, deliveryID, leaseToken, reason string) (DeliveryTransitionResult, error) {
 	return o.store.Fail(ctx, deliveryID, leaseToken, reason)
 }

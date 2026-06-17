@@ -390,7 +390,7 @@ This design is additive at the core API level.
 
 Compatibility rules:
 
-- existing `recv`, `ack`, `release`, `defer`, `fail`, `list`, and `read`
+- existing `recv`, `ack`, `release`, `defer`, `undefer`, `fail`, `list`, and `read`
   behavior remains valid
 - persisted schema stays unchanged
 - old clients that do not call `renew` still work under current TTL rules

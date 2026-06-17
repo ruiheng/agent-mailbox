@@ -109,6 +109,10 @@ type mailboxDeferInput struct {
 	Until      string `json:"until"`
 }
 
+type mailboxUndeferInput struct {
+	DeliveryID string `json:"delivery_id"`
+}
+
 type mailboxFailInput struct {
 	DeliveryID string `json:"delivery_id"`
 	LeaseToken string `json:"lease_token"`
@@ -173,6 +177,10 @@ func (s *Service) registerMailboxTools(server *mcp.Server) {
 		Name:        "mailbox_defer",
 		Description: "Defer a claimed mailbox delivery until a later RFC3339 time.",
 	}, s.mailboxDefer)
+	addToolRequiringMailboxStatus(server, s, &mcp.Tool{
+		Name:        "mailbox_undefer",
+		Description: "Make a deferred queued delivery visible immediately; call mailbox_recv again to claim it before acking.",
+	}, s.mailboxUndefer)
 	addToolRequiringMailboxStatus(server, s, &mcp.Tool{
 		Name:        "mailbox_fail",
 		Description: "Fail a claimed mailbox delivery with a reason.",
@@ -907,6 +915,20 @@ func (s *Service) mailboxDefer(ctx context.Context, _ *mcp.CallToolRequest, inpu
 	}
 	s.activeLeases.markTerminal(input.DeliveryID, "deferred", s.now().Format(time.RFC3339Nano))
 	return s.mailboxMutationToolResult(ctx, map[string]any{"status": "deferred", "delivery_id": input.DeliveryID, "until": input.Until})
+}
+
+func (s *Service) mailboxUndefer(ctx context.Context, _ *mcp.CallToolRequest, input mailboxUndeferInput) (*mcp.CallToolResult, map[string]any, error) {
+	result, err := withMailboxService(ctx, s.mailboxServices, func(service mailboxService) (mailbox.DeliveryTransitionResult, error) {
+		return service.Undefer(ctx, input.DeliveryID)
+	})
+	if err != nil {
+		return nil, nil, err
+	}
+	return s.mailboxMutationToolResult(ctx, map[string]any{
+		"status":      "undeferred",
+		"delivery_id": result.DeliveryID,
+		"visible_at":  result.VisibleAt,
+	})
 }
 
 func (s *Service) mailboxFail(ctx context.Context, _ *mcp.CallToolRequest, input mailboxFailInput) (*mcp.CallToolResult, map[string]any, error) {

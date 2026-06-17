@@ -1141,6 +1141,10 @@ func TestInvalidCLIPathsDoNotCreateRuntimeState(t *testing.T) {
 			args: []string{"defer", "--delivery", "dlv_123", "--until", "2026-03-18T12:00:00Z"},
 		},
 		{
+			name: "undefer missing delivery",
+			args: []string{"undefer"},
+		},
+		{
 			name: "fail missing delivery",
 			args: []string{"fail", "--lease-token", "lease_token", "--reason", "tool crashed"},
 		},
@@ -1219,6 +1223,11 @@ func TestHelpCLIPathsDoNotCreateRuntimeState(t *testing.T) {
 			name:         "wait help",
 			args:         []string{"wait", "--help"},
 			wantContains: "Usage:\n  agent-mailbox wait --for ADDRESS [--for ADDRESS ...] [--timeout DURATION] [--json | --yaml] [--full]",
+		},
+		{
+			name:         "undefer help",
+			args:         []string{"undefer", "--help"},
+			wantContains: "Usage:\n  agent-mailbox undefer --delivery ID",
 		},
 		{
 			name:         "group help",

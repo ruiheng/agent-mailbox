@@ -9,7 +9,7 @@ The current MVP is intentionally narrow:
 - one local Unix user on one machine
 - direct mailbox delivery by endpoint address
 - SQLite metadata plus blob-backed message bodies
-- explicit `send`, `recv`, `wait`, `watch`, `list`, `stale`, `ack`, `renew`, `release`, `defer`, and `fail`
+- explicit `send`, `recv`, `wait`, `watch`, `list`, `stale`, `ack`, `renew`, `release`, `defer`, `undefer`, and `fail`
 - no daemon, no network transport, no adapter-specific correctness dependency
 
 ## Status
@@ -195,6 +195,7 @@ The Go MCP entrypoint keeps the existing tool names:
 - `mailbox_ack`
 - `mailbox_release`
 - `mailbox_defer`
+- `mailbox_undefer`
 - `mailbox_fail`
 - `mailbox_debug`
 - `mailbox_group_create`
@@ -254,7 +255,7 @@ For group mailbox flows over MCP, create a group with
 Use `mailbox_wait` or `mailbox_recv` with one `group/...` address and
 `as_person` to read the group stream. Group reads return compact group message
 payloads and do not use delivery leases, `mailbox_ack`, `mailbox_release`,
-`mailbox_defer`, or `mailbox_fail`.
+`mailbox_defer`, `mailbox_undefer`, or `mailbox_fail`.
 
 Use `mailbox_group_add_subscriber` to register a routable notify target such as
 `agent-deck/<session-id>` for group-message wakeups. Group send notifies active
@@ -424,6 +425,19 @@ Renew an active lease when a worker needs more time before acking:
 agent-mailbox --state-dir /tmp/mailbox-demo \
   renew --delivery <delivery_id> --lease-token <lease_token> --for 10m
 ```
+
+Defer a leased delivery until a future time, then make it claimable early if the
+blocking condition clears:
+
+```bash
+agent-mailbox --state-dir /tmp/mailbox-demo \
+  defer --delivery <delivery_id> --lease-token <lease_token> --until 2026-03-18T12:00:00Z
+
+agent-mailbox --state-dir /tmp/mailbox-demo \
+  undefer --delivery <delivery_id>
+```
+
+After `undefer`, call `recv` again and use the new lease token before acking.
 
 List previously acked deliveries for one inbox:
 

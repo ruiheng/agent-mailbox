@@ -45,7 +45,7 @@ func (a *App) Run(ctx context.Context, args []string) error {
 		return mailbox.ErrHelpRequested
 	}
 	if len(rest) == 0 {
-		return errors.New("expected a command: mcp, send, forward, recv, wait, watch, read, ack, renew, release, defer, fail, list, stale, group, or address")
+		return errors.New("expected a command: mcp, send, forward, recv, wait, watch, read, ack, renew, release, defer, undefer, fail, list, stale, group, or address")
 	}
 	if rest[0] == "mcp" {
 		return a.runMCPCommand(ctx, stateDir, rest[1:])
@@ -155,6 +155,7 @@ func (a *App) writeRootHelp() {
 		"  renew               Extend a leased delivery",
 		"  release             Return a leased delivery to the queue",
 		"  defer               Hide a leased delivery until a future time",
+		"  undefer             Make a deferred queued delivery visible now",
 		"  fail                Record a failed delivery attempt",
 		"",
 		"Global options:",

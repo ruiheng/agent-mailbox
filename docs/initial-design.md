@@ -219,6 +219,8 @@ Do not keep `released` or `deferred` as separate current states.
 - `release` means transition `leased -> queued` and set `visible_at = now`
 - `defer` means set `visible_at` to a future time and leave the delivery in
   `queued`
+- `undefer` means set a future-visible `queued` delivery's `visible_at = now`
+  so it can be claimed again
 
 The key state is `leased`.
 It prevents concurrent consumers from processing the same delivery and allows
@@ -232,6 +234,9 @@ This rule is required for lazy lease expiry recovery to work without a daemon.
 
 `delivery_id` alone is not sufficient authorization for `ack`, `release`,
 `defer`, or `fail`.
+`undefer` is not a lease completion operation; it only makes a queued delivery
+claimable again, after which a receiver must call `recv` and use the new lease
+token for later `ack`.
 
 Each claimed message returned by `recv` must include, at minimum:
 
@@ -392,6 +397,18 @@ Behavior:
 - set `visible_at` to the requested future time
 - require the current lease token
 
+### Undefer
+
+```text
+agent-mailbox undefer --delivery <delivery_id>
+```
+
+Behavior:
+
+- make a future-visible `queued` delivery visible immediately
+- do not restore the old lease token
+- require the caller to `recv` the delivery again before `ack`
+
 ### Fail
 
 ```text
@@ -521,6 +538,7 @@ The event log should capture lifecycle transitions such as:
 - delivery acked
 - delivery released
 - delivery deferred
+- delivery undeferred
 - delivery failed
 - delivery dead-lettered
 
@@ -551,8 +569,9 @@ Build the smallest complete slice:
 7. `ack`
 8. `release`
 9. `defer`
-10. `fail`
-11. `list`
+10. `undefer`
+11. `fail`
+12. `list`
 
 Skip for now:
 
