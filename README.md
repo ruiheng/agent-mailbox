@@ -240,10 +240,11 @@ omitted a variable or failed to pass it into the MCP process.
 paths. Set `disable_notify_message = true` to skip only that immediate send-time
 notify.
 
-For MCP receivers that intend to handle work, prefer `mailbox_recv` with a
-`timeout` such as `30s`; it waits and claims in one tool call. `mailbox_wait`
-remains observe-only and should be used only when the caller needs metadata
-without claiming the delivery.
+For MCP receivers that need to block until work appears, use `mailbox_wait`
+with a `timeout` such as `30s`, then call `mailbox_recv` to claim the
+delivery. `mailbox_wait` is observe-only. `mailbox_recv` has no `timeout`
+parameter and returns immediately, so an abandoned long-running wait cannot
+claim mail into an unreachable result.
 
 `mailbox_forward` forwards exactly one stored message selected by `message_id`
 or `delivery_id` to a new recipient through the normal `mailbox_send` path. It

@@ -54,7 +54,6 @@ type mailboxWaitInput struct {
 type mailboxRecvInput struct {
 	Addresses        []string `json:"addresses,omitempty"`
 	AsPerson         string   `json:"as_person,omitempty"`
-	Timeout          string   `json:"timeout,omitempty"`
 	KnownDeliveryIDs []string `json:"known_delivery_ids,omitempty"`
 }
 
@@ -497,10 +496,9 @@ func (s *Service) mailboxRecv(ctx context.Context, _ *mcp.CallToolRequest, input
 		return nil, nil, err
 	}
 	if person := strings.TrimSpace(input.AsPerson); person != "" {
-		return s.mailboxRecvGroup(ctx, addresses, person, input.Timeout)
+		return s.mailboxRecvGroup(ctx, addresses, person)
 	}
 	warnings := s.mailboxReceiveWarnings(ctx, len(input.Addresses) > 0)
-	warnings = appendRecvTimeoutIgnoredWarning(warnings, input.Timeout)
 	activeLeaseIDs := s.activeLeaseHintDeliveryIDs(addresses, input.KnownDeliveryIDs)
 	if len(activeLeaseIDs) > 0 {
 		return s.mailboxToolResult(ctx, map[string]any{
@@ -534,13 +532,6 @@ func (s *Service) mailboxRecv(ctx context.Context, _ *mcp.CallToolRequest, input
 		"delivery":  mailbox.CompactReceiveResult(delivery),
 		"warnings":  warnings,
 	})
-}
-
-func appendRecvTimeoutIgnoredWarning(warnings []string, timeoutText string) []string {
-	if strings.TrimSpace(timeoutText) == "" {
-		return warnings
-	}
-	return append(warnings, "mailbox_recv ignores timeout and never blocks; use mailbox_wait to wait without claiming before calling mailbox_recv")
 }
 
 func (s *Service) activeLeaseHintDeliveryIDs(addresses []string, knownDeliveryIDs []string) []string {
@@ -640,19 +631,17 @@ func (s *Service) mailboxClaimHistory(ctx context.Context, _ *mcp.CallToolReques
 	})
 }
 
-func (s *Service) mailboxRecvGroup(ctx context.Context, addresses []string, person, timeoutText string) (*mcp.CallToolResult, map[string]any, error) {
+func (s *Service) mailboxRecvGroup(ctx context.Context, addresses []string, person string) (*mcp.CallToolResult, map[string]any, error) {
 	address, err := singleGroupAddress(addresses, "mailbox_recv")
 	if err != nil {
 		return nil, nil, err
 	}
-	warnings := appendRecvTimeoutIgnoredWarning(nil, timeoutText)
 	message, err := s.receiveGroupNow(ctx, address, person)
 	if errors.Is(err, mailbox.ErrNoMessage) {
 		return s.mailboxToolResult(ctx, map[string]any{
 			"status":    "no_message",
 			"addresses": []string{address},
 			"as_person": person,
-			"warnings":  warnings,
 		})
 	}
 	if err != nil {
@@ -663,7 +652,6 @@ func (s *Service) mailboxRecvGroup(ctx context.Context, addresses []string, pers
 		"addresses": []string{address},
 		"as_person": person,
 		"message":   mailbox.CompactGroupReceivedMessage(message),
-		"warnings":  warnings,
 	})
 }
 
