@@ -674,7 +674,7 @@ func (s *Service) receiveClaimMetadata(addresses []string) mailbox.ClaimMetadata
 		Tool:               "mailbox_recv",
 		BoundAddresses:     addresses,
 		AgentDeckSessionID: snapshot.DetectedAgentDeckSession,
-		AgentSessionID:     snapshot.DetectedAgentSession,
+		AgentSessionID:     snapshot.DetectedToolSessions["codex"],
 		Workdir:            snapshot.DefaultWorkdir,
 	}
 }

@@ -219,8 +219,8 @@ func localWakeScopeID(snapshot stateSnapshot) string {
 	switch {
 	case strings.TrimSpace(snapshot.DetectedAgentDeckSession) != "":
 		return "local/agent-deck/" + strings.TrimSpace(snapshot.DetectedAgentDeckSession)
-	case strings.TrimSpace(snapshot.DetectedAgentSession) != "":
-		return "local/agent/" + strings.TrimSpace(snapshot.DetectedAgentSession)
+	case strings.TrimSpace(snapshot.DetectedToolSessions["codex"]) != "":
+		return "local/agent/" + strings.TrimSpace(snapshot.DetectedToolSessions["codex"])
 	default:
 		addresses := append([]string(nil), snapshot.BoundAddresses...)
 		sort.Strings(addresses)

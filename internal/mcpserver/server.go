@@ -398,20 +398,8 @@ func agentDeckAddress(sessionID string) string {
 	return "agent-deck/" + sessionID
 }
 
-func codexAddress(sessionID string) string {
-	return "codex/" + sessionID
-}
-
-func claudeAddress(sessionID string) string {
-	return "claude/" + sessionID
-}
-
-func geminiAddress(sessionID string) string {
-	return "gemini/" + sessionID
-}
-
-func opencodeAddress(sessionID string) string {
-	return "opencode/" + sessionID
+func toolSessionAddress(scheme, sessionID string) string {
+	return scheme + "/" + sessionID
 }
 
 func boundStateMap(bound boundState) map[string]any {

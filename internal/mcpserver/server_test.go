@@ -1729,7 +1729,7 @@ func TestProcessWakeSchedulerUsesLocalHintThenAgentDeckWake(t *testing.T) {
 	service.state.defaultSender = "agent-deck/worker"
 	service.state.autoBindAttempted = true
 	service.state.detectedAgentDeckSession = "worker"
-	service.state.detectedAgentSession = "self"
+	service.state.detectedToolSessions = toolSessionIDs{"codex": "self"}
 	server := service.Server()
 	clientSession, cleanup := connectTestClientSession(t, server, nil)
 	defer cleanup()
@@ -1880,7 +1880,7 @@ func TestProcessWakeSchedulerIgnoresDisconnectedOverviewSubscriber(t *testing.T)
 	service.state.defaultSender = "agent-deck/worker"
 	service.state.autoBindAttempted = true
 	service.state.detectedAgentDeckSession = "worker"
-	service.state.detectedAgentSession = "self"
+	service.state.detectedToolSessions = toolSessionIDs{"codex": "self"}
 
 	server := service.Server()
 	clientSession, cleanup := connectTestClientSession(t, server, nil)
@@ -1951,7 +1951,7 @@ func TestProcessWakeSchedulerExhaustsWakeableAgentDeckTargets(t *testing.T) {
 	service.state.defaultSender = "agent-deck/worker-a"
 	service.state.autoBindAttempted = true
 	service.state.detectedAgentDeckSession = "worker-a"
-	service.state.detectedAgentSession = "self"
+	service.state.detectedToolSessions = toolSessionIDs{"codex": "self"}
 
 	if err := service.processWakeScheduler(context.Background()); err != nil {
 		t.Fatalf("processWakeScheduler() error = %v", err)
@@ -2007,7 +2007,7 @@ func TestProcessWakeSchedulerFallsThroughWhenMailboxOverviewUpdateFails(t *testi
 	service.state.defaultSender = "agent-deck/worker"
 	service.state.autoBindAttempted = true
 	service.state.detectedAgentDeckSession = "worker"
-	service.state.detectedAgentSession = "self"
+	service.state.detectedToolSessions = toolSessionIDs{"codex": "self"}
 	service.mailboxOverviewEmitter = func(context.Context) notificationOutcome {
 		return notificationOutcome{
 			Status: "failed",
@@ -5861,14 +5861,14 @@ func TestAgentDeckRetryRechecksFallbackStateBeforeUpgrade(t *testing.T) {
 		DefaultSender:            "codex/0123456789abcdef",
 		AutoBindAttempted:        true,
 		AutoBoundToolFallback:    true,
-		DetectedAgentSession:     "0123456789abcdef",
+		DetectedToolSessions:     toolSessionIDs{"codex": "0123456789abcdef"},
 		DetectedAgentDeckSession: "",
 	}
 	service.state.boundAddresses = []string{"codex/manual"}
 	service.state.defaultSender = "codex/manual"
 	service.state.autoBindAttempted = true
 	service.state.autoBoundToolFallback = false
-	service.state.detectedAgentSession = "0123456789abcdef"
+	service.state.detectedToolSessions = toolSessionIDs{"codex": "0123456789abcdef"}
 
 	if err := service.sessions.tryUpgradeAgentDeckBinding(context.Background(), staleFallback); err != nil {
 		t.Fatalf("tryUpgradeAgentDeckBinding error = %v", err)
@@ -5900,7 +5900,7 @@ func TestMailboxRecvWarnsWhenOnlyCodexSessionIsBound(t *testing.T) {
 	})
 	service.state.boundAddresses = []string{"codex/self"}
 	service.state.defaultSender = "codex/self"
-	service.state.detectedAgentSession = "self"
+	service.state.detectedToolSessions = toolSessionIDs{"codex": "self"}
 	service.state.autoBindAttempted = true
 
 	out := callServiceTool(t, service, "mailbox_recv", nil)
@@ -5961,7 +5961,7 @@ func TestMailboxRecvWarnsWhenOnlyClaudeSessionIsBound(t *testing.T) {
 	})
 	service.state.boundAddresses = []string{"claude/self"}
 	service.state.defaultSender = "claude/self"
-	service.state.detectedClaudeCodeSession = "self"
+	service.state.detectedToolSessions = toolSessionIDs{"claude": "self"}
 	service.state.autoBindAttempted = true
 
 	out := callServiceTool(t, service, "mailbox_recv", nil)

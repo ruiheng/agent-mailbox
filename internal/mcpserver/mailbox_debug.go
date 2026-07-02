@@ -51,10 +51,10 @@ func debugSessionState(snapshot stateSnapshot) map[string]any {
 		"auto_bound_tool_fallback":         snapshot.AutoBoundToolFallback,
 		"auto_bind_warnings":               snapshot.AutoBindWarnings,
 		"detected_agent_deck_session_id":   snapshot.DetectedAgentDeckSession,
-		"detected_agent_session_id":        snapshot.DetectedAgentSession,
-		"detected_claude_code_session_id":  snapshot.DetectedClaudeCodeSession,
-		"detected_gemini_session_id":       snapshot.DetectedGeminiSession,
-		"detected_opencode_session_id":     snapshot.DetectedOpencodeSession,
+		"detected_agent_session_id":        snapshot.DetectedToolSessions["codex"],
+		"detected_claude_code_session_id":  snapshot.DetectedToolSessions["claude"],
+		"detected_gemini_session_id":       snapshot.DetectedToolSessions["gemini"],
+		"detected_opencode_session_id":     snapshot.DetectedToolSessions["opencode"],
 		"detected_tool_session_addresses":  detectedToolSessionAddresses(snapshot),
 		"bound_tool_session_addresses":     boundToolSessionAddresses(snapshot.BoundAddresses),
 		"bound_agent_deck_session_address": boundAddressesByScheme(snapshot.BoundAddresses, "agent-deck"),
@@ -144,18 +144,12 @@ func toolSessionEnvDiagnostic(name, value string, present bool) map[string]any {
 }
 
 func toolSessionAddressForEnv(name, sessionID string) string {
-	switch name {
-	case "CODEX_THREAD_ID":
-		return codexAddress(sessionID)
-	case "CLAUDE_CODE_SESSION_ID":
-		return claudeAddress(sessionID)
-	case "GEMINI_SESSION_ID":
-		return geminiAddress(sessionID)
-	case "OPENCODE_SESSION_ID":
-		return opencodeAddress(sessionID)
-	default:
-		return ""
+	for _, descriptor := range toolSessionDescriptors {
+		if name == descriptor.Env {
+			return toolSessionAddress(descriptor.Scheme, sessionID)
+		}
 	}
+	return ""
 }
 
 func parentProcessEnvDiagnostics(startPID int) map[string]any {
