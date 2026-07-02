@@ -4378,8 +4378,7 @@ func TestMailboxDebugWorksBeforeStatusAndDoesNotAutoBind(t *testing.T) {
 }
 
 func TestMailboxStatusReportsAutoBindInvalidJSONWarningAndUnlocksManualBind(t *testing.T) {
-	t.Setenv("CODEX_THREAD_ID", "")
-	t.Setenv("AGENTDECK_INSTANCE_ID", "")
+	isolateAutoBindEnv(t)
 
 	runner := &fakeRunner{t: t}
 	runner.handler = func(args []string, _ string) (RunResult, error) {
@@ -4429,8 +4428,7 @@ func TestMailboxStatusReportsCodexProbeWarningAndUnlocksManualBind(t *testing.T)
 	if runtime.GOOS == "windows" {
 		t.Skip("Windows skips Unix ps/lsof Codex session probing")
 	}
-	t.Setenv("CODEX_THREAD_ID", "")
-	t.Setenv("AGENTDECK_INSTANCE_ID", "")
+	isolateAutoBindEnv(t)
 
 	runner := &fakeRunner{t: t}
 	runner.handler = func(args []string, _ string) (RunResult, error) {
@@ -4483,8 +4481,7 @@ func TestMailboxStatusKeepsCodexProbeWarningWhenAgentDeckProbeDoesNotComplete(t 
 	if runtime.GOOS == "windows" {
 		t.Skip("Windows skips Unix ps/lsof Codex session probing")
 	}
-	t.Setenv("CODEX_THREAD_ID", "")
-	t.Setenv("AGENTDECK_INSTANCE_ID", "")
+	isolateAutoBindEnv(t)
 
 	runner := &fakeRunner{t: t}
 	runner.handler = func(args []string, _ string) (RunResult, error) {
@@ -4523,9 +4520,7 @@ func TestMailboxStatusKeepsCodexProbeWarningWhenAgentDeckProbeDoesNotComplete(t 
 }
 
 func TestMailboxStatusRetriesAutoBindAfterEmptyAttempt(t *testing.T) {
-	t.Setenv("CODEX_THREAD_ID", "")
-	t.Setenv("AGENTDECK_INSTANCE_ID", "")
-	t.Setenv("CLAUDE_CODE_SESSION_ID", "")
+	isolateAutoBindEnv(t)
 
 	runner := &fakeRunner{t: t}
 	runner.handler = func(args []string, _ string) (RunResult, error) {
@@ -4564,8 +4559,7 @@ func TestMailboxStatusRetriesAutoBindAfterEmptyAttempt(t *testing.T) {
 }
 
 func TestMailboxStatusDoesNotWarnForCodexProbeMiss(t *testing.T) {
-	t.Setenv("CODEX_THREAD_ID", "")
-	t.Setenv("AGENTDECK_INSTANCE_ID", "")
+	isolateAutoBindEnv(t)
 
 	runner := &fakeRunner{t: t}
 	runner.handler = func(args []string, _ string) (RunResult, error) {
@@ -4604,8 +4598,7 @@ func TestMailboxStatusSkipsCodexProcessProbeOnWindows(t *testing.T) {
 	if runtime.GOOS != "windows" {
 		t.Skip("Windows-specific Codex process probe behavior")
 	}
-	t.Setenv("CODEX_THREAD_ID", "")
-	t.Setenv("AGENTDECK_INSTANCE_ID", "")
+	isolateAutoBindEnv(t)
 
 	runner := &fakeRunner{t: t}
 	runner.handler = func(args []string, _ string) (RunResult, error) {
@@ -4642,7 +4635,7 @@ func TestMailboxStatusSkipsCodexProcessProbeOnWindows(t *testing.T) {
 }
 
 func TestMailboxStatusReportsAgentDeckShowInvalidJSONWarning(t *testing.T) {
-	t.Setenv("CODEX_THREAD_ID", "")
+	isolateAutoBindEnv(t)
 	t.Setenv("AGENTDECK_INSTANCE_ID", "deck-session-1")
 
 	runner := &fakeRunner{t: t}
@@ -4685,10 +4678,7 @@ func TestMailboxStatusReportsAgentDeckShowInvalidJSONWarning(t *testing.T) {
 }
 
 func TestMailboxStatusWarnsWhenOnlyAgentDeckAddressIsBound(t *testing.T) {
-	t.Setenv("CODEX_THREAD_ID", "")
-	t.Setenv("CLAUDE_CODE_SESSION_ID", "")
-	t.Setenv("GEMINI_SESSION_ID", "")
-	t.Setenv("OPENCODE_SESSION_ID", "")
+	isolateAutoBindEnv(t)
 	t.Setenv("AGENTDECK_INSTANCE_ID", "deck-session-1")
 
 	runner := &fakeRunner{t: t}
@@ -4719,11 +4709,11 @@ func TestMailboxStatusWarnsWhenOnlyAgentDeckAddressIsBound(t *testing.T) {
 }
 
 func TestMailboxStatusIgnoresInvalidToolSessionEnvValues(t *testing.T) {
+	isolateAutoBindEnv(t)
 	t.Setenv("CODEX_THREAD_ID", "not-a-thread")
 	t.Setenv("CLAUDE_CODE_SESSION_ID", "claude-session")
 	t.Setenv("GEMINI_SESSION_ID", "1234")
 	t.Setenv("OPENCODE_SESSION_ID", "abc--def0")
-	t.Setenv("AGENTDECK_INSTANCE_ID", "")
 
 	runner := &fakeRunner{t: t}
 	runner.handler = func(args []string, _ string) (RunResult, error) {
@@ -4770,10 +4760,9 @@ func TestMailboxStatusIgnoresInvalidToolSessionEnvValues(t *testing.T) {
 }
 
 func TestMailboxStatusPreservesInvalidToolSessionEnvWarningsDuringFallbackRetry(t *testing.T) {
+	isolateAutoBindEnv(t)
 	t.Setenv("CODEX_THREAD_ID", "0123456789abcdef")
 	t.Setenv("CLAUDE_CODE_SESSION_ID", "claude-session")
-	t.Setenv("AGENTDECK_INSTANCE_ID", "")
-	t.Setenv("AGENTDECK_PROFILE", "")
 
 	currentCalls := 0
 	runner := &fakeRunner{t: t}
@@ -4812,10 +4801,9 @@ func TestMailboxStatusPreservesInvalidToolSessionEnvWarningsDuringFallbackRetry(
 }
 
 func TestMailboxStatusPreservesInvalidToolSessionEnvWarningsAfterAgentDeckUpgrade(t *testing.T) {
+	isolateAutoBindEnv(t)
 	t.Setenv("CODEX_THREAD_ID", "0123456789abcdef")
 	t.Setenv("CLAUDE_CODE_SESSION_ID", "claude-session")
-	t.Setenv("AGENTDECK_INSTANCE_ID", "")
-	t.Setenv("AGENTDECK_PROFILE", "")
 
 	currentCalls := 0
 	runner := &fakeRunner{t: t}
@@ -4955,12 +4943,8 @@ func TestAutoBindFindsClaudeCodeSessionFromEnv(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			t.Setenv("CODEX_THREAD_ID", "")
-			t.Setenv("CLAUDE_CODE_SESSION_ID", "")
-			t.Setenv("GEMINI_SESSION_ID", "")
-			t.Setenv("OPENCODE_SESSION_ID", "")
+			isolateAutoBindEnv(t)
 			t.Setenv(tt.envName, tt.envValue)
-			t.Setenv("AGENTDECK_INSTANCE_ID", "")
 
 			runner := &fakeRunner{t: t}
 			runner.handler = func(args []string, _ string) (RunResult, error) {
@@ -5002,8 +4986,8 @@ func TestAutoBindFindsClaudeCodeSessionFromEnv(t *testing.T) {
 func TestAutoBindFindsAgentDeckSessionFromCodexStateDB(t *testing.T) {
 	home := t.TempDir()
 	setTestHome(t, home)
+	isolateAutoBindEnv(t)
 	t.Setenv("CODEX_THREAD_ID", "0123456789abcdef")
-	t.Setenv("AGENTDECK_INSTANCE_ID", "")
 	t.Setenv("AGENTDECK_PROFILE", "bad")
 	writeBrokenAgentDeckStateDB(t, home, "bad")
 	writeAgentDeckStateDB(t, home, "work", "deck-session-1", "/tmp/project", "0123456789abcdef")
@@ -5041,9 +5025,8 @@ func TestAutoBindFindsAgentDeckSessionFromCodexStateDB(t *testing.T) {
 func TestAutoBindPrefersCodexLinkedAgentDeckSessionOverAmbientCurrent(t *testing.T) {
 	home := t.TempDir()
 	setTestHome(t, home)
+	isolateAutoBindEnv(t)
 	t.Setenv("CODEX_THREAD_ID", "0123456789abcdef")
-	t.Setenv("AGENTDECK_INSTANCE_ID", "")
-	t.Setenv("AGENTDECK_PROFILE", "")
 	writeAgentDeckStateDB(t, home, "default", "deck-session-1", "/tmp/project", "0123456789abcdef")
 
 	runner := &fakeRunner{t: t}
@@ -5093,8 +5076,7 @@ func TestAutoBindDoesNotChooseAgentDeckSessionFromStateDBByWorkdirAlone(t *testi
 	home := t.TempDir()
 	workdir := t.TempDir()
 	setTestHome(t, home)
-	t.Setenv("CODEX_THREAD_ID", "")
-	t.Setenv("AGENTDECK_INSTANCE_ID", "")
+	isolateAutoBindEnv(t)
 	t.Setenv("AGENTDECK_PROFILE", "work")
 	writeAgentDeckStateDB(t, home, "work", "deck-session-1", workdir, "0123456789abcdef")
 
@@ -5133,8 +5115,7 @@ func TestAutoBindComplementsCurrentAgentDeckSessionFromStateDBByWorkdir(t *testi
 	home := t.TempDir()
 	workdir := t.TempDir()
 	setTestHome(t, home)
-	t.Setenv("CODEX_THREAD_ID", "")
-	t.Setenv("AGENTDECK_INSTANCE_ID", "")
+	isolateAutoBindEnv(t)
 	t.Setenv("AGENTDECK_PROFILE", "work")
 	writeAgentDeckStateDB(t, home, "work", "deck-session-1", workdir, "0123456789abcdef")
 
@@ -5174,8 +5155,7 @@ func TestAutoBindUsesSessionShowPathBeforeStateDBWorkdirLookup(t *testing.T) {
 	home := t.TempDir()
 	workdir := t.TempDir()
 	setTestHome(t, home)
-	t.Setenv("CODEX_THREAD_ID", "")
-	t.Setenv("AGENTDECK_INSTANCE_ID", "")
+	isolateAutoBindEnv(t)
 	t.Setenv("AGENTDECK_PROFILE", "work")
 	writeAgentDeckStateDB(t, home, "work", "deck-session-1", workdir, "0123456789abcdef")
 
@@ -5222,8 +5202,7 @@ func TestAutoBindFindsCurrentSessionWhenNewerCodexSessionSharesWorkdir(t *testin
 	home := t.TempDir()
 	workdir := t.TempDir()
 	setTestHome(t, home)
-	t.Setenv("CODEX_THREAD_ID", "")
-	t.Setenv("AGENTDECK_INSTANCE_ID", "")
+	isolateAutoBindEnv(t)
 	t.Setenv("AGENTDECK_PROFILE", "work")
 	writeAgentDeckStateDBRows(t, home, "work", []agentDeckStateDBRow{
 		{
@@ -5278,8 +5257,7 @@ func TestAutoBindDoesNotRetryStateDBAfterEmptyResultWithoutAgentDeckSignal(t *te
 	home := t.TempDir()
 	workdir := t.TempDir()
 	setTestHome(t, home)
-	t.Setenv("CODEX_THREAD_ID", "")
-	t.Setenv("AGENTDECK_INSTANCE_ID", "")
+	isolateAutoBindEnv(t)
 	t.Setenv("AGENTDECK_PROFILE", "work")
 
 	runner := &fakeRunner{t: t}
@@ -5323,8 +5301,7 @@ func TestAutoBindRetriesAgentDeckStateDBAfterAgentDeckOnlyResult(t *testing.T) {
 	home := t.TempDir()
 	workdir := t.TempDir()
 	setTestHome(t, home)
-	t.Setenv("CODEX_THREAD_ID", "")
-	t.Setenv("AGENTDECK_INSTANCE_ID", "")
+	isolateAutoBindEnv(t)
 	t.Setenv("AGENTDECK_PROFILE", "work")
 
 	runner := &fakeRunner{t: t}
@@ -5372,8 +5349,8 @@ func TestAutoBindRetriesAgentDeckStateDBAfterAgentDeckOnlyResult(t *testing.T) {
 func TestAutoBindSkipsBadAgentDeckDBAndFallsBackToCodexOnly(t *testing.T) {
 	home := t.TempDir()
 	setTestHome(t, home)
+	isolateAutoBindEnv(t)
 	t.Setenv("CODEX_THREAD_ID", "0123456789abcdef")
-	t.Setenv("AGENTDECK_INSTANCE_ID", "")
 	t.Setenv("AGENTDECK_PROFILE", "bad")
 	writeBrokenAgentDeckStateDB(t, home, "bad")
 
@@ -5408,9 +5385,8 @@ func TestAutoBindSkipsBadAgentDeckDBAndFallsBackToCodexOnly(t *testing.T) {
 func TestAutoBindRetriesAgentDeckAfterCodexOnlyFallback(t *testing.T) {
 	home := t.TempDir()
 	setTestHome(t, home)
+	isolateAutoBindEnv(t)
 	t.Setenv("CODEX_THREAD_ID", "0123456789abcdef")
-	t.Setenv("AGENTDECK_INSTANCE_ID", "")
-	t.Setenv("AGENTDECK_PROFILE", "")
 
 	var currentCalls int
 	runner := &fakeRunner{t: t}
@@ -5464,10 +5440,9 @@ func TestAutoBindRetriesAgentDeckAfterCodexOnlyFallback(t *testing.T) {
 func TestAutoBindRetriesAgentDeckAfterCodexFallbackWithExtraToolAddress(t *testing.T) {
 	home := t.TempDir()
 	setTestHome(t, home)
+	isolateAutoBindEnv(t)
 	t.Setenv("CODEX_THREAD_ID", "0123456789abcdef")
 	t.Setenv("CLAUDE_CODE_SESSION_ID", "aaaaaaaaaaaaaaaa")
-	t.Setenv("AGENTDECK_INSTANCE_ID", "")
-	t.Setenv("AGENTDECK_PROFILE", "")
 
 	var currentCalls int
 	runner := &fakeRunner{t: t}
@@ -5529,10 +5504,8 @@ func TestAutoBindRetriesAgentDeckAfterCodexFallbackWithExtraToolAddress(t *testi
 func TestAutoBindRetriesAgentDeckAfterClaudeOnlyFallback(t *testing.T) {
 	home := t.TempDir()
 	setTestHome(t, home)
-	t.Setenv("CODEX_THREAD_ID", "")
+	isolateAutoBindEnv(t)
 	t.Setenv("CLAUDE_CODE_SESSION_ID", "aaaaaaaaaaaaaaaa")
-	t.Setenv("AGENTDECK_INSTANCE_ID", "")
-	t.Setenv("AGENTDECK_PROFILE", "")
 
 	var currentCalls int
 	runner := &fakeRunner{t: t}
@@ -5592,9 +5565,8 @@ func TestAutoBindRetriesAgentDeckAfterClaudeOnlyFallback(t *testing.T) {
 func TestMailboxBindDisablesAgentDeckRetryUpgrade(t *testing.T) {
 	home := t.TempDir()
 	setTestHome(t, home)
+	isolateAutoBindEnv(t)
 	t.Setenv("CODEX_THREAD_ID", "0123456789abcdef")
-	t.Setenv("AGENTDECK_INSTANCE_ID", "")
-	t.Setenv("AGENTDECK_PROFILE", "")
 
 	var currentCalls int
 	runner := &fakeRunner{t: t}
@@ -5654,9 +5626,8 @@ func TestMailboxBindDisablesAgentDeckRetryUpgrade(t *testing.T) {
 }
 
 func TestMailboxBindManualOverrideWarnsWhenNoToolAddressRemains(t *testing.T) {
+	isolateAutoBindEnv(t)
 	t.Setenv("CODEX_THREAD_ID", "0123456789abcdef")
-	t.Setenv("AGENTDECK_INSTANCE_ID", "")
-	t.Setenv("AGENTDECK_PROFILE", "")
 
 	runner := &fakeRunner{t: t}
 	runner.handler = func(args []string, _ string) (RunResult, error) {
@@ -5699,9 +5670,8 @@ func TestMailboxBindManualOverrideWarnsWhenNoToolAddressRemains(t *testing.T) {
 func TestAgentDeckRetryRechecksFallbackStateBeforeUpgrade(t *testing.T) {
 	home := t.TempDir()
 	setTestHome(t, home)
+	isolateAutoBindEnv(t)
 	t.Setenv("CODEX_THREAD_ID", "0123456789abcdef")
-	t.Setenv("AGENTDECK_INSTANCE_ID", "")
-	t.Setenv("AGENTDECK_PROFILE", "")
 
 	runner := &fakeRunner{t: t}
 	runner.handler = func(args []string, _ string) (RunResult, error) {
@@ -5865,6 +5835,15 @@ func setTestHome(t *testing.T, home string) {
 	t.Helper()
 	t.Setenv("HOME", home)
 	t.Setenv("USERPROFILE", home)
+}
+
+func isolateAutoBindEnv(t *testing.T) {
+	t.Helper()
+	for _, name := range toolSessionEnvNames() {
+		t.Setenv(name, "")
+	}
+	t.Setenv("AGENTDECK_INSTANCE_ID", "")
+	t.Setenv("AGENTDECK_PROFILE", "")
 }
 
 type agentDeckStateDBRow struct {
