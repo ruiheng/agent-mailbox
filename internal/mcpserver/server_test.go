@@ -4177,6 +4177,29 @@ func TestProcessLeaseRenewalsAllowsTerminalMutationAfterExpiryFollowingTransient
 	}
 }
 
+func TestRenewalFailureDefinitiveUsesLeaseSentinels(t *testing.T) {
+	cases := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{name: "sentinel not found", err: fmt.Errorf("delivery not found text changed: %w", mailbox.ErrLeaseNotFound), want: true},
+		{name: "sentinel not leased", err: fmt.Errorf("delivery in wrong state: %w", mailbox.ErrLeaseNotLeased), want: true},
+		{name: "sentinel changed", err: fmt.Errorf("renew conflict: %w", mailbox.ErrLeaseRenewChanged), want: true},
+		{name: "legacy text not found", err: errors.New(`delivery "dlv_1" not found`), want: false},
+		{name: "legacy text want leased", err: errors.New(`delivery "dlv_1" is in state "acked", want leased`), want: false},
+		{name: "legacy text changed", err: errors.New(`delivery "dlv_1" changed while renewing`), want: false},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := renewalFailureDefinitive(tc.err); got != tc.want {
+				t.Fatalf("renewalFailureDefinitive(%v) = %v, want %v", tc.err, got, tc.want)
+			}
+		})
+	}
+}
+
 func TestMailboxAckStopsTrackingActiveLease(t *testing.T) {
 	mailboxService := &fakeMailboxService{t: t}
 	mailboxService.receiveBatchWithTTLFunc = func(_ context.Context, params mailbox.ReceiveBatchParams, ttl time.Duration) (mailbox.ReceiveResult, error) {

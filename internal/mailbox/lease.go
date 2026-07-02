@@ -30,9 +30,29 @@ var (
 	ErrClaimContention    = errors.New("receive claim contention")
 	ErrBodyIntegrity      = errors.New("body blob failed integrity check")
 	ErrLeaseExpired       = errors.New("lease expired")
+	ErrLeaseNotFound      = errors.New("lease delivery not found")
+	ErrLeaseNotLeased     = errors.New("delivery is not leased")
+	ErrLeaseRenewChanged  = errors.New("lease changed while renewing")
 	ErrLeaseTokenMismatch = errors.New("lease token does not match current lease")
 	ErrReceiveRecovery    = errors.New("receive recovery failed")
 )
+
+type leaseSentinelError struct {
+	text string
+	err  error
+}
+
+func (e leaseSentinelError) Error() string {
+	return e.text
+}
+
+func (e leaseSentinelError) Unwrap() error {
+	return e.err
+}
+
+func leaseError(text string, err error) error {
+	return leaseSentinelError{text: text, err: err}
+}
 
 type ClaimContentionError struct {
 	Attempts int
@@ -435,7 +455,7 @@ WHERE delivery_id = ?
 		return LeaseRenewResult{}, fmt.Errorf("read renew rows affected for %q: %w", deliveryID, err)
 	}
 	if rowsAffected == 0 {
-		return LeaseRenewResult{}, fmt.Errorf("delivery %q changed while renewing", deliveryID)
+		return LeaseRenewResult{}, leaseError(fmt.Sprintf("delivery %q changed while renewing", deliveryID), ErrLeaseRenewChanged)
 	}
 
 	eventTimestamp := formatTimestamp(now)
@@ -811,12 +831,12 @@ func loadCurrentLease(ctx context.Context, tx *sql.Tx, deliveryID, leaseToken st
 	delivery, err := loadLeasedDeliveryRecord(ctx, tx, deliveryID)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			return leasedDeliveryRecord{}, fmt.Errorf("delivery %q not found", deliveryID)
+			return leasedDeliveryRecord{}, leaseError(fmt.Sprintf("delivery %q not found", deliveryID), ErrLeaseNotFound)
 		}
 		return leasedDeliveryRecord{}, fmt.Errorf("load delivery %q: %w", deliveryID, err)
 	}
 	if delivery.State != "leased" {
-		return leasedDeliveryRecord{}, fmt.Errorf("delivery %q is in state %q, want leased", deliveryID, delivery.State)
+		return leasedDeliveryRecord{}, leaseError(fmt.Sprintf("delivery %q is in state %q, want leased", deliveryID, delivery.State), ErrLeaseNotLeased)
 	}
 	if !delivery.LeaseToken.Valid || delivery.LeaseToken.String != leaseToken {
 		return leasedDeliveryRecord{}, fmt.Errorf("validate lease token for %q: %w", deliveryID, ErrLeaseTokenMismatch)

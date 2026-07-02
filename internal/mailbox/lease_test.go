@@ -258,6 +258,32 @@ func TestRenewRejectsStaleLeaseToken(t *testing.T) {
 	}
 }
 
+func TestRenewReportsLeaseSentinelErrors(t *testing.T) {
+	t.Parallel()
+
+	_, store := newLeaseTestStore(t)
+
+	if _, err := store.Renew(context.Background(), "dlv_missing", "lease_missing", time.Minute); !errors.Is(err, ErrLeaseNotFound) {
+		t.Fatalf("Renew(missing delivery) error = %v, want ErrLeaseNotFound", err)
+	} else if !strings.Contains(err.Error(), `delivery "dlv_missing" not found`) {
+		t.Fatalf("Renew(missing delivery) error = %q, want original message", err)
+	}
+
+	mustSendMessage(t, store, "workflow/reviewer/task-123", "agent/sender", "review request", "hello reviewer")
+	received, err := store.Receive(context.Background(), ReceiveParams{Address: "workflow/reviewer/task-123"})
+	if err != nil {
+		t.Fatalf("Receive() error = %v", err)
+	}
+	if _, err := store.Ack(context.Background(), received.DeliveryID, received.LeaseToken); err != nil {
+		t.Fatalf("Ack() error = %v", err)
+	}
+	if _, err := store.Renew(context.Background(), received.DeliveryID, received.LeaseToken, time.Minute); !errors.Is(err, ErrLeaseNotLeased) {
+		t.Fatalf("Renew(acked delivery) error = %v, want ErrLeaseNotLeased", err)
+	} else if !strings.Contains(err.Error(), "want leased") {
+		t.Fatalf("Renew(acked delivery) error = %q, want original message", err)
+	}
+}
+
 func TestReceiveLeasePolicyKeepsLegacyPublicTTLAndAllowsShortInternalTTL(t *testing.T) {
 	t.Parallel()
 

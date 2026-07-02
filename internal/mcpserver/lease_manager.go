@@ -2,7 +2,6 @@ package mcpserver
 
 import (
 	"errors"
-	"strings"
 	"sync"
 
 	"github.com/ruiheng/agent-mailbox/internal/mailbox"
@@ -190,11 +189,9 @@ func renewalFailureDefinitive(err error) bool {
 	if err == nil {
 		return false
 	}
-	if errors.Is(err, mailbox.ErrLeaseExpired) || errors.Is(err, mailbox.ErrLeaseTokenMismatch) {
-		return true
-	}
-	text := strings.ToLower(strings.TrimSpace(err.Error()))
-	return strings.Contains(text, "not found") ||
-		strings.Contains(text, "want leased") ||
-		strings.Contains(text, "changed while renewing")
+	return errors.Is(err, mailbox.ErrLeaseExpired) ||
+		errors.Is(err, mailbox.ErrLeaseNotFound) ||
+		errors.Is(err, mailbox.ErrLeaseNotLeased) ||
+		errors.Is(err, mailbox.ErrLeaseRenewChanged) ||
+		errors.Is(err, mailbox.ErrLeaseTokenMismatch)
 }
