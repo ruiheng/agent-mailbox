@@ -1283,6 +1283,21 @@ func TestHelpCLIPathsDoNotCreateRuntimeState(t *testing.T) {
 	}
 }
 
+func TestGroupHelpDoesNotAdvertiseRootOwnedWebCommand(t *testing.T) {
+	t.Parallel()
+
+	stdout := &bytes.Buffer{}
+	app := NewApp(strings.NewReader(""), stdout, &bytes.Buffer{})
+
+	err := app.RunWithStateDir(context.Background(), filepath.Join(t.TempDir(), "mailbox-state"), []string{"group", "--help"})
+	if !errors.Is(err, ErrHelpRequested) {
+		t.Fatalf("RunWithStateDir(group --help) error = %v, want ErrHelpRequested", err)
+	}
+	if strings.Contains(stdout.String(), "  web") {
+		t.Fatalf("group help = %q, want no web subcommand", stdout.String())
+	}
+}
+
 func assertPathMissing(t *testing.T, path string) {
 	t.Helper()
 

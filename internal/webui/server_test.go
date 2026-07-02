@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -116,6 +117,38 @@ func TestPromptForURLActionSkipsWhenNonInteractive(t *testing.T) {
 
 	if called {
 		t.Fatal("non-interactive prompt called opener")
+	}
+}
+
+func TestRunWarnsForNonLoopbackListenAddress(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	var stdout bytes.Buffer
+
+	err := Run(ctx, Options{Listen: "0.0.0.0:0", Stdout: &stdout})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("Run() error = %v, want context.Canceled", err)
+	}
+	if !strings.Contains(stdout.String(), "warning: group web read-only UI is listening beyond loopback") {
+		t.Fatalf("stdout = %q, want non-loopback warning", stdout.String())
+	}
+}
+
+func TestRunDoesNotWarnForLoopbackListenAddress(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	var stdout bytes.Buffer
+
+	err := Run(ctx, Options{Listen: "127.0.0.1:0", Stdout: &stdout})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("Run() error = %v, want context.Canceled", err)
+	}
+	if strings.Contains(stdout.String(), "warning:") {
+		t.Fatalf("stdout = %q, want no warning", stdout.String())
 	}
 }
 

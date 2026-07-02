@@ -57,6 +57,9 @@ func Run(ctx context.Context, opts Options) error {
 
 	webURL := "http://" + listener.Addr().String()
 	writeLine(opts.Stdout, "agent-mailbox group web listening on "+webURL)
+	if listensBeyondLoopback(listen) {
+		writeLine(opts.Stdout, "warning: group web read-only UI is listening beyond loopback")
+	}
 
 	errCh := make(chan error, 1)
 	go func() {
@@ -167,6 +170,22 @@ func writeLine(w io.Writer, text string) {
 		return
 	}
 	fmt.Fprintln(w, text)
+}
+
+func listensBeyondLoopback(listen string) bool {
+	host, _, err := net.SplitHostPort(listen)
+	if err != nil {
+		host = listen
+	}
+	host = strings.Trim(host, "[]")
+	if host == "" {
+		return true
+	}
+	if strings.EqualFold(host, "localhost") {
+		return false
+	}
+	ip := net.ParseIP(host)
+	return ip == nil || !ip.IsLoopback()
 }
 
 func NewServer(stateDir, group string) http.Handler {
