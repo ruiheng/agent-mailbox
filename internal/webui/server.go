@@ -13,6 +13,7 @@ import (
 	"os/exec"
 	"runtime"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/ruiheng/agent-mailbox/internal/mailbox"
@@ -37,6 +38,8 @@ type Options struct {
 type Server struct {
 	stateDir string
 	group    string
+	mu       sync.Mutex
+	runtime  *mailbox.Runtime
 }
 
 func Run(ctx context.Context, opts Options) error {
@@ -45,9 +48,12 @@ func Run(ctx context.Context, opts Options) error {
 		listen = defaultListenAddress
 	}
 
+	handler := NewServer(opts.StateDir, opts.Group)
+	defer handler.Close()
+
 	server := &http.Server{
 		Addr:    listen,
-		Handler: NewServer(opts.StateDir, opts.Group),
+		Handler: handler,
 	}
 
 	listener, err := net.Listen("tcp", listen)
@@ -90,12 +96,27 @@ func promptForURLAction(ctx context.Context, opts Options, webURL string) {
 	}
 
 	fmt.Fprint(opts.Stdout, "Open URL [o], copy URL [c], or press Enter to continue: ")
-	choice, err := bufio.NewReader(opts.Stdin).ReadString('\n')
-	if err != nil && !errors.Is(err, io.EOF) {
-		writeLine(opts.Stdout, "unable to read choice: "+err.Error())
+	type promptResult struct {
+		choice string
+		err    error
+	}
+	resultCh := make(chan promptResult, 1)
+	go func() {
+		choice, err := bufio.NewReader(opts.Stdin).ReadString('\n')
+		resultCh <- promptResult{choice: choice, err: err}
+	}()
+
+	var result promptResult
+	select {
+	case <-ctx.Done():
+		return
+	case result = <-resultCh:
+	}
+	if result.err != nil && !errors.Is(result.err, io.EOF) {
+		writeLine(opts.Stdout, "unable to read choice: "+result.err.Error())
 		return
 	}
-	switch strings.ToLower(strings.TrimSpace(choice)) {
+	switch strings.ToLower(strings.TrimSpace(result.choice)) {
 	case "o", "open":
 		openURL := opts.OpenURL
 		if openURL == nil {
@@ -188,11 +209,36 @@ func listensBeyondLoopback(listen string) bool {
 	return ip == nil || !ip.IsLoopback()
 }
 
-func NewServer(stateDir, group string) http.Handler {
+func NewServer(stateDir, group string) *Server {
 	return &Server{
 		stateDir: stateDir,
 		group:    strings.TrimSpace(group),
 	}
+}
+
+func (s *Server) Close() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.runtime == nil {
+		return nil
+	}
+	err := s.runtime.Close()
+	s.runtime = nil
+	return err
+}
+
+func (s *Server) mailboxRuntime(ctx context.Context) (*mailbox.Runtime, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.runtime != nil {
+		return s.runtime, nil
+	}
+	runtime, err := mailbox.OpenRuntime(ctx, s.stateDir)
+	if err != nil {
+		return nil, err
+	}
+	s.runtime = runtime
+	return runtime, nil
 }
 
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -214,12 +260,11 @@ func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleGroups(w http.ResponseWriter, r *http.Request) {
-	runtime, err := mailbox.OpenRuntime(r.Context(), s.stateDir)
+	runtime, err := s.mailboxRuntime(r.Context())
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
-	defer runtime.Close()
 
 	groups, err := runtime.Store().ListGroups(r.Context())
 	if err != nil {
@@ -249,12 +294,11 @@ func (s *Server) handleGroupPath(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleTranscript(w http.ResponseWriter, r *http.Request, groupAddress string) {
-	runtime, err := mailbox.OpenRuntime(r.Context(), s.stateDir)
+	runtime, err := s.mailboxRuntime(r.Context())
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
-	defer runtime.Close()
 
 	messages, err := runtime.Store().ListGroupTranscript(r.Context(), mailbox.GroupTranscriptParams{Address: groupAddress})
 	if err != nil {
@@ -307,11 +351,10 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request, groupAddre
 }
 
 func (s *Server) transcript(ctx context.Context, groupAddress string) ([]mailbox.GroupTranscriptMessage, error) {
-	runtime, err := mailbox.OpenRuntime(ctx, s.stateDir)
+	runtime, err := s.mailboxRuntime(ctx)
 	if err != nil {
 		return nil, err
 	}
-	defer runtime.Close()
 	return runtime.Store().ListGroupTranscript(ctx, mailbox.GroupTranscriptParams{Address: groupAddress})
 }
 

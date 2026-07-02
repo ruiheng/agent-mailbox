@@ -19,6 +19,15 @@ import (
 	"github.com/ruiheng/agent-mailbox/internal/mailbox"
 )
 
+type blockingReader struct {
+	started chan struct{}
+}
+
+func (r blockingReader) Read([]byte) (int, error) {
+	close(r.started)
+	select {}
+}
+
 func TestGroupsEndpointListsGroups(t *testing.T) {
 	t.Parallel()
 
@@ -32,7 +41,9 @@ func TestGroupsEndpointListsGroups(t *testing.T) {
 	}
 	runtime.Close()
 
-	server := httptest.NewServer(NewServer(stateDir, "group/web"))
+	handler := NewServer(stateDir, "group/web")
+	defer handler.Close()
+	server := httptest.NewServer(handler)
 	defer server.Close()
 
 	response, err := http.Get(server.URL + "/api/groups")
@@ -117,6 +128,32 @@ func TestPromptForURLActionSkipsWhenNonInteractive(t *testing.T) {
 
 	if called {
 		t.Fatal("non-interactive prompt called opener")
+	}
+}
+
+func TestPromptForURLActionReturnsWhenContextCanceled(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	reader := blockingReader{started: make(chan struct{})}
+	done := make(chan struct{})
+
+	go func() {
+		defer close(done)
+		promptForURLAction(ctx, Options{
+			Stdin:       reader,
+			Stdout:      &bytes.Buffer{},
+			Interactive: true,
+		}, "http://127.0.0.1:45678")
+	}()
+
+	<-reader.started
+	cancel()
+
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("promptForURLAction did not return after context cancellation")
 	}
 }
 
@@ -206,7 +243,9 @@ func TestTranscriptEndpointReturnsBodies(t *testing.T) {
 	}
 	runtime.Close()
 
-	server := httptest.NewServer(NewServer(stateDir, ""))
+	handler := NewServer(stateDir, "")
+	defer handler.Close()
+	server := httptest.NewServer(handler)
 	defer server.Close()
 
 	response, err := http.Get(server.URL + "/api/groups/" + url.PathEscape(group.Address) + "/transcript")
@@ -235,6 +274,52 @@ func TestTranscriptEndpointReturnsBodies(t *testing.T) {
 	}
 }
 
+func TestServerReusesMailboxRuntime(t *testing.T) {
+	t.Parallel()
+
+	stateDir := filepath.Join(t.TempDir(), "mailbox-state")
+	runtime, err := mailbox.OpenRuntime(context.Background(), stateDir)
+	if err != nil {
+		t.Fatalf("OpenRuntime() error = %v", err)
+	}
+	if _, err := runtime.Store().CreateGroup(context.Background(), "group/web-reuse"); err != nil {
+		t.Fatalf("CreateGroup() error = %v", err)
+	}
+	runtime.Close()
+
+	handler := NewServer(stateDir, "")
+	defer handler.Close()
+	server := httptest.NewServer(handler)
+	defer server.Close()
+
+	for _, path := range []string{
+		"/api/groups",
+		"/api/groups/" + url.PathEscape("group/web-reuse") + "/transcript",
+	} {
+		response, err := http.Get(server.URL + path)
+		if err != nil {
+			t.Fatalf("GET %s error = %v", path, err)
+		}
+		response.Body.Close()
+		if response.StatusCode != http.StatusOK {
+			t.Fatalf("GET %s status = %d, want 200", path, response.StatusCode)
+		}
+	}
+
+	first := handler.runtime
+	if first == nil {
+		t.Fatal("server did not open mailbox runtime")
+	}
+	response, err := http.Get(server.URL + "/api/groups")
+	if err != nil {
+		t.Fatalf("GET /api/groups error = %v", err)
+	}
+	response.Body.Close()
+	if handler.runtime != first {
+		t.Fatal("server opened a new mailbox runtime instead of reusing the existing one")
+	}
+}
+
 func TestEventsEndpointStreamsNewMessages(t *testing.T) {
 	t.Parallel()
 
@@ -250,7 +335,9 @@ func TestEventsEndpointStreamsNewMessages(t *testing.T) {
 	}
 	runtime.Close()
 
-	server := httptest.NewServer(NewServer(stateDir, ""))
+	handler := NewServer(stateDir, "")
+	defer handler.Close()
+	server := httptest.NewServer(handler)
 	defer server.Close()
 
 	request, err := http.NewRequest(http.MethodGet, server.URL+"/api/groups/"+url.PathEscape(group.Address)+"/events", nil)
