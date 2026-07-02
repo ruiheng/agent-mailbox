@@ -3202,6 +3202,10 @@ func TestMailboxGroupSendRuntimeKeepsMessageWhenSubscriberNotifyFails(t *testing
 		"group_address": "group/review",
 		"person":        "alice",
 	})
+	callServiceTool(t, service, "mailbox_group_add_member", map[string]any{
+		"group_address": "group/review",
+		"person":        "moderator",
+	})
 	callServiceTool(t, service, "mailbox_group_add_subscriber", map[string]any{
 		"group_address":  "group/review",
 		"notify_address": "agent-deck/moderator",
@@ -3220,6 +3224,25 @@ func TestMailboxGroupSendRuntimeKeepsMessageWhenSubscriberNotifyFails(t *testing
 	}
 	if got := send["notify_status"]; got != "failed" {
 		t.Fatalf("notify_status = %v, want failed", got)
+	}
+
+	controlRecv := callServiceTool(t, service, "mailbox_recv", map[string]any{
+		"addresses": []string{"agent-deck/moderator"},
+	})
+	control := controlRecv["delivery"].(map[string]any)["messages"].([]any)[0].(map[string]any)
+	if control["subject"] != "Group mailbox update: group/review" {
+		t.Fatalf("control subject = %v, want group update", control["subject"])
+	}
+	controlBody := control["body"].(string)
+	for _, want := range []string{
+		"Action: group_message_available",
+		"Group-Address: group/review",
+		"As-Person: moderator",
+		"Message-ID: " + send["message_id"].(string),
+	} {
+		if !strings.Contains(controlBody, want) {
+			t.Fatalf("control body = %q, want %q", controlBody, want)
+		}
 	}
 
 	recv := callServiceTool(t, service, "mailbox_recv", map[string]any{

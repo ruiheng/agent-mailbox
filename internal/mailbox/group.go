@@ -379,6 +379,9 @@ func (s *Store) AddGroupNotificationSubscriber(ctx context.Context, groupAddress
 		}
 		return GroupNotificationSubscriberRecord{}, err
 	}
+	if IsGroupAddress(notifyAddress) {
+		return GroupNotificationSubscriberRecord{}, fmt.Errorf("notify address %q uses reserved group/ prefix", notifyAddress)
+	}
 	person = strings.TrimSpace(person)
 
 	tx, err := s.writeDB.BeginTx(ctx, nil)
@@ -528,31 +531,12 @@ func (s *Store) ListGroupNotificationSubscribers(ctx context.Context, groupAddre
 		return nil, fmt.Errorf("group %q: %w", groupAddress, ErrGroupNotFound)
 	}
 
-	rows, err := s.readDB.QueryContext(ctx, `
-SELECT subscriber_id, notify_address, person, created_at
-FROM group_notification_subscribers
-WHERE group_id = ?
-  AND removed_at IS NULL
-ORDER BY created_at ASC, subscriber_id ASC
-`, group.GroupID)
+	subscribers, err := listActiveGroupNotificationSubscribers(ctx, s.readDB, group.GroupID)
 	if err != nil {
 		return nil, fmt.Errorf("list subscribers for group %q: %w", groupAddress, err)
 	}
-	defer rows.Close()
-
-	var subscribers []GroupNotificationSubscriberRecord
-	for rows.Next() {
-		var record GroupNotificationSubscriberRecord
-		if err := rows.Scan(&record.SubscriberID, &record.NotifyAddress, &record.Person, &record.CreatedAt); err != nil {
-			return nil, fmt.Errorf("scan subscriber for group %q: %w", groupAddress, err)
-		}
-		record.GroupID = group.GroupID
-		record.GroupAddress = group.Address
-		record.Active = true
-		subscribers = append(subscribers, record)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate subscribers for group %q: %w", groupAddress, err)
+	for i := range subscribers {
+		subscribers[i].GroupAddress = group.Address
 	}
 	return subscribers, nil
 }
@@ -1149,4 +1133,35 @@ ORDER BY gm.joined_at ASC, gm.membership_id ASC
 		return nil, err
 	}
 	return memberships, nil
+}
+
+func listActiveGroupNotificationSubscribers(ctx context.Context, querier interface {
+	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
+}, groupID string) ([]GroupNotificationSubscriberRecord, error) {
+	rows, err := querier.QueryContext(ctx, `
+SELECT subscriber_id, notify_address, person, created_at
+FROM group_notification_subscribers
+WHERE group_id = ?
+  AND removed_at IS NULL
+ORDER BY created_at ASC, subscriber_id ASC
+`, groupID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var subscribers []GroupNotificationSubscriberRecord
+	for rows.Next() {
+		var subscriber GroupNotificationSubscriberRecord
+		if err := rows.Scan(&subscriber.SubscriberID, &subscriber.NotifyAddress, &subscriber.Person, &subscriber.CreatedAt); err != nil {
+			return nil, err
+		}
+		subscriber.GroupID = groupID
+		subscriber.Active = true
+		subscribers = append(subscribers, subscriber)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return subscribers, nil
 }

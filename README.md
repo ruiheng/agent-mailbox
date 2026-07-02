@@ -259,10 +259,11 @@ payloads and do not use delivery leases, `mailbox_ack`, `mailbox_release`,
 `mailbox_defer`, `mailbox_undefer`, or `mailbox_fail`.
 
 Use `mailbox_group_add_subscriber` to register a routable notify target such as
-`agent-deck/<session-id>` for group-message wakeups. Group send notifies active
-subscribers after the message is durable, skips a subscriber whose
-`notify_address` matches the sender's `from_address`, and keeps notification
-failure best-effort.
+`agent-deck/<session-id>` for group-message wakeups. Group send queues a normal
+personal delivery for active subscribers whose `person` is a current group
+member, skips a subscriber whose `notify_address` matches the sender's
+`from_address`, rejects group-prefixed notify targets, and keeps immediate
+external wake notification failure best-effort.
 
 `agent_deck_create_session` is for lifecycle allocation only. It creates a new
 session, errors if the target already exists, supports explicit group placement

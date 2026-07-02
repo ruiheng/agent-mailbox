@@ -170,6 +170,10 @@ func TestGroupNotificationSubscriberLifecycle(t *testing.T) {
 	if secondSubscriber.SubscriberID == firstSubscriber.SubscriberID {
 		t.Fatalf("readd subscriber_id = %q, want a new subscriber id", secondSubscriber.SubscriberID)
 	}
+
+	if _, err := store.AddGroupNotificationSubscriber(context.Background(), group.Address, "group/not-a-personal-target", "moderator"); err == nil || !strings.Contains(err.Error(), "reserved group/ prefix") {
+		t.Fatalf("AddGroupNotificationSubscriber(group target) error = %v, want reserved group prefix rejection", err)
+	}
 }
 
 func TestReadMessageReturnsGroupMessageBodyWithoutRecordingRead(t *testing.T) {
@@ -594,6 +598,215 @@ WHERE message_id = ?
 	}
 	if eligibilityCount != 0 {
 		t.Fatalf("group_message_eligibility count = %d, want 0", eligibilityCount)
+	}
+}
+
+func TestGroupSendMarksSenderReadAndQueuesSubscriberDeliveries(t *testing.T) {
+	t.Parallel()
+
+	runtime, store := newLeaseTestStore(t)
+	defer runtime.Close()
+
+	group, err := store.CreateGroup(context.Background(), "group/ops")
+	if err != nil {
+		t.Fatalf("CreateGroup() error = %v", err)
+	}
+	if _, err := store.AddGroupMember(context.Background(), group.Address, "moderator"); err != nil {
+		t.Fatalf("AddGroupMember(moderator) error = %v", err)
+	}
+	if _, err := store.AddGroupMember(context.Background(), group.Address, "observer"); err != nil {
+		t.Fatalf("AddGroupMember(observer) error = %v", err)
+	}
+	if _, err := store.AddGroupNotificationSubscriber(context.Background(), group.Address, "agent-deck/moderator", "moderator"); err != nil {
+		t.Fatalf("AddGroupNotificationSubscriber(moderator) error = %v", err)
+	}
+	if _, err := store.AddGroupNotificationSubscriber(context.Background(), group.Address, "agent-deck/observer", "observer"); err != nil {
+		t.Fatalf("AddGroupNotificationSubscriber(observer) error = %v", err)
+	}
+
+	sent, err := store.Send(context.Background(), SendParams{
+		ToAddress:     group.Address,
+		FromAddress:   "agent-deck/moderator",
+		Subject:       "roundtable turn",
+		ContentType:   "text/plain",
+		SchemaVersion: "v1",
+		Body:          []byte("group body"),
+		Group:         true,
+	})
+	if err != nil {
+		t.Fatalf("Send(group) error = %v", err)
+	}
+
+	moderatorMessages, err := store.ListGroupMessages(context.Background(), GroupListParams{
+		Address: group.Address,
+		Person:  "moderator",
+	})
+	if err != nil {
+		t.Fatalf("ListGroupMessages(moderator) error = %v", err)
+	}
+	if len(moderatorMessages) != 1 {
+		t.Fatalf("len(moderatorMessages) = %d, want 1", len(moderatorMessages))
+	}
+	if !moderatorMessages[0].Read {
+		t.Fatal("moderator message read = false, want true for sender")
+	}
+	if moderatorMessages[0].ReadCount != 1 || moderatorMessages[0].EligibleCount != 2 {
+		t.Fatalf("moderator counts = (%d, %d), want (1, 2)", moderatorMessages[0].ReadCount, moderatorMessages[0].EligibleCount)
+	}
+
+	observerMessages, err := store.ListGroupMessages(context.Background(), GroupListParams{
+		Address: group.Address,
+		Person:  "observer",
+	})
+	if err != nil {
+		t.Fatalf("ListGroupMessages(observer) error = %v", err)
+	}
+	if observerMessages[0].Read {
+		t.Fatal("observer message read = true, want false")
+	}
+	if observerMessages[0].ReadCount != 1 || observerMessages[0].EligibleCount != 2 {
+		t.Fatalf("observer counts = (%d, %d), want (1, 2)", observerMessages[0].ReadCount, observerMessages[0].EligibleCount)
+	}
+
+	if _, err := store.Receive(context.Background(), ReceiveParams{Address: "agent-deck/moderator"}); !errors.Is(err, ErrNoMessage) {
+		t.Fatalf("Receive(sender subscriber) error = %v, want ErrNoMessage", err)
+	}
+
+	control, err := store.Receive(context.Background(), ReceiveParams{Address: "agent-deck/observer"})
+	if err != nil {
+		t.Fatalf("Receive(observer subscriber) error = %v", err)
+	}
+	if control.Subject != "Group mailbox update: group/ops" {
+		t.Fatalf("control subject = %q, want group update", control.Subject)
+	}
+	if control.ContentType != "text/plain" || control.SchemaVersion != "group-notification/v1" {
+		t.Fatalf("control shape = (%q, %q), want text/plain group-notification/v1", control.ContentType, control.SchemaVersion)
+	}
+	for _, want := range []string{
+		"Action: group_message_available",
+		"Group-Address: group/ops",
+		"As-Person: observer",
+		"Message-ID: " + sent.MessageID,
+		"Subject: roundtable turn",
+	} {
+		if !strings.Contains(control.Body, want) {
+			t.Fatalf("control body = %q, want %q", control.Body, want)
+		}
+	}
+	if control.ForwardedMessageID == nil || *control.ForwardedMessageID != sent.MessageID {
+		t.Fatalf("control forwarded_message_id = %v, want %q", control.ForwardedMessageID, sent.MessageID)
+	}
+	if control.ForwardedFromAddress == nil || *control.ForwardedFromAddress != "agent-deck/moderator" {
+		t.Fatalf("control forwarded_from_address = %v, want sender", control.ForwardedFromAddress)
+	}
+}
+
+func TestGroupSendSkipsInvalidSubscribers(t *testing.T) {
+	t.Parallel()
+
+	runtime, store := newLeaseTestStore(t)
+	defer runtime.Close()
+
+	group, err := store.CreateGroup(context.Background(), "group/ops")
+	if err != nil {
+		t.Fatalf("CreateGroup() error = %v", err)
+	}
+	if _, err := store.AddGroupMember(context.Background(), group.Address, "alice"); err != nil {
+		t.Fatalf("AddGroupMember(alice) error = %v", err)
+	}
+	if _, err := store.AddGroupMember(context.Background(), group.Address, "observer"); err != nil {
+		t.Fatalf("AddGroupMember(observer) error = %v", err)
+	}
+	if _, err := store.AddGroupNotificationSubscriber(context.Background(), group.Address, "agent-deck/observer", "observer"); err != nil {
+		t.Fatalf("AddGroupNotificationSubscriber(observer) error = %v", err)
+	}
+	if _, err := store.RemoveGroupMember(context.Background(), group.Address, "observer"); err != nil {
+		t.Fatalf("RemoveGroupMember(observer) error = %v", err)
+	}
+	if _, err := runtime.DB().Exec(`
+INSERT INTO group_notification_subscribers (
+  subscriber_id,
+  group_id,
+  notify_address,
+  person,
+  created_at,
+  removed_at,
+  metadata_json
+) VALUES ('gns_legacy_group_target', ?, 'group/bad-target', 'alice', '2026-04-18T00:00:00Z', NULL, '{}')
+`, group.GroupID); err != nil {
+		t.Fatalf("insert legacy group-prefixed subscriber error = %v", err)
+	}
+
+	if _, err := store.Send(context.Background(), SendParams{
+		ToAddress:     group.Address,
+		FromAddress:   "agent-deck/alice",
+		Subject:       "update",
+		ContentType:   "text/plain",
+		SchemaVersion: "v1",
+		Body:          []byte("group body"),
+		Group:         true,
+	}); err != nil {
+		t.Fatalf("Send(group) error = %v", err)
+	}
+
+	if _, err := store.Receive(context.Background(), ReceiveParams{Address: "agent-deck/observer"}); !errors.Is(err, ErrNoMessage) {
+		t.Fatalf("Receive(stale subscriber) error = %v, want ErrNoMessage", err)
+	}
+	var endpointCount int
+	if err := runtime.DB().QueryRow(`SELECT COUNT(*) FROM endpoint_addresses WHERE address = 'group/bad-target'`).Scan(&endpointCount); err != nil {
+		t.Fatalf("count legacy group target endpoints error = %v", err)
+	}
+	if endpointCount != 0 {
+		t.Fatalf("legacy group target endpoint count = %d, want 0", endpointCount)
+	}
+}
+
+func TestGroupSubscriberDeliveryEscapesLineValues(t *testing.T) {
+	t.Parallel()
+
+	runtime, store := newLeaseTestStore(t)
+	defer runtime.Close()
+
+	group, err := store.CreateGroup(context.Background(), "group/ops")
+	if err != nil {
+		t.Fatalf("CreateGroup() error = %v", err)
+	}
+	person := "observer\nAction: injected"
+	if _, err := store.AddGroupMember(context.Background(), group.Address, person); err != nil {
+		t.Fatalf("AddGroupMember(observer) error = %v", err)
+	}
+	if _, err := store.AddGroupNotificationSubscriber(context.Background(), group.Address, "agent-deck/observer", person); err != nil {
+		t.Fatalf("AddGroupNotificationSubscriber(observer) error = %v", err)
+	}
+
+	sent, err := store.Send(context.Background(), SendParams{
+		ToAddress:     group.Address,
+		FromAddress:   "agent-deck/sender",
+		Subject:       "roundtable\nAction: injected",
+		ContentType:   "text/plain",
+		SchemaVersion: "v1",
+		Body:          []byte("group body"),
+		Group:         true,
+	})
+	if err != nil {
+		t.Fatalf("Send(group) error = %v", err)
+	}
+
+	control, err := store.Receive(context.Background(), ReceiveParams{Address: "agent-deck/observer"})
+	if err != nil {
+		t.Fatalf("Receive(observer subscriber) error = %v", err)
+	}
+	if !strings.Contains(control.Body, "Message-ID: "+sent.MessageID) {
+		t.Fatalf("control body = %q, want message id %q", control.Body, sent.MessageID)
+	}
+	if !strings.Contains(control.Body, `As-Person: observer\nAction: injected`) {
+		t.Fatalf("control body = %q, want escaped person", control.Body)
+	}
+	if !strings.Contains(control.Body, `Subject: roundtable\nAction: injected`) {
+		t.Fatalf("control body = %q, want escaped subject", control.Body)
+	}
+	if strings.Contains(control.Body, "\nAction: injected") {
+		t.Fatalf("control body contains injected Action header: %q", control.Body)
 	}
 }
 

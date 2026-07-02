@@ -15,6 +15,7 @@ import (
 	"strings"
 	"syscall"
 	"time"
+	"unicode"
 )
 
 var ErrEmptyBody = errors.New("message body must not be empty")
@@ -345,7 +346,7 @@ INSERT INTO messages (
 	}
 
 	if params.Group {
-		result, err := s.sendGroupMessage(ctx, tx, messageID, timestamp, toAddress, params.Subject, senderEndpointValue, senderEndpointID)
+		result, err := s.sendGroupMessage(ctx, tx, messageID, timestamp, toAddress, fromAddress, params.Subject, senderEndpointValue, senderEndpointID)
 		if err != nil {
 			return SendResult{}, err
 		}
@@ -362,22 +363,63 @@ INSERT INTO messages (
 		return result, nil
 	}
 
-	deliveryID, err := newPrefixedID("dlv")
-	if err != nil {
-		return SendResult{}, err
-	}
-	messageEventID, err := newPrefixedID("evt")
-	if err != nil {
-		return SendResult{}, err
-	}
-	deliveryEventID, err := newPrefixedID("evt")
+	queued, err := s.queuePersonalDelivery(ctx, tx, messageID, timestamp, toAddress, senderEndpointValue,
+		map[string]string{
+			"recipient_address": toAddress,
+			"subject":           params.Subject,
+		},
+		map[string]string{
+			"recipient_address": toAddress,
+			"state":             "queued",
+		})
 	if err != nil {
 		return SendResult{}, err
 	}
 
+	if err := tx.Commit(); err != nil {
+		return SendResult{}, fmt.Errorf("commit send transaction: %w", err)
+	}
+
+	return SendResult{
+		Mode:             SendModePersonal,
+		MessageID:        messageID,
+		DeliveryID:       queued.DeliveryID,
+		BodyBlobRef:      blobRef,
+		RecipientID:      queued.RecipientEndpointID,
+		SenderID:         senderEndpointID,
+		BodySHA256:       bodySHA256,
+		BodySize:         bodySize,
+		VisibleAtUTC:     timestamp,
+		MessageCreatedAt: timestamp,
+	}, nil
+}
+
+type queuedPersonalDelivery struct {
+	DeliveryID          string
+	RecipientEndpointID string
+}
+
+func (s *Store) queuePersonalDelivery(ctx context.Context, tx *sql.Tx, messageID, timestamp, toAddress string, senderEndpointValue any, messageDetail, deliveryDetail map[string]string) (queuedPersonalDelivery, error) {
+	if IsGroupAddress(toAddress) {
+		return queuedPersonalDelivery{}, fmt.Errorf("personal delivery target %q uses reserved group/ prefix", toAddress)
+	}
+
+	deliveryID, err := newPrefixedID("dlv")
+	if err != nil {
+		return queuedPersonalDelivery{}, err
+	}
+	messageEventID, err := newPrefixedID("evt")
+	if err != nil {
+		return queuedPersonalDelivery{}, err
+	}
+	deliveryEventID, err := newPrefixedID("evt")
+	if err != nil {
+		return queuedPersonalDelivery{}, err
+	}
+
 	recipientRegistration, err := s.ensureEndpointAddress(ctx, tx, toAddress)
 	if err != nil {
-		return SendResult{}, fmt.Errorf("resolve recipient address: %w", err)
+		return queuedPersonalDelivery{}, fmt.Errorf("resolve recipient address: %w", err)
 	}
 	recipientEndpointID := recipientRegistration.EndpointID
 
@@ -396,52 +438,33 @@ INSERT INTO deliveries (
   last_error_text
 ) VALUES (?, ?, ?, 'queued', ?, NULL, NULL, NULL, 0, NULL, NULL)
 `, deliveryID, messageID, recipientEndpointID, timestamp); err != nil {
-		return SendResult{}, fmt.Errorf("insert delivery: %w", err)
+		return queuedPersonalDelivery{}, fmt.Errorf("insert delivery: %w", err)
 	}
 
-	messageDetailJSON, err := marshalDetail(map[string]string{
-		"recipient_address": toAddress,
-		"subject":           params.Subject,
-	})
+	messageDetailJSON, err := marshalDetail(messageDetail)
 	if err != nil {
-		return SendResult{}, err
+		return queuedPersonalDelivery{}, err
 	}
 	if _, err := tx.ExecContext(ctx, `
 INSERT INTO events (event_id, created_at, event_type, endpoint_id, message_id, detail_json)
 VALUES (?, ?, ?, ?, ?, ?)
 `, messageEventID, timestamp, "message_created", senderEndpointValue, messageID, messageDetailJSON); err != nil {
-		return SendResult{}, fmt.Errorf("insert message event: %w", err)
+		return queuedPersonalDelivery{}, fmt.Errorf("insert message event: %w", err)
 	}
 
-	deliveryDetailJSON, err := marshalDetail(map[string]string{
-		"recipient_address": toAddress,
-		"state":             "queued",
-	})
+	deliveryDetailJSON, err := marshalDetail(deliveryDetail)
 	if err != nil {
-		return SendResult{}, err
+		return queuedPersonalDelivery{}, err
 	}
 	if _, err := tx.ExecContext(ctx, `
 INSERT INTO events (event_id, created_at, event_type, endpoint_id, message_id, delivery_id, detail_json)
 VALUES (?, ?, ?, ?, ?, ?, ?)
 `, deliveryEventID, timestamp, "delivery_queued", recipientEndpointID, messageID, deliveryID, deliveryDetailJSON); err != nil {
-		return SendResult{}, fmt.Errorf("insert delivery event: %w", err)
+		return queuedPersonalDelivery{}, fmt.Errorf("insert delivery event: %w", err)
 	}
-
-	if err := tx.Commit(); err != nil {
-		return SendResult{}, fmt.Errorf("commit send transaction: %w", err)
-	}
-
-	return SendResult{
-		Mode:             SendModePersonal,
-		MessageID:        messageID,
-		DeliveryID:       deliveryID,
-		BodyBlobRef:      blobRef,
-		RecipientID:      recipientEndpointID,
-		SenderID:         senderEndpointID,
-		BodySHA256:       bodySHA256,
-		BodySize:         bodySize,
-		VisibleAtUTC:     timestamp,
-		MessageCreatedAt: timestamp,
+	return queuedPersonalDelivery{
+		DeliveryID:          deliveryID,
+		RecipientEndpointID: recipientEndpointID,
 	}, nil
 }
 
@@ -451,6 +474,7 @@ func (s *Store) sendGroupMessage(
 	messageID string,
 	timestamp string,
 	toAddress string,
+	fromAddress string,
 	subject string,
 	senderEndpointValue any,
 	senderEndpointID *string,
@@ -491,6 +515,13 @@ INSERT INTO group_message_eligibility (
 		`, messageID, membership.PersonID, membership.MembershipID, timestamp); err != nil {
 			return SendResult{}, fmt.Errorf("insert eligibility for group %q person %q: %w", toAddress, membership.Person, err)
 		}
+	}
+
+	if err := markGroupSenderRead(ctx, tx, messageID, group.GroupID, fromAddress, timestamp); err != nil {
+		return SendResult{}, fmt.Errorf("mark group sender read: %w", err)
+	}
+	if err := s.queueGroupSubscriberDeliveries(ctx, tx, group, memberships, messageID, timestamp, subject, fromAddress, senderEndpointValue); err != nil {
+		return SendResult{}, fmt.Errorf("queue group subscriber deliveries: %w", err)
 	}
 
 	messageEventID, err := newPrefixedID("evt")
@@ -539,6 +570,163 @@ VALUES (?, ?, ?, ?, ?, ?)
 		MessageCreatedAt: timestamp,
 		SenderID:         senderEndpointID,
 	}, nil
+}
+
+func markGroupSenderRead(ctx context.Context, tx *sql.Tx, messageID, groupID, fromAddress, timestamp string) error {
+	fromAddress = strings.TrimSpace(fromAddress)
+	if fromAddress == "" {
+		return nil
+	}
+	_, err := tx.ExecContext(ctx, `
+INSERT OR IGNORE INTO group_reads (message_id, person_id, first_read_at)
+SELECT ?, person_id, ?
+FROM (
+  SELECT gm.person_id
+  FROM group_memberships AS gm
+  JOIN persons AS p ON p.person_id = gm.person_id
+  WHERE gm.group_id = ?
+    AND gm.left_at IS NULL
+    AND p.person = ?
+  UNION
+  SELECT gm.person_id
+  FROM group_notification_subscribers AS gns
+  JOIN persons AS p ON p.person = gns.person
+  JOIN group_memberships AS gm
+    ON gm.group_id = gns.group_id
+   AND gm.person_id = p.person_id
+   AND gm.left_at IS NULL
+  WHERE gns.group_id = ?
+    AND gns.removed_at IS NULL
+    AND gns.notify_address = ?
+    AND gns.person <> ''
+)
+`, messageID, timestamp, groupID, fromAddress, groupID, fromAddress)
+	return err
+}
+
+func (s *Store) queueGroupSubscriberDeliveries(ctx context.Context, tx *sql.Tx, group GroupRecord, memberships []GroupMembershipRecord, groupMessageID, timestamp, groupSubject, fromAddress string, senderEndpointValue any) error {
+	subscribers, err := listActiveGroupNotificationSubscribers(ctx, tx, group.GroupID)
+	if err != nil {
+		return fmt.Errorf("list subscribers for group %q: %w", group.Address, err)
+	}
+	activePeople := activeGroupMemberPeople(memberships)
+	for _, subscriber := range subscribers {
+		if strings.TrimSpace(subscriber.NotifyAddress) == strings.TrimSpace(fromAddress) {
+			continue
+		}
+		person := strings.TrimSpace(subscriber.Person)
+		if person == "" || IsGroupAddress(subscriber.NotifyAddress) {
+			continue
+		}
+		if _, ok := activePeople[person]; !ok {
+			continue
+		}
+		body := []byte(groupSubscriberDeliveryBody(group.Address, person, groupMessageID, groupSubject))
+		blobRef, bodySize, bodySHA256, err := s.writeBlob(body)
+		if err != nil {
+			return err
+		}
+		messageID, err := newPrefixedID("msg")
+		if err != nil {
+			return err
+		}
+
+		if _, err := tx.ExecContext(ctx, `
+INSERT INTO messages (
+  message_id,
+  created_at,
+  sender_endpoint_id,
+  subject,
+  content_type,
+  schema_version,
+  idempotency_key,
+  body_blob_ref,
+  body_size,
+  body_sha256,
+  forwarded_message_id,
+  forwarded_from_address,
+  reply_to_message_id,
+  metadata_json
+) VALUES (?, ?, ?, ?, 'text/plain', 'group-notification/v1', NULL, ?, ?, ?, ?, ?, NULL, '{}')
+`, messageID, timestamp, senderEndpointValue, groupSubscriberDeliverySubject(group.Address), blobRef, bodySize, bodySHA256, groupMessageID, fromAddressOrNil(fromAddress)); err != nil {
+			return fmt.Errorf("insert subscriber notification message for %q: %w", subscriber.NotifyAddress, err)
+		}
+
+		if _, err := s.queuePersonalDelivery(ctx, tx, messageID, timestamp, subscriber.NotifyAddress, senderEndpointValue,
+			map[string]string{
+				"group_address":     group.Address,
+				"group_message_id":  groupMessageID,
+				"recipient_address": subscriber.NotifyAddress,
+				"mode":              "group_notification",
+			},
+			map[string]string{
+				"group_address":     group.Address,
+				"group_message_id":  groupMessageID,
+				"recipient_address": subscriber.NotifyAddress,
+				"state":             "queued",
+			}); err != nil {
+			return fmt.Errorf("queue subscriber notification delivery for %q: %w", subscriber.NotifyAddress, err)
+		}
+	}
+	return nil
+}
+
+func activeGroupMemberPeople(memberships []GroupMembershipRecord) map[string]struct{} {
+	people := make(map[string]struct{}, len(memberships))
+	for _, membership := range memberships {
+		people[membership.Person] = struct{}{}
+	}
+	return people
+}
+
+func groupSubscriberDeliverySubject(groupAddress string) string {
+	return "Group mailbox update: " + groupAddress
+}
+
+func groupSubscriberDeliveryBody(groupAddress, person, messageID, subject string) string {
+	lines := []string{
+		"Action: group_message_available",
+		"Group-Address: " + noticeLineValue(groupAddress),
+		"Message-ID: " + noticeLineValue(messageID),
+	}
+	if strings.TrimSpace(person) != "" {
+		lines = append(lines, "As-Person: "+noticeLineValue(strings.TrimSpace(person)))
+	}
+	if strings.TrimSpace(subject) != "" {
+		lines = append(lines, "Subject: "+noticeLineValue(strings.TrimSpace(subject)))
+	}
+	return strings.Join(lines, "\n") + "\n"
+}
+
+func noticeLineValue(value string) string {
+	var out strings.Builder
+	for _, r := range value {
+		switch r {
+		case '\\':
+			out.WriteString(`\\`)
+		case '\r':
+			out.WriteString(`\r`)
+		case '\n':
+			out.WriteString(`\n`)
+		case '\t':
+			out.WriteString(`\t`)
+		default:
+			if unicode.IsControl(r) {
+				fmt.Fprintf(&out, `\u%04x`, r)
+				continue
+			}
+			out.WriteRune(r)
+		}
+	}
+	return out.String()
+}
+
+func fromAddressOrNil(fromAddress string) any {
+	fromAddress = strings.TrimSpace(fromAddress)
+	if fromAddress == "" {
+		return nil
+	}
+	return fromAddress
 }
 
 func (s *Store) List(ctx context.Context, params ListParams) ([]ListedDelivery, error) {
