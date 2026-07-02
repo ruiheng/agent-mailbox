@@ -5183,6 +5183,7 @@ func TestAutoBindFindsAgentDeckSessionFromCodexStateDB(t *testing.T) {
 	if !reflect.DeepEqual(status["bound_addresses"], wantAddresses) {
 		t.Fatalf("bound_addresses = %v, want %v", status["bound_addresses"], wantAddresses)
 	}
+	assertHasAgentDeckStateDBWarning(t, status)
 }
 
 func TestAutoBindPrefersCodexLinkedAgentDeckSessionOverAmbientCurrent(t *testing.T) {
@@ -5543,6 +5544,7 @@ func TestAutoBindSkipsBadAgentDeckDBAndFallsBackToCodexOnly(t *testing.T) {
 	if !reflect.DeepEqual(status["bound_addresses"], wantAddresses) {
 		t.Fatalf("bound_addresses = %v, want %v", status["bound_addresses"], wantAddresses)
 	}
+	assertHasAgentDeckStateDBWarning(t, status)
 }
 
 func TestAutoBindRetriesAgentDeckAfterCodexOnlyFallback(t *testing.T) {
@@ -6236,6 +6238,22 @@ func assertHasToolSessionWarning(t *testing.T, output map[string]any) {
 		}
 	}
 	t.Fatalf("warnings = %#v, want tool-session auto-bind warning", warnings)
+}
+
+func assertHasAgentDeckStateDBWarning(t *testing.T, output map[string]any) {
+	t.Helper()
+	warnings, ok := output["warnings"].([]any)
+	if !ok {
+		t.Fatalf("warnings = %#v, want warning list", output["warnings"])
+	}
+	for _, warning := range warnings {
+		text := fmt.Sprint(warning)
+		if strings.Contains(text, "agent-deck private state database lookup skipped") &&
+			strings.Contains(text, "query private instances table") {
+			return
+		}
+	}
+	t.Fatalf("warnings = %#v, want agent-deck state DB warning", warnings)
 }
 
 func assertHasInvalidToolSessionEnvWarning(t *testing.T, output map[string]any, envName string) {
