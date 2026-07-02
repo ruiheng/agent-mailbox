@@ -241,6 +241,12 @@ func (s *Service) mailboxStatus(ctx context.Context, _ *mcp.CallToolRequest, _ m
 }
 
 func (s *Service) sendMailboxMessage(ctx context.Context, input mailboxSendInput) (map[string]any, error) {
+	return withMailboxService(ctx, s.mailboxServices, func(service mailboxSender) (map[string]any, error) {
+		return s.sendMailboxMessageWithService(ctx, input, service)
+	})
+}
+
+func (s *Service) sendMailboxMessageWithService(ctx context.Context, input mailboxSendInput, service mailboxSender) (map[string]any, error) {
 	toAddress, err := mailbox.NormalizeAddress(input.ToAddress)
 	if err != nil {
 		if strings.TrimSpace(input.ToAddress) == "" {
@@ -256,24 +262,22 @@ func (s *Service) sendMailboxMessage(ctx context.Context, input mailboxSendInput
 	}
 	input.FromAddress = fromAddress
 
-	sendResult, err := withMailboxService(ctx, s.mailboxServices, func(service mailboxSender) (mailbox.SendResult, error) {
-		return service.Send(ctx, mailbox.SendParams{
-			ToAddress:            input.ToAddress,
-			FromAddress:          fromAddress,
-			Subject:              input.Subject,
-			ContentType:          strings.TrimSpace(input.ContentType),
-			SchemaVersion:        strings.TrimSpace(input.SchemaVersion),
-			ForwardedMessageID:   strings.TrimSpace(input.forwardedMessageID),
-			ForwardedFromAddress: strings.TrimSpace(input.forwardedFromAddress),
-			Body:                 []byte(input.Body),
-			Group:                input.Group,
-		})
+	sendResult, err := service.Send(ctx, mailbox.SendParams{
+		ToAddress:            input.ToAddress,
+		FromAddress:          fromAddress,
+		Subject:              input.Subject,
+		ContentType:          strings.TrimSpace(input.ContentType),
+		SchemaVersion:        strings.TrimSpace(input.SchemaVersion),
+		ForwardedMessageID:   strings.TrimSpace(input.forwardedMessageID),
+		ForwardedFromAddress: strings.TrimSpace(input.forwardedFromAddress),
+		Body:                 []byte(input.Body),
+		Group:                input.Group,
 	})
 	if err != nil {
 		return nil, err
 	}
 
-	notify := s.notifyMailboxSend(ctx, input, sendResult)
+	notify := s.notifyMailboxSend(ctx, input, sendResult, service)
 	var notifyScheme any
 	if notify.Scheme != "" {
 		notifyScheme = notify.Scheme
@@ -306,7 +310,7 @@ func (s *Service) sendMailboxMessage(ctx context.Context, input mailboxSendInput
 	return out, nil
 }
 
-func (s *Service) notifyMailboxSend(ctx context.Context, input mailboxSendInput, sendResult mailbox.SendResult) notificationOutcome {
+func (s *Service) notifyMailboxSend(ctx context.Context, input mailboxSendInput, sendResult mailbox.SendResult, service any) notificationOutcome {
 	notifyCtx := context.WithoutCancel(ctx)
 	if sendResult.Mode != mailbox.SendModeGroup {
 		if s.sessions.isLocalAddress(notifyCtx, input.ToAddress) || wakeNotifyDisabled(input.DisableNotifyMessage) {
@@ -321,7 +325,7 @@ func (s *Service) notifyMailboxSend(ctx context.Context, input mailboxSendInput,
 			if err := s.waitBeforeNotify(notifyCtx); err != nil {
 				return notificationOutcome{Status: "failed", Scheme: "mailbox", Err: err}
 			}
-			stillQueued, err := s.deliveryStillQueued(notifyCtx, sendResult.DeliveryID)
+			stillQueued, err := s.deliveryStillQueued(notifyCtx, service, sendResult.DeliveryID)
 			if err != nil {
 				return notificationOutcome{Status: "failed", Scheme: "mailbox", Err: err}
 			}
@@ -331,9 +335,15 @@ func (s *Service) notifyMailboxSend(ctx context.Context, input mailboxSendInput,
 		}
 		return s.notifications.notifyMailboxSend(notifyCtx, input)
 	}
-	subscribers, err := withMailboxService(notifyCtx, s.mailboxServices, func(service mailboxGroupSubscriberManager) ([]mailbox.GroupNotificationSubscriberRecord, error) {
-		return service.ListGroupNotificationSubscribers(notifyCtx, sendResult.GroupAddress)
-	})
+	subscriberManager, ok := service.(mailboxGroupSubscriberManager)
+	if !ok {
+		return notificationOutcome{
+			Status: "failed",
+			Scheme: "group_subscribers",
+			Err:    fmt.Errorf("mailbox service %T does not satisfy %T", service, subscriberManager),
+		}
+	}
+	subscribers, err := subscriberManager.ListGroupNotificationSubscribers(notifyCtx, sendResult.GroupAddress)
 	if err != nil {
 		return notificationOutcome{
 			Status: "failed",
@@ -358,10 +368,12 @@ func (s *Service) waitBeforeNotify(ctx context.Context) error {
 	}
 }
 
-func (s *Service) deliveryStillQueued(ctx context.Context, deliveryID string) (bool, error) {
-	deliveries, err := withMailboxService(ctx, s.mailboxServices, func(service mailboxDeliveryReader) ([]mailbox.ReadDelivery, error) {
-		return service.ReadDeliveries(ctx, []string{deliveryID})
-	})
+func (s *Service) deliveryStillQueued(ctx context.Context, service any, deliveryID string) (bool, error) {
+	reader, ok := service.(mailboxDeliveryReader)
+	if !ok {
+		return false, fmt.Errorf("mailbox service %T does not satisfy %T", service, reader)
+	}
+	deliveries, err := reader.ReadDeliveries(ctx, []string{deliveryID})
 	if err != nil {
 		return false, err
 	}
@@ -380,8 +392,11 @@ func (s *Service) mailboxSend(ctx context.Context, _ *mcp.CallToolRequest, input
 }
 
 func (s *Service) mailboxForward(ctx context.Context, _ *mcp.CallToolRequest, input mailboxForwardInput) (*mcp.CallToolResult, map[string]any, error) {
-	prepared, err := withMailboxService(ctx, s.mailboxServices, func(service mailbox.ForwardSourceReader) (mailbox.PreparedForward, error) {
-		return mailbox.PrepareForward(ctx, service, "mailbox_forward", mailbox.ForwardParams{
+	out, err := withMailboxService(ctx, s.mailboxServices, func(service interface {
+		mailbox.ForwardSourceReader
+		mailboxSender
+	}) (map[string]any, error) {
+		prepared, err := mailbox.PrepareForward(ctx, service, "mailbox_forward", mailbox.ForwardParams{
 			MessageID:   input.MessageID,
 			DeliveryID:  input.DeliveryID,
 			ToAddress:   input.ToAddress,
@@ -389,31 +404,35 @@ func (s *Service) mailboxForward(ctx context.Context, _ *mcp.CallToolRequest, in
 			Subject:     input.Subject,
 			Group:       input.Group,
 		})
+		if err != nil {
+			return nil, err
+		}
+
+		sendInput := mailboxSendInput{
+			ToAddress:            prepared.SendParams.ToAddress,
+			FromAddress:          prepared.SendParams.FromAddress,
+			Subject:              prepared.SendParams.Subject,
+			Body:                 string(prepared.SendParams.Body),
+			ContentType:          prepared.SendParams.ContentType,
+			SchemaVersion:        prepared.SendParams.SchemaVersion,
+			DisableNotifyMessage: input.DisableNotifyMessage,
+			forwardedMessageID:   prepared.SendParams.ForwardedMessageID,
+			forwardedFromAddress: prepared.SendParams.ForwardedFromAddress,
+			Group:                prepared.SendParams.Group,
+		}
+
+		out, err := s.sendMailboxMessageWithService(ctx, sendInput, service)
+		if err != nil {
+			return nil, err
+		}
+		out["status"] = "forwarded"
+		out["source_message_id"] = prepared.SourceMessageID
+		out["source_delivery_id"] = nilIfEmpty(prepared.SourceDeliveryID)
+		return out, nil
 	})
 	if err != nil {
 		return nil, nil, err
 	}
-
-	sendInput := mailboxSendInput{
-		ToAddress:            prepared.SendParams.ToAddress,
-		FromAddress:          prepared.SendParams.FromAddress,
-		Subject:              prepared.SendParams.Subject,
-		Body:                 string(prepared.SendParams.Body),
-		ContentType:          prepared.SendParams.ContentType,
-		SchemaVersion:        prepared.SendParams.SchemaVersion,
-		DisableNotifyMessage: input.DisableNotifyMessage,
-		forwardedMessageID:   prepared.SendParams.ForwardedMessageID,
-		forwardedFromAddress: prepared.SendParams.ForwardedFromAddress,
-		Group:                prepared.SendParams.Group,
-	}
-
-	out, err := s.sendMailboxMessage(ctx, sendInput)
-	if err != nil {
-		return nil, nil, err
-	}
-	out["status"] = "forwarded"
-	out["source_message_id"] = prepared.SourceMessageID
-	out["source_delivery_id"] = nilIfEmpty(prepared.SourceDeliveryID)
 	return s.mailboxMutationToolResult(ctx, out)
 }
 

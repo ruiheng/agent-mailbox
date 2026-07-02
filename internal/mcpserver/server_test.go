@@ -333,10 +333,14 @@ func (f *fakeMailboxService) Fail(ctx context.Context, deliveryID, leaseToken, r
 }
 
 type fakeMailboxServiceFactory struct {
-	service any
+	service   any
+	openCount *int
 }
 
 func (f fakeMailboxServiceFactory) Open(context.Context) (any, func() error, error) {
+	if f.openCount != nil {
+		(*f.openCount)++
+	}
 	return f.service, func() error { return nil }, nil
 }
 
@@ -500,6 +504,7 @@ func TestMailboxSendNotifiesWorkerTarget(t *testing.T) {
 
 func TestMailboxSendSkipsNotifyWhenDeliveryAlreadyClaimed(t *testing.T) {
 	mailboxService := &fakeMailboxService{t: t}
+	openCount := 0
 	mailboxService.sendFunc = func(_ context.Context, params mailbox.SendParams) (mailbox.SendResult, error) {
 		return mailbox.SendResult{DeliveryID: "dlv_claimed"}, nil
 	}
@@ -514,7 +519,7 @@ func TestMailboxSendSkipsNotifyWhenDeliveryAlreadyClaimed(t *testing.T) {
 	}
 
 	service := newService(Options{
-		MailboxServiceFactory: fakeMailboxServiceFactory{service: mailboxService},
+		MailboxServiceFactory: fakeMailboxServiceFactory{service: mailboxService, openCount: &openCount},
 		CommandRunner: &fakeRunner{t: t, handler: func(args []string, input string) (RunResult, error) {
 			t.Fatalf("unexpected command call: %v", args)
 			return RunResult{}, nil
@@ -542,6 +547,9 @@ func TestMailboxSendSkipsNotifyWhenDeliveryAlreadyClaimed(t *testing.T) {
 	}
 	if got := output["notify_error"]; got != nil {
 		t.Fatalf("notify_error = %v, want nil", got)
+	}
+	if openCount != 1 {
+		t.Fatalf("mailbox service opens = %d, want 1", openCount)
 	}
 }
 
@@ -923,6 +931,7 @@ func TestMailboxSendGroupModeSkipsResolvedDefaultSenderSubscriber(t *testing.T) 
 
 func TestMailboxSendGroupModeKeepsReceiptWhenSubscriberNotifyFails(t *testing.T) {
 	mailboxService := &fakeMailboxService{t: t}
+	openCount := 0
 	mailboxService.sendFunc = func(_ context.Context, params mailbox.SendParams) (mailbox.SendResult, error) {
 		return mailbox.SendResult{
 			Mode:             mailbox.SendModeGroup,
@@ -955,7 +964,7 @@ func TestMailboxSendGroupModeKeepsReceiptWhenSubscriberNotifyFails(t *testing.T)
 	}}
 
 	service := newService(Options{
-		MailboxServiceFactory: fakeMailboxServiceFactory{service: mailboxService},
+		MailboxServiceFactory: fakeMailboxServiceFactory{service: mailboxService, openCount: &openCount},
 		CommandRunner:         commandRunner,
 		DisableWakeScheduler:  true,
 	})
@@ -980,11 +989,15 @@ func TestMailboxSendGroupModeKeepsReceiptWhenSubscriberNotifyFails(t *testing.T)
 	if got := output["notify_error"]; got == nil || !strings.Contains(got.(string), "notify failed") {
 		t.Fatalf("notify_error = %v, want notify failure detail", got)
 	}
+	if openCount != 1 {
+		t.Fatalf("mailbox service opens = %d, want 1", openCount)
+	}
 }
 
 func TestMailboxForwardByMessageIDPreservesPayloadAndPrefixesSubject(t *testing.T) {
 	sourceSenderAddress := "agent/source"
 	mailboxService := &fakeMailboxService{t: t}
+	openCount := 0
 	mailboxService.readMessagesFunc = func(_ context.Context, messageIDs []string) ([]mailbox.ReadMessage, error) {
 		if diff := slices.Compare(messageIDs, []string{"msg_1"}); diff != 0 {
 			t.Fatalf("ReadMessages ids = %v, want [msg_1]", messageIDs)
@@ -1027,7 +1040,7 @@ func TestMailboxForwardByMessageIDPreservesPayloadAndPrefixesSubject(t *testing.
 	}
 
 	service := newService(Options{
-		MailboxServiceFactory: fakeMailboxServiceFactory{service: mailboxService},
+		MailboxServiceFactory: fakeMailboxServiceFactory{service: mailboxService, openCount: &openCount},
 		CommandRunner: &fakeRunner{t: t, handler: func(args []string, input string) (RunResult, error) {
 			return RunResult{}, errors.New("auto-bind should not run for explicit sender")
 		}},
@@ -1048,6 +1061,9 @@ func TestMailboxForwardByMessageIDPreservesPayloadAndPrefixesSubject(t *testing.
 	}
 	if got := output["source_message_id"]; got != "msg_1" {
 		t.Fatalf("source_message_id = %v, want msg_1", got)
+	}
+	if openCount != 1 {
+		t.Fatalf("mailbox service opens = %d, want 1", openCount)
 	}
 }
 
