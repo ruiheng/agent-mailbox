@@ -37,7 +37,10 @@ type Store struct {
 	renameFile     func(oldPath, newPath string) error
 	removeFile     func(path string) error
 	syncDir        func(path string) error
+	writeBlobHook  func(inWriteTransaction bool) error
 }
+
+type writeTransactionContextKey struct{}
 
 type EndpointRegistration struct {
 	EndpointID string
@@ -286,7 +289,7 @@ func (s *Store) Send(ctx context.Context, params SendParams) (SendResult, error)
 		}
 	}
 
-	blobRef, bodySize, bodySHA256, err := s.writeBlob(params.Body)
+	blobRef, bodySize, bodySHA256, err := s.writeBlob(ctx, params.Body)
 	if err != nil {
 		return SendResult{}, err
 	}
@@ -296,16 +299,24 @@ func (s *Store) Send(ctx context.Context, params SendParams) (SendResult, error)
 	if err != nil {
 		return SendResult{}, err
 	}
+	var groupPlan groupSendPlan
+	if params.Group {
+		groupPlan, err = s.prepareGroupSendPlan(ctx, toAddress, messageID, params.Subject, fromAddress)
+		if err != nil {
+			return SendResult{}, err
+		}
+	}
 
 	tx, err := s.writeDB.BeginTx(ctx, nil)
 	if err != nil {
 		return SendResult{}, fmt.Errorf("begin send transaction: %w", err)
 	}
 	defer tx.Rollback()
+	txCtx := context.WithValue(ctx, writeTransactionContextKey{}, true)
 
 	var senderEndpointID *string
 	if fromAddress != "" {
-		registration, err := s.ensureEndpointAddress(ctx, tx, fromAddress)
+		registration, err := s.ensureEndpointAddress(txCtx, tx, fromAddress)
 		if err != nil {
 			return SendResult{}, fmt.Errorf("resolve sender address: %w", err)
 		}
@@ -346,7 +357,7 @@ INSERT INTO messages (
 	}
 
 	if params.Group {
-		result, err := s.sendGroupMessage(ctx, tx, messageID, timestamp, toAddress, fromAddress, params.Subject, senderEndpointValue, senderEndpointID)
+		result, err := s.sendGroupMessage(txCtx, tx, groupPlan, messageID, timestamp, toAddress, fromAddress, params.Subject, senderEndpointValue, senderEndpointID)
 		if err != nil {
 			return SendResult{}, err
 		}
@@ -363,7 +374,7 @@ INSERT INTO messages (
 		return result, nil
 	}
 
-	queued, err := s.queuePersonalDelivery(ctx, tx, messageID, timestamp, toAddress, senderEndpointValue,
+	queued, err := s.queuePersonalDelivery(txCtx, tx, messageID, timestamp, toAddress, senderEndpointValue,
 		map[string]string{
 			"recipient_address": toAddress,
 			"subject":           params.Subject,
@@ -397,6 +408,20 @@ INSERT INTO messages (
 type queuedPersonalDelivery struct {
 	DeliveryID          string
 	RecipientEndpointID string
+}
+
+type groupSendPlan struct {
+	group                GroupRecord
+	memberships          []GroupMembershipRecord
+	subscriberDeliveries []groupSubscriberDelivery
+}
+
+type groupSubscriberDelivery struct {
+	NotifyAddress string
+	MessageID     string
+	BlobRef       string
+	BodySize      int64
+	BodySHA256    string
 }
 
 func (s *Store) queuePersonalDelivery(ctx context.Context, tx *sql.Tx, messageID, timestamp, toAddress string, senderEndpointValue any, messageDetail, deliveryDetail map[string]string) (queuedPersonalDelivery, error) {
@@ -471,6 +496,7 @@ VALUES (?, ?, ?, ?, ?, ?, ?)
 func (s *Store) sendGroupMessage(
 	ctx context.Context,
 	tx *sql.Tx,
+	plan groupSendPlan,
 	messageID string,
 	timestamp string,
 	toAddress string,
@@ -479,18 +505,8 @@ func (s *Store) sendGroupMessage(
 	senderEndpointValue any,
 	senderEndpointID *string,
 ) (SendResult, error) {
-	group, found, err := lookupGroupRecord(ctx, tx, toAddress)
-	if err != nil {
-		return SendResult{}, fmt.Errorf("resolve group address %q: %w", toAddress, err)
-	}
-	if !found {
-		return SendResult{}, fmt.Errorf("group %q: %w", toAddress, ErrGroupNotFound)
-	}
-
-	memberships, err := listActiveGroupMemberships(ctx, tx, group.GroupID)
-	if err != nil {
-		return SendResult{}, fmt.Errorf("list active members for group %q: %w", toAddress, err)
-	}
+	group := plan.group
+	memberships := plan.memberships
 	eligibleCount := len(memberships)
 
 	if _, err := tx.ExecContext(ctx, `
@@ -520,7 +536,7 @@ INSERT INTO group_message_eligibility (
 	if err := markGroupSenderRead(ctx, tx, messageID, group.GroupID, fromAddress, timestamp); err != nil {
 		return SendResult{}, fmt.Errorf("mark group sender read: %w", err)
 	}
-	if err := s.queueGroupSubscriberDeliveries(ctx, tx, group, memberships, messageID, timestamp, subject, fromAddress, senderEndpointValue); err != nil {
+	if err := s.queueGroupSubscriberDeliveries(ctx, tx, group, plan.subscriberDeliveries, messageID, timestamp, fromAddress, senderEndpointValue); err != nil {
 		return SendResult{}, fmt.Errorf("queue group subscriber deliveries: %w", err)
 	}
 
@@ -572,6 +588,59 @@ VALUES (?, ?, ?, ?, ?, ?)
 	}, nil
 }
 
+func (s *Store) prepareGroupSendPlan(ctx context.Context, toAddress, groupMessageID, groupSubject, fromAddress string) (groupSendPlan, error) {
+	group, found, err := lookupGroupRecord(ctx, s.readDB, toAddress)
+	if err != nil {
+		return groupSendPlan{}, fmt.Errorf("resolve group address %q: %w", toAddress, err)
+	}
+	if !found {
+		return groupSendPlan{}, fmt.Errorf("group %q: %w", toAddress, ErrGroupNotFound)
+	}
+	memberships, err := listActiveGroupMemberships(ctx, s.readDB, group.GroupID)
+	if err != nil {
+		return groupSendPlan{}, fmt.Errorf("list active members for group %q: %w", toAddress, err)
+	}
+	subscribers, err := listActiveGroupNotificationSubscribers(ctx, s.readDB, group.GroupID)
+	if err != nil {
+		return groupSendPlan{}, fmt.Errorf("list subscribers for group %q: %w", group.Address, err)
+	}
+
+	activePeople := activeGroupMemberPeople(memberships)
+	deliveries := make([]groupSubscriberDelivery, 0, len(subscribers))
+	for _, subscriber := range subscribers {
+		if strings.TrimSpace(subscriber.NotifyAddress) == strings.TrimSpace(fromAddress) {
+			continue
+		}
+		person := strings.TrimSpace(subscriber.Person)
+		if person == "" || IsGroupAddress(subscriber.NotifyAddress) {
+			continue
+		}
+		if _, ok := activePeople[person]; !ok {
+			continue
+		}
+		blobRef, bodySize, bodySHA256, err := s.writeBlob(ctx, []byte(groupSubscriberDeliveryBody(group.Address, person, groupMessageID, groupSubject)))
+		if err != nil {
+			return groupSendPlan{}, err
+		}
+		messageID, err := newPrefixedID("msg")
+		if err != nil {
+			return groupSendPlan{}, err
+		}
+		deliveries = append(deliveries, groupSubscriberDelivery{
+			NotifyAddress: subscriber.NotifyAddress,
+			MessageID:     messageID,
+			BlobRef:       blobRef,
+			BodySize:      bodySize,
+			BodySHA256:    bodySHA256,
+		})
+	}
+	return groupSendPlan{
+		group:                group,
+		memberships:          memberships,
+		subscriberDeliveries: deliveries,
+	}, nil
+}
+
 func markGroupSenderRead(ctx context.Context, tx *sql.Tx, messageID, groupID, fromAddress, timestamp string) error {
 	fromAddress = strings.TrimSpace(fromAddress)
 	if fromAddress == "" {
@@ -604,33 +673,8 @@ FROM (
 	return err
 }
 
-func (s *Store) queueGroupSubscriberDeliveries(ctx context.Context, tx *sql.Tx, group GroupRecord, memberships []GroupMembershipRecord, groupMessageID, timestamp, groupSubject, fromAddress string, senderEndpointValue any) error {
-	subscribers, err := listActiveGroupNotificationSubscribers(ctx, tx, group.GroupID)
-	if err != nil {
-		return fmt.Errorf("list subscribers for group %q: %w", group.Address, err)
-	}
-	activePeople := activeGroupMemberPeople(memberships)
-	for _, subscriber := range subscribers {
-		if strings.TrimSpace(subscriber.NotifyAddress) == strings.TrimSpace(fromAddress) {
-			continue
-		}
-		person := strings.TrimSpace(subscriber.Person)
-		if person == "" || IsGroupAddress(subscriber.NotifyAddress) {
-			continue
-		}
-		if _, ok := activePeople[person]; !ok {
-			continue
-		}
-		body := []byte(groupSubscriberDeliveryBody(group.Address, person, groupMessageID, groupSubject))
-		blobRef, bodySize, bodySHA256, err := s.writeBlob(body)
-		if err != nil {
-			return err
-		}
-		messageID, err := newPrefixedID("msg")
-		if err != nil {
-			return err
-		}
-
+func (s *Store) queueGroupSubscriberDeliveries(ctx context.Context, tx *sql.Tx, group GroupRecord, deliveries []groupSubscriberDelivery, groupMessageID, timestamp, fromAddress string, senderEndpointValue any) error {
+	for _, delivery := range deliveries {
 		if _, err := tx.ExecContext(ctx, `
 INSERT INTO messages (
   message_id,
@@ -648,24 +692,24 @@ INSERT INTO messages (
   reply_to_message_id,
   metadata_json
 ) VALUES (?, ?, ?, ?, 'text/plain', 'group-notification/v1', NULL, ?, ?, ?, ?, ?, NULL, '{}')
-`, messageID, timestamp, senderEndpointValue, groupSubscriberDeliverySubject(group.Address), blobRef, bodySize, bodySHA256, groupMessageID, fromAddressOrNil(fromAddress)); err != nil {
-			return fmt.Errorf("insert subscriber notification message for %q: %w", subscriber.NotifyAddress, err)
+`, delivery.MessageID, timestamp, senderEndpointValue, groupSubscriberDeliverySubject(group.Address), delivery.BlobRef, delivery.BodySize, delivery.BodySHA256, groupMessageID, fromAddressOrNil(fromAddress)); err != nil {
+			return fmt.Errorf("insert subscriber notification message for %q: %w", delivery.NotifyAddress, err)
 		}
 
-		if _, err := s.queuePersonalDelivery(ctx, tx, messageID, timestamp, subscriber.NotifyAddress, senderEndpointValue,
+		if _, err := s.queuePersonalDelivery(ctx, tx, delivery.MessageID, timestamp, delivery.NotifyAddress, senderEndpointValue,
 			map[string]string{
 				"group_address":     group.Address,
 				"group_message_id":  groupMessageID,
-				"recipient_address": subscriber.NotifyAddress,
+				"recipient_address": delivery.NotifyAddress,
 				"mode":              "group_notification",
 			},
 			map[string]string{
 				"group_address":     group.Address,
 				"group_message_id":  groupMessageID,
-				"recipient_address": subscriber.NotifyAddress,
+				"recipient_address": delivery.NotifyAddress,
 				"state":             "queued",
 			}); err != nil {
-			return fmt.Errorf("queue subscriber notification delivery for %q: %w", subscriber.NotifyAddress, err)
+			return fmt.Errorf("queue subscriber notification delivery for %q: %w", delivery.NotifyAddress, err)
 		}
 	}
 	return nil
@@ -1142,7 +1186,13 @@ VALUES (?, ?, ?, ?, ?)
 	}, nil
 }
 
-func (s *Store) writeBlob(body []byte) (string, int64, string, error) {
+func (s *Store) writeBlob(ctx context.Context, body []byte) (string, int64, string, error) {
+	if s.writeBlobHook != nil {
+		inWriteTransaction, _ := ctx.Value(writeTransactionContextKey{}).(bool)
+		if err := s.writeBlobHook(inWriteTransaction); err != nil {
+			return "", 0, "", err
+		}
+	}
 	blobRef, err := newPrefixedID("blob")
 	if err != nil {
 		return "", 0, "", err

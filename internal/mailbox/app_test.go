@@ -319,7 +319,7 @@ func TestWriteBlobSyncsFileBeforeRenameAndDirectoryAfter(t *testing.T) {
 		return nil
 	}
 
-	blobRef, bodySize, _, err := store.writeBlob([]byte("hello"))
+	blobRef, bodySize, _, err := store.writeBlob(context.Background(), []byte("hello"))
 	if err != nil {
 		t.Fatalf("writeBlob() error = %v", err)
 	}

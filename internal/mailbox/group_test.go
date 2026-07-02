@@ -701,6 +701,49 @@ func TestGroupSendMarksSenderReadAndQueuesSubscriberDeliveries(t *testing.T) {
 	}
 }
 
+func TestGroupSendWritesSubscriberBlobsBeforeSendTransaction(t *testing.T) {
+	runtime, store := newLeaseTestStore(t)
+	defer runtime.Close()
+
+	blobWrites := 0
+	store.writeBlobHook = func(inWriteTransaction bool) error {
+		blobWrites++
+		if inWriteTransaction {
+			return errors.New("blob write during send transaction")
+		}
+		return nil
+	}
+
+	group, err := store.CreateGroup(context.Background(), "group/ops")
+	if err != nil {
+		t.Fatalf("CreateGroup() error = %v", err)
+	}
+	if _, err := store.AddGroupMember(context.Background(), group.Address, "observer"); err != nil {
+		t.Fatalf("AddGroupMember(observer) error = %v", err)
+	}
+	if _, err := store.AddGroupNotificationSubscriber(context.Background(), group.Address, "agent-deck/observer", "observer"); err != nil {
+		t.Fatalf("AddGroupNotificationSubscriber(observer) error = %v", err)
+	}
+
+	if _, err := store.Send(context.Background(), SendParams{
+		ToAddress:     group.Address,
+		FromAddress:   "agent-deck/moderator",
+		Subject:       "roundtable turn",
+		ContentType:   "text/plain",
+		SchemaVersion: "v1",
+		Body:          []byte("group body"),
+		Group:         true,
+	}); err != nil {
+		t.Fatalf("Send(group) error = %v", err)
+	}
+	if blobWrites != 2 {
+		t.Fatalf("blob writes = %d, want group body plus subscriber notification", blobWrites)
+	}
+	if _, err := store.Receive(context.Background(), ReceiveParams{Address: "agent-deck/observer"}); err != nil {
+		t.Fatalf("Receive(observer subscriber) error = %v", err)
+	}
+}
+
 func TestGroupSendSkipsInvalidSubscribers(t *testing.T) {
 	t.Parallel()
 
