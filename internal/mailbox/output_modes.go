@@ -1,92 +1,61 @@
 package mailbox
 
-func (a *App) writeSendOutput(format outputFormat, full bool, result SendResult) error {
+func writeFormattedOutput[T any](a *App, format outputFormat, value T, writeText func(T) error) error {
 	if format != outputFormatText {
-		if full {
-			return a.writeStructuredOutput(format, FullSendResult(result))
-		}
-		return a.writeStructuredOutput(format, CompactSendResult(result))
+		return a.writeStructuredOutput(format, value)
 	}
+	return writeText(value)
+}
+
+func (a *App) writeSendOutput(format outputFormat, full bool, result SendResult) error {
 	if full {
-		return a.writeSendResultFullText(FullSendResult(result))
+		return writeFormattedOutput(a, format, FullSendResult(result), a.writeSendResultFullText)
 	}
-	return a.writeSendResultText(CompactSendResult(result))
+	return writeFormattedOutput(a, format, CompactSendResult(result), a.writeSendResultText)
 }
 
 func (a *App) writeForwardOutput(format outputFormat, full bool, result ForwardResult) error {
-	if format != outputFormatText {
-		if full {
-			return a.writeStructuredOutput(format, FullForwardResult(result))
-		}
-		return a.writeStructuredOutput(format, CompactForwardResult(result))
-	}
 	if full {
-		return a.writeForwardResultFullText(FullForwardResult(result))
+		return writeFormattedOutput(a, format, FullForwardResult(result), a.writeForwardResultFullText)
 	}
-	return a.writeForwardResultText(CompactForwardResult(result))
+	return writeFormattedOutput(a, format, CompactForwardResult(result), a.writeForwardResultText)
 }
 
 func (a *App) writeReceiveOutput(format outputFormat, full bool, message ReceivedMessage) error {
-	if format != outputFormatText {
-		if full {
-			return a.writeStructuredOutput(format, message)
-		}
-		return a.writeStructuredOutput(format, CompactReceivedMessage(message))
-	}
 	if full {
-		return a.writeReceivedMessageFullText(message)
+		return writeFormattedOutput(a, format, message, a.writeReceivedMessageFullText)
 	}
-	return a.writeReceivedMessageText(CompactReceivedMessage(message))
+	return writeFormattedOutput(a, format, CompactReceivedMessage(message), a.writeReceivedMessageText)
 }
 
 func (a *App) writeGroupReceiveOutput(format outputFormat, full bool, message GroupReceivedMessage) error {
-	if format != outputFormatText {
-		if full {
+	compact := CompactGroupReceivedMessage(message)
+	if full {
+		if format != outputFormatText {
 			return a.writeStructuredOutput(format, message)
 		}
-		return a.writeStructuredOutput(format, CompactGroupReceivedMessage(message))
+		return a.writeGroupReceivedMessageText(compact)
 	}
-	if full {
-		return a.writeGroupReceivedMessageFullText(message)
-	}
-	return a.writeGroupReceivedMessageText(CompactGroupReceivedMessage(message))
+	return writeFormattedOutput(a, format, compact, a.writeGroupReceivedMessageText)
 }
 
 func (a *App) writeReceiveBatchOutput(format outputFormat, full bool, result ReceiveResult) error {
-	if format != outputFormatText {
-		if full {
-			return a.writeStructuredOutput(format, result)
-		}
-		return a.writeStructuredOutput(format, CompactReceiveResult(result))
-	}
 	if full {
-		return a.writeReceiveResultFullText(result)
+		return writeFormattedOutput(a, format, result, a.writeReceiveResultFullText)
 	}
-	return a.writeReceiveResultText(CompactReceiveResult(result))
+	return writeFormattedOutput(a, format, CompactReceiveResult(result), a.writeReceiveResultText)
 }
 
 func (a *App) writeWaitOutput(format outputFormat, full bool, delivery ListedDelivery) error {
-	if format != outputFormatText {
-		if full {
-			return a.writeStructuredOutput(format, delivery)
-		}
-		return a.writeStructuredOutput(format, CompactListedDelivery(delivery))
-	}
 	if full {
-		return a.writeListedDeliveryText(delivery)
+		return writeFormattedOutput(a, format, delivery, a.writeListedDeliveryText)
 	}
-	return a.writeWaitedDeliveryText(CompactListedDelivery(delivery))
+	return writeFormattedOutput(a, format, CompactListedDelivery(delivery), a.writeWaitedDeliveryText)
 }
 
 func (a *App) writeGroupWaitOutput(format outputFormat, full bool, message GroupListedMessage) error {
-	if format != outputFormatText {
-		if full {
-			return a.writeStructuredOutput(format, message)
-		}
-		return a.writeStructuredOutput(format, CompactGroupListedMessage(message))
-	}
 	if full {
-		return a.writeGroupListedMessageText(message)
+		return writeFormattedOutput(a, format, message, a.writeGroupListedMessageText)
 	}
-	return a.writeGroupWaitedMessageText(CompactGroupListedMessage(message))
+	return writeFormattedOutput(a, format, CompactGroupListedMessage(message), a.writeGroupWaitedMessageText)
 }

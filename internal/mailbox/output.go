@@ -283,35 +283,6 @@ func (a *App) writeGroupReceivedMessageText(message GroupReceivedMessageCompact)
 	return nil
 }
 
-func (a *App) writeGroupReceivedMessageFullText(message GroupReceivedMessage) error {
-	header := fmt.Sprintf(
-		"message_id=%s group=%s person=%s first_read_at=%s content_type=%s subject=%q read_count=%d eligible_count=%d",
-		message.MessageID,
-		message.GroupAddress,
-		message.Person,
-		message.FirstReadAt,
-		message.ContentType,
-		message.Subject,
-		message.ReadCount,
-		message.EligibleCount,
-	)
-	if message.ForwardedFromAddress != nil {
-		header += fmt.Sprintf(" forwarded_from_address=%s", *message.ForwardedFromAddress)
-	}
-	if _, err := fmt.Fprintln(a.stdout, header); err != nil {
-		return err
-	}
-	if _, err := fmt.Fprint(a.stdout, message.Body); err != nil {
-		return err
-	}
-	if !strings.HasSuffix(message.Body, "\n") {
-		if _, err := fmt.Fprintln(a.stdout); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
 func (a *App) writeReceiveResultText(result ReceiveResultCompact) error {
 	for index, message := range result.Messages {
 		if index > 0 {
