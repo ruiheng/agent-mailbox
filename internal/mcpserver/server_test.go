@@ -368,6 +368,15 @@ type runnerCall struct {
 	Input string
 }
 
+func waitForTestSignal(t *testing.T, ch <-chan struct{}, name string) {
+	t.Helper()
+	select {
+	case <-ch:
+	case <-time.After(time.Second):
+		t.Fatalf("timed out waiting for %s", name)
+	}
+}
+
 func (r *fakeRunner) Run(_ context.Context, args []string, input string) (RunResult, error) {
 	r.mu.Lock()
 	r.calls = append(r.calls, runnerCall{Args: append([]string(nil), args...), Input: input})
@@ -1749,6 +1758,49 @@ func TestProcessWakeSchedulerUsesLocalHintThenAgentDeckWake(t *testing.T) {
 	}
 	if got := calls[1].Args; len(got) != 6 || got[0] != "agent-deck" || got[2] != "send" {
 		t.Fatalf("second command = %v, want agent-deck send", got)
+	}
+}
+
+func TestServiceCloseStopsWakeSchedulerLoop(t *testing.T) {
+	mailboxService := &fakeMailboxService{t: t}
+	entered := make(chan struct{})
+	canceled := make(chan struct{})
+	var closeEntered sync.Once
+	var closeCanceled sync.Once
+	var mu sync.Mutex
+	calls := 0
+	mailboxService.listClaimableFunc = func(ctx context.Context, addresses []string) ([]mailbox.ClaimableAddress, error) {
+		mu.Lock()
+		calls++
+		mu.Unlock()
+		closeEntered.Do(func() { close(entered) })
+		<-ctx.Done()
+		closeCanceled.Do(func() { close(canceled) })
+		return nil, ctx.Err()
+	}
+
+	service := newService(Options{
+		MailboxServiceFactory: fakeMailboxServiceFactory{service: mailboxService},
+		CommandRunner: &fakeRunner{t: t, handler: func(args []string, input string) (RunResult, error) {
+			t.Fatalf("unexpected command call: %v", args)
+			return RunResult{}, nil
+		}},
+		WakePollInterval: time.Hour,
+	})
+	service.state.boundAddresses = []string{"agent-deck/self"}
+	service.state.defaultSender = "agent-deck/self"
+	service.state.autoBindAttempted = true
+	service.state.detectedAgentDeckSession = "self"
+
+	service.startWakeSchedulerLoop()
+	waitForTestSignal(t, entered, "wake scheduler entered")
+	service.Close()
+	waitForTestSignal(t, canceled, "wake scheduler canceled")
+
+	mu.Lock()
+	defer mu.Unlock()
+	if calls != 1 {
+		t.Fatalf("ListClaimableAddresses calls = %d, want 1", calls)
 	}
 }
 
@@ -3828,6 +3880,7 @@ func TestMailboxRecvStartsLeaseRenewLoopWithShortTTL(t *testing.T) {
 		}},
 		LeaseRenewInterval: 10 * time.Millisecond,
 	})
+	defer service.Close()
 	service.state.boundAddresses = []string{"agent-deck/self"}
 	service.state.defaultSender = "agent-deck/self"
 	service.state.autoBindAttempted = true
@@ -3840,6 +3893,57 @@ func TestMailboxRecvStartsLeaseRenewLoopWithShortTTL(t *testing.T) {
 	case <-renewed:
 	case <-time.After(500 * time.Millisecond):
 		t.Fatal("timed out waiting for lease renew")
+	}
+}
+
+func TestServiceCloseStopsLeaseRenewLoop(t *testing.T) {
+	current := time.Date(2026, 4, 3, 6, 10, 0, 0, time.UTC)
+	mailboxService := &fakeMailboxService{t: t}
+	entered := make(chan struct{})
+	canceled := make(chan struct{})
+	var closeEntered sync.Once
+	var closeCanceled sync.Once
+	var mu sync.Mutex
+	calls := 0
+	mailboxService.renewFunc = func(ctx context.Context, deliveryID, leaseToken string, extendBy time.Duration) (mailbox.LeaseRenewResult, error) {
+		mu.Lock()
+		calls++
+		mu.Unlock()
+		closeEntered.Do(func() { close(entered) })
+		<-ctx.Done()
+		closeCanceled.Do(func() { close(canceled) })
+		return mailbox.LeaseRenewResult{}, ctx.Err()
+	}
+
+	service := newService(Options{
+		MailboxServiceFactory: fakeMailboxServiceFactory{service: mailboxService},
+		CommandRunner: &fakeRunner{t: t, handler: func(args []string, input string) (RunResult, error) {
+			t.Fatalf("unexpected command call: %v", args)
+			return RunResult{}, nil
+		}},
+		Now:                func() time.Time { return current },
+		LeaseRenewInterval: time.Nanosecond,
+	})
+	service.activeLeases.trackReceive(mailbox.ReceiveResult{
+		Messages: []mailbox.ReceivedMessage{{
+			DeliveryID:       "dlv_close",
+			LeaseToken:       "lease_close",
+			LeaseExpiresAt:   current.Add(defaultMCPLeaseTTL).Format(time.RFC3339Nano),
+			RecipientAddress: "agent-deck/self",
+			Subject:          "delegate",
+			Body:             "body",
+		}},
+	}, current.Format(time.RFC3339Nano))
+
+	service.startLeaseRenewLoop()
+	waitForTestSignal(t, entered, "lease renew entered")
+	service.Close()
+	waitForTestSignal(t, canceled, "lease renew canceled")
+
+	mu.Lock()
+	defer mu.Unlock()
+	if calls != 1 {
+		t.Fatalf("Renew calls = %d, want 1", calls)
 	}
 }
 

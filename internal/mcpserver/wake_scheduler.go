@@ -73,18 +73,21 @@ func (s *Service) startWakeSchedulerLoop() {
 	if err != nil || scope == nil {
 		return
 	}
-	s.wakeSchedulerLoopOnce.Do(func() {
-		go s.runWakeSchedulerLoop()
-	})
+	s.startBackgroundLoop(&s.wakeSchedulerLoopOnce, s.runWakeSchedulerLoop)
 }
 
 func (s *Service) runWakeSchedulerLoop() {
-	_ = s.processWakeScheduler(context.Background())
+	_ = s.processWakeScheduler(s.ctx)
 	ticker := time.NewTicker(s.wakePollInterval)
 	defer ticker.Stop()
 
-	for range ticker.C {
-		_ = s.processWakeScheduler(context.Background())
+	for {
+		select {
+		case <-s.ctx.Done():
+			return
+		case <-ticker.C:
+			_ = s.processWakeScheduler(s.ctx)
+		}
 	}
 }
 

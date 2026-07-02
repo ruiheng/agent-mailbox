@@ -16,17 +16,20 @@ func (s *Service) startLeaseRenewLoop() {
 	if s.disableLeaseRenewLoop || !s.activeLeases.hasTrackedLeases() {
 		return
 	}
-	s.leaseRenewLoopOnce.Do(func() {
-		go s.runLeaseRenewLoop()
-	})
+	s.startBackgroundLoop(&s.leaseRenewLoopOnce, s.runLeaseRenewLoop)
 }
 
 func (s *Service) runLeaseRenewLoop() {
 	ticker := time.NewTicker(s.leaseRenewInterval)
 	defer ticker.Stop()
 
-	for range ticker.C {
-		s.processLeaseRenewals(context.Background())
+	for {
+		select {
+		case <-s.ctx.Done():
+			return
+		case <-ticker.C:
+			s.processLeaseRenewals(s.ctx)
+		}
 	}
 }
 

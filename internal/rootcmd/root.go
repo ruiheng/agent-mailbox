@@ -28,8 +28,9 @@ func New(stdin io.Reader, stdout, stderr io.Writer) *App {
 		stdout: stdout,
 		stderr: stderr,
 		runMCP: func(ctx context.Context, stateDir string) error {
-			server := mcpserver.New(mcpserver.Options{StateDir: stateDir})
-			return server.Run(ctx, &mcp.StdioTransport{})
+			service := mcpserver.NewService(mcpserver.Options{StateDir: stateDir})
+			defer service.Close()
+			return service.Server().Run(ctx, &mcp.StdioTransport{})
 		},
 		runWeb: webui.Run,
 	}

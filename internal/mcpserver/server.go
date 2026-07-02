@@ -113,6 +113,8 @@ type Options struct {
 }
 
 type Service struct {
+	ctx                    context.Context
+	cancel                 context.CancelFunc
 	mailboxServices        mailboxServiceFactory
 	commandRunner          Runner
 	sessions               *sessionManager
@@ -131,6 +133,9 @@ type Service struct {
 	mailboxOverviewEmitter func(context.Context) notificationOutcome
 	leaseRenewLoopOnce     sync.Once
 	wakeSchedulerLoopOnce  sync.Once
+	backgroundMu           sync.Mutex
+	backgroundLoops        sync.WaitGroup
+	closeOnce              sync.Once
 	serverMu               sync.Mutex
 	server                 *mcp.Server
 }
@@ -146,10 +151,14 @@ type osCommandRunner struct {
 }
 
 func New(opts Options) *mcp.Server {
+	return NewService(opts).Server()
+}
+
+func NewService(opts Options) *Service {
 	if opts.NotifyDelay == 0 {
 		opts.NotifyDelay = defaultNotifyDelay
 	}
-	return newService(opts).Server()
+	return newService(opts)
 }
 
 func newService(opts Options) *Service {
@@ -164,7 +173,10 @@ func newService(opts Options) *Service {
 	}
 	state := &serverState{}
 	sessions := newSessionManager(opts.CommandRunner, state)
+	ctx, cancel := context.WithCancel(context.Background())
 	service := &Service{
+		ctx:                   ctx,
+		cancel:                cancel,
 		mailboxServices:       opts.MailboxServiceFactory,
 		commandRunner:         opts.CommandRunner,
 		sessions:              sessions,
@@ -200,6 +212,32 @@ func newService(opts Options) *Service {
 	service.overviewSubscriptions = newResourceSubscriptionState()
 	service.mailboxOverviewEmitter = service.emitMailboxOverviewUpdated
 	return service
+}
+
+func (s *Service) Close() {
+	s.closeOnce.Do(func() {
+		s.backgroundMu.Lock()
+		s.cancel()
+		s.backgroundMu.Unlock()
+	})
+	s.backgroundLoops.Wait()
+}
+
+func (s *Service) startBackgroundLoop(once *sync.Once, run func()) {
+	once.Do(func() {
+		s.backgroundMu.Lock()
+		defer s.backgroundMu.Unlock()
+		select {
+		case <-s.ctx.Done():
+			return
+		default:
+		}
+		s.backgroundLoops.Add(1)
+		go func() {
+			defer s.backgroundLoops.Done()
+			run()
+		}()
+	})
 }
 
 func (s *Service) Server() *mcp.Server {
