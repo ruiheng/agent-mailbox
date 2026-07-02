@@ -583,11 +583,11 @@ func (s *Store) InspectAddress(ctx context.Context, address string) (AddressInsp
 }
 
 func (s *Store) ListGroupMessages(ctx context.Context, params GroupListParams) ([]GroupListedMessage, error) {
-	scope, err := s.availability().resolveGroup(ctx, s.readDB, params.Address, params.Person)
+	scope, err := s.resolveGroup(ctx, s.readDB, params.Address, params.Person)
 	if err != nil {
 		return nil, err
 	}
-	records, err := s.availability().listGroupMessages(ctx, s.readDB, scope, false, 0)
+	records, err := s.listGroupMessages(ctx, s.readDB, scope, false, 0)
 	if err != nil {
 		return nil, err
 	}
@@ -775,11 +775,11 @@ func (s *Store) WaitGroupMessage(ctx context.Context, params GroupWaitParams) (G
 }
 
 func (s *Store) waitGroupMessageOnce(ctx context.Context, params GroupWaitParams) (GroupListedMessage, error) {
-	scope, err := s.availability().resolveGroup(ctx, s.readDB, params.Address, params.Person)
+	scope, err := s.resolveGroup(ctx, s.readDB, params.Address, params.Person)
 	if err != nil {
 		return GroupListedMessage{}, err
 	}
-	records, err := s.availability().listGroupMessages(ctx, s.readDB, scope, true, 1)
+	records, err := s.listGroupMessages(ctx, s.readDB, scope, true, 1)
 	if err != nil {
 		return GroupListedMessage{}, err
 	}
@@ -811,14 +811,13 @@ func (s *Store) ReceiveGroupMessage(ctx context.Context, params GroupReceivePara
 }
 
 func (s *Store) receiveGroupMessageOnce(ctx context.Context, params GroupReceiveParams) (GroupReceivedMessage, error) {
-	availability := s.availability()
 	for {
 		tx, err := s.writeDB.BeginTx(ctx, nil)
 		if err != nil {
 			return GroupReceivedMessage{}, fmt.Errorf("begin group receive transaction: %w", err)
 		}
 
-		scope, err := availability.resolveGroup(ctx, tx, params.Address, params.Person)
+		scope, err := s.resolveGroup(ctx, tx, params.Address, params.Person)
 		if err != nil {
 			_ = tx.Rollback()
 			return GroupReceivedMessage{}, err
@@ -828,7 +827,7 @@ func (s *Store) receiveGroupMessageOnce(ctx context.Context, params GroupReceive
 			return GroupReceivedMessage{}, ErrNoMessage
 		}
 
-		records, err := availability.listGroupMessages(ctx, tx, scope, true, 1)
+		records, err := s.listGroupMessages(ctx, tx, scope, true, 1)
 		if err != nil {
 			_ = tx.Rollback()
 			return GroupReceivedMessage{}, err

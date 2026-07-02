@@ -783,11 +783,11 @@ func (s *Store) List(ctx context.Context, params ListParams) ([]ListedDelivery, 
 		return nil, err
 	}
 
-	scope, err := s.availability().resolvePersonal(ctx, s.readDB, []string{address})
+	scope, err := s.resolvePersonal(ctx, s.readDB, []string{address})
 	if err != nil {
 		return nil, err
 	}
-	return s.availability().listPersonalDeliveries(ctx, s.readDB, scope, strings.TrimSpace(params.State), formatTimestamp(s.now()))
+	return s.listPersonalDeliveries(ctx, s.readDB, scope, strings.TrimSpace(params.State), formatTimestamp(s.now()))
 }
 
 func (s *Store) ReadDelivery(ctx context.Context, deliveryID string) (ReadDelivery, error) {
@@ -995,7 +995,7 @@ func (s *Store) ReadLatestDeliveries(ctx context.Context, addresses []string, st
 	}
 	state = strings.TrimSpace(state)
 
-	scope, err := s.availability().resolvePersonal(ctx, s.readDB, addresses)
+	scope, err := s.resolvePersonal(ctx, s.readDB, addresses)
 	if err != nil {
 		return nil, false, err
 	}
@@ -1121,12 +1121,6 @@ VALUES (?, ?, '{}')
 	if groupRecord, found, err := lookupGroupRecord(ctx, tx, address); err != nil {
 		return EndpointRegistration{}, fmt.Errorf("check group collision for endpoint address %q: %w", address, err)
 	} else if found {
-		if _, err := tx.ExecContext(ctx, `
-DELETE FROM endpoints
-WHERE endpoint_id = ?
-`, endpointID); err != nil {
-			return EndpointRegistration{}, fmt.Errorf("delete unused endpoint after group collision: %w", err)
-		}
 		return EndpointRegistration{}, fmt.Errorf("endpoint address %q is already bound to group %q: %w", address, groupRecord.GroupID, ErrAddressReservedByGroup)
 	}
 

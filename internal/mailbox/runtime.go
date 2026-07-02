@@ -3,6 +3,7 @@ package mailbox
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -78,20 +79,23 @@ func (r *Runtime) Close() error {
 	if r == nil {
 		return nil
 	}
+	var errs []error
 	if r.readDB != nil {
-		if err := r.readDB.Close(); err != nil && r.claimDB == nil && r.db == nil {
-			return err
+		if err := r.readDB.Close(); err != nil {
+			errs = append(errs, err)
 		}
 	}
 	if r.claimDB != nil {
-		if err := r.claimDB.Close(); err != nil && r.db == nil {
-			return err
+		if err := r.claimDB.Close(); err != nil {
+			errs = append(errs, err)
 		}
 	}
-	if r.db == nil {
-		return nil
+	if r.db != nil {
+		if err := r.db.Close(); err != nil {
+			errs = append(errs, err)
+		}
 	}
-	return r.db.Close()
+	return errors.Join(errs...)
 }
 
 func (r *Runtime) Store() *Store {

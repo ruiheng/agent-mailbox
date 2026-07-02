@@ -21,7 +21,7 @@ func TestAvailabilityClaimablePersonalDeliveryUsesFirstAliasAndStableOrdering(t 
 	current = current.Add(time.Second)
 	newer := mustSendMessage(t, store, "workflow/secondary", "agent/sender", "newer", "newer body")
 
-	scope, err := store.availability().resolvePersonal(context.Background(), store.readDB, []string{
+	scope, err := store.resolvePersonal(context.Background(), store.readDB, []string{
 		"workflow/alias",
 		"workflow/primary",
 		"workflow/secondary",
@@ -30,7 +30,7 @@ func TestAvailabilityClaimablePersonalDeliveryUsesFirstAliasAndStableOrdering(t 
 		t.Fatalf("resolvePersonal() error = %v", err)
 	}
 
-	candidate, err := store.availability().claimablePersonalDelivery(context.Background(), store.readDB, scope, formatTimestamp(store.now()))
+	candidate, err := store.claimablePersonalDelivery(context.Background(), store.readDB, scope, formatTimestamp(store.now()))
 	if err != nil {
 		t.Fatalf("claimablePersonalDelivery() error = %v", err)
 	}
@@ -41,7 +41,7 @@ func TestAvailabilityClaimablePersonalDeliveryUsesFirstAliasAndStableOrdering(t 
 		t.Fatalf("claimablePersonalDelivery().recipient_address = %q, want workflow/alias", candidate.RecipientAddress)
 	}
 
-	deliveries, err := store.availability().listPersonalDeliveries(context.Background(), store.readDB, scope, "", formatTimestamp(store.now()))
+	deliveries, err := store.listPersonalDeliveries(context.Background(), store.readDB, scope, "", formatTimestamp(store.now()))
 	if err != nil {
 		t.Fatalf("listPersonalDeliveries() error = %v", err)
 	}
@@ -75,7 +75,7 @@ func TestAvailabilityListPersonalStaleAddressesUsesClaimableEligibility(t *testi
 	}
 
 	current = current.Add(defaultLeaseTimeout + time.Second)
-	scope, err := store.availability().resolvePersonal(context.Background(), store.readDB, []string{
+	scope, err := store.resolvePersonal(context.Background(), store.readDB, []string{
 		"workflow/stale-queued",
 		"workflow/stale-leased",
 	})
@@ -83,7 +83,7 @@ func TestAvailabilityListPersonalStaleAddressesUsesClaimableEligibility(t *testi
 		t.Fatalf("resolvePersonal() error = %v", err)
 	}
 
-	stale, err := store.availability().listPersonalStaleAddresses(
+	stale, err := store.queryPersonalStaleAddresses(
 		context.Background(),
 		store.readDB,
 		scope,
@@ -126,7 +126,7 @@ func TestAvailabilityListClaimablePersonalAddressesUsesClaimableEligibility(t *t
 	}
 
 	current = current.Add(defaultLeaseTimeout + time.Second)
-	scope, err := store.availability().resolvePersonal(context.Background(), store.readDB, []string{
+	scope, err := store.resolvePersonal(context.Background(), store.readDB, []string{
 		"workflow/claimable-queued",
 		"workflow/claimable-leased",
 	})
@@ -134,7 +134,7 @@ func TestAvailabilityListClaimablePersonalAddressesUsesClaimableEligibility(t *t
 		t.Fatalf("resolvePersonal() error = %v", err)
 	}
 
-	claimable, err := store.availability().listClaimablePersonalAddresses(
+	claimable, err := store.listClaimablePersonalAddresses(
 		context.Background(),
 		store.readDB,
 		scope,
@@ -192,7 +192,7 @@ func TestAvailabilityListGroupMessagesUsesVisibilityCutoffForUnreadView(t *testi
 	current = current.Add(time.Second)
 	mustSendGroupMessage(t, store, group.Address, "agent/sender", "after-leave", "after body")
 
-	scope, err := store.availability().resolveGroup(context.Background(), store.readDB, group.Address, "alice")
+	scope, err := store.resolveGroup(context.Background(), store.readDB, group.Address, "alice")
 	if err != nil {
 		t.Fatalf("resolveGroup() error = %v", err)
 	}
@@ -200,7 +200,7 @@ func TestAvailabilityListGroupMessagesUsesVisibilityCutoffForUnreadView(t *testi
 		t.Fatal("resolveGroup().viewer.VisibilityCutoff = nil, want non-nil")
 	}
 
-	records, err := store.availability().listGroupMessages(context.Background(), store.readDB, scope, true, 0)
+	records, err := store.listGroupMessages(context.Background(), store.readDB, scope, true, 0)
 	if err != nil {
 		t.Fatalf("listGroupMessages(unreadOnly) error = %v", err)
 	}

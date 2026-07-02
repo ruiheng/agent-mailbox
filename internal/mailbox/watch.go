@@ -99,14 +99,13 @@ func (s *Store) Watch(ctx context.Context, params WatchParams, emit func(ListedD
 	}
 
 	delay := initialPollDelay
-	availability := s.availability()
 	for {
-		scope, err := availability.resolvePersonal(ctx, s.readDB, addresses)
+		scope, err := s.resolvePersonal(ctx, s.readDB, addresses)
 		if err != nil {
 			return err
 		}
 
-		deliveries, err := availability.listPersonalDeliveries(ctx, s.readDB, scope, state, formatTimestamp(s.now()))
+		deliveries, err := s.listPersonalDeliveries(ctx, s.readDB, scope, state, formatTimestamp(s.now()))
 		if err != nil {
 			return err
 		}
@@ -160,12 +159,12 @@ func (s *Store) Watch(ctx context.Context, params WatchParams, emit func(ListedD
 }
 
 func (s *Store) waitOnce(ctx context.Context, addresses []string) (ListedDelivery, error) {
-	scope, err := s.availability().resolvePersonal(ctx, s.readDB, addresses)
+	scope, err := s.resolvePersonal(ctx, s.readDB, addresses)
 	if err != nil {
 		return ListedDelivery{}, err
 	}
 
-	deliveries, err := s.availability().listPersonalDeliveries(ctx, s.readDB, scope, "", formatTimestamp(s.now()))
+	deliveries, err := s.listPersonalDeliveries(ctx, s.readDB, scope, "", formatTimestamp(s.now()))
 	if err != nil {
 		return ListedDelivery{}, err
 	}

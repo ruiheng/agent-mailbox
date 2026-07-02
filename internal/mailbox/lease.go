@@ -483,7 +483,7 @@ func (s *Store) receiveOnceWithLeasePolicy(ctx context.Context, addresses []stri
 		return ReceivedMessage{}, err
 	}
 
-	scope, err := s.availability().resolvePersonal(ctx, s.readDB, addresses)
+	scope, err := s.resolvePersonal(ctx, s.readDB, addresses)
 	if err != nil {
 		return ReceivedMessage{}, err
 	}
@@ -504,7 +504,7 @@ func normalizeReceiveLeasePolicy(policy receiveLeasePolicy) (receiveLeasePolicy,
 func (s *Store) claimNextDelivery(ctx context.Context, scope personalAvailabilityScope, policy receiveLeasePolicy) (ReceivedMessage, error) {
 	for attempt := 1; ; attempt++ {
 		nowText := formatTimestamp(s.now())
-		candidate, err := s.availability().claimablePersonalDelivery(ctx, s.readDB, scope, nowText)
+		candidate, err := s.claimablePersonalDelivery(ctx, s.readDB, scope, nowText)
 		if errors.Is(err, sql.ErrNoRows) {
 			return ReceivedMessage{}, ErrNoMessage
 		}
@@ -571,7 +571,7 @@ WHERE delivery_id = ?
 		}
 		if rowsAffected == 0 {
 			_ = tx.Rollback()
-			refreshedCandidate, err := s.availability().claimablePersonalDelivery(ctx, s.readDB, scope, nowText)
+			refreshedCandidate, err := s.claimablePersonalDelivery(ctx, s.readDB, scope, nowText)
 			if errors.Is(err, sql.ErrNoRows) {
 				return ReceivedMessage{}, ErrNoMessage
 			}
@@ -714,7 +714,7 @@ func (s *Store) recoverReceiveFailure(ctx context.Context, deliveryID, leaseToke
 }
 
 func (s *Store) hasClaimableDelivery(ctx context.Context, addresses []string) (bool, error) {
-	scope, err := s.availability().resolvePersonal(ctx, s.readDB, addresses)
+	scope, err := s.resolvePersonal(ctx, s.readDB, addresses)
 	if err != nil {
 		return false, err
 	}
@@ -723,7 +723,7 @@ func (s *Store) hasClaimableDelivery(ctx context.Context, addresses []string) (b
 	}
 
 	nowText := formatTimestamp(s.now())
-	if _, err := s.availability().claimablePersonalDelivery(ctx, s.readDB, scope, nowText); errors.Is(err, sql.ErrNoRows) {
+	if _, err := s.claimablePersonalDelivery(ctx, s.readDB, scope, nowText); errors.Is(err, sql.ErrNoRows) {
 		return false, nil
 	} else if err != nil {
 		return false, fmt.Errorf("query claimable delivery: %w", err)
@@ -828,7 +828,7 @@ func validateDeliveryIDInput(deliveryID string) (string, error) {
 }
 
 func loadCurrentLease(ctx context.Context, tx *sql.Tx, deliveryID, leaseToken string) (leasedDeliveryRecord, error) {
-	delivery, err := loadLeasedDeliveryRecord(ctx, tx, deliveryID)
+	delivery, err := loadDeliveryRecord(ctx, tx, deliveryID)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return leasedDeliveryRecord{}, leaseError(fmt.Sprintf("delivery %q not found", deliveryID), ErrLeaseNotFound)
@@ -854,10 +854,6 @@ func isSQLiteBusy(err error) bool {
 		return false
 	}
 	return sqliteErr.Code == sqlite3.ErrBusy || sqliteErr.Code == sqlite3.ErrLocked
-}
-
-func loadLeasedDeliveryRecord(ctx context.Context, tx *sql.Tx, deliveryID string) (leasedDeliveryRecord, error) {
-	return loadDeliveryRecord(ctx, tx, deliveryID)
 }
 
 func loadDeliveryRecord(ctx context.Context, tx *sql.Tx, deliveryID string) (leasedDeliveryRecord, error) {

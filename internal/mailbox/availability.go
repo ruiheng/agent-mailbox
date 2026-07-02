@@ -87,15 +87,7 @@ type groupMessageRecord struct {
 	EligibleCount        int
 }
 
-type availabilityOwner struct {
-	store *Store
-}
-
-func (s *Store) availability() availabilityOwner {
-	return availabilityOwner{store: s}
-}
-
-func (o availabilityOwner) resolvePersonal(ctx context.Context, querier rowQuerier, addresses []string) (personalAvailabilityScope, error) {
+func (s *Store) resolvePersonal(ctx context.Context, querier rowQuerier, addresses []string) (personalAvailabilityScope, error) {
 	recipients := make([]resolvedRecipient, 0, len(addresses))
 	seenEndpointIDs := make(map[string]struct{}, len(addresses))
 	for _, address := range addresses {
@@ -107,7 +99,7 @@ func (o availabilityOwner) resolvePersonal(ctx context.Context, querier rowQueri
 			return personalAvailabilityScope{}, fmt.Errorf("recipient address %q is reserved by group %q: %w", address, group.GroupID, ErrAddressReservedByGroup)
 		}
 
-		endpointID, found, err := o.store.lookupEndpointID(ctx, querier, address)
+		endpointID, found, err := s.lookupEndpointID(ctx, querier, address)
 		if err != nil {
 			return personalAvailabilityScope{}, fmt.Errorf("resolve recipient address %q: %w", address, err)
 		}
@@ -139,7 +131,7 @@ func (scope personalAvailabilityScope) empty() bool {
 	return len(scope.recipientEndpointIDs) == 0
 }
 
-func (o availabilityOwner) claimablePersonalDelivery(ctx context.Context, querier rowQuerier, scope personalAvailabilityScope, nowText string) (personalDeliveryRecord, error) {
+func (s *Store) claimablePersonalDelivery(ctx context.Context, querier rowQuerier, scope personalAvailabilityScope, nowText string) (personalDeliveryRecord, error) {
 	if scope.empty() {
 		return personalDeliveryRecord{}, sql.ErrNoRows
 	}
@@ -201,7 +193,7 @@ LIMIT 1
 	return record, nil
 }
 
-func (o availabilityOwner) listPersonalDeliveries(ctx context.Context, querier rowsQuerier, scope personalAvailabilityScope, state, nowText string) ([]ListedDelivery, error) {
+func (s *Store) listPersonalDeliveries(ctx context.Context, querier rowsQuerier, scope personalAvailabilityScope, state, nowText string) ([]ListedDelivery, error) {
 	if scope.empty() {
 		return []ListedDelivery{}, nil
 	}
@@ -305,7 +297,7 @@ ORDER BY d.visible_at ASC, m.created_at ASC, d.delivery_id ASC
 	return deliveries, nil
 }
 
-func (o availabilityOwner) listClaimablePersonalAddresses(ctx context.Context, querier rowsQuerier, scope personalAvailabilityScope, nowText string) ([]ClaimableAddress, error) {
+func (s *Store) listClaimablePersonalAddresses(ctx context.Context, querier rowsQuerier, scope personalAvailabilityScope, nowText string) ([]ClaimableAddress, error) {
 	if scope.empty() {
 		return []ClaimableAddress{}, nil
 	}
@@ -354,7 +346,7 @@ ORDER BY oldest_eligible_at ASC, d.recipient_endpoint_id ASC
 	return claimable, nil
 }
 
-func (o availabilityOwner) listPersonalStaleAddresses(ctx context.Context, querier rowsQuerier, scope personalAvailabilityScope, nowText, staleBeforeText string) ([]StaleAddress, error) {
+func (s *Store) queryPersonalStaleAddresses(ctx context.Context, querier rowsQuerier, scope personalAvailabilityScope, nowText, staleBeforeText string) ([]StaleAddress, error) {
 	if scope.empty() {
 		return []StaleAddress{}, nil
 	}
@@ -404,7 +396,7 @@ ORDER BY oldest_eligible_at ASC, d.recipient_endpoint_id ASC
 	return stale, nil
 }
 
-func (o availabilityOwner) resolveGroup(ctx context.Context, querier rowQuerier, groupAddress, person string) (groupAvailabilityScope, error) {
+func (s *Store) resolveGroup(ctx context.Context, querier rowQuerier, groupAddress, person string) (groupAvailabilityScope, error) {
 	rawGroupAddress := groupAddress
 	groupAddress, err := NormalizeGroupAddress(rawGroupAddress)
 	if err != nil {
@@ -450,7 +442,7 @@ func (o availabilityOwner) resolveGroup(ctx context.Context, querier rowQuerier,
 	return groupAvailabilityScope{viewer: viewer}, nil
 }
 
-func (o availabilityOwner) listGroupMessages(ctx context.Context, querier rowsQuerier, scope groupAvailabilityScope, unreadOnly bool, limit int) ([]groupMessageRecord, error) {
+func (s *Store) listGroupMessages(ctx context.Context, querier rowsQuerier, scope groupAvailabilityScope, unreadOnly bool, limit int) ([]groupMessageRecord, error) {
 	viewer := scope.viewer
 	if viewer.PersonID == "" {
 		return []groupMessageRecord{}, nil

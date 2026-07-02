@@ -81,7 +81,7 @@ func (s *Store) ListClaimableAddresses(ctx context.Context, addresses []string) 
 		return nil, err
 	}
 
-	scope, err := s.availability().resolvePersonal(ctx, s.readDB, addresses)
+	scope, err := s.resolvePersonal(ctx, s.readDB, addresses)
 	if err != nil {
 		return nil, err
 	}
@@ -89,7 +89,7 @@ func (s *Store) ListClaimableAddresses(ctx context.Context, addresses []string) 
 		return []ClaimableAddress{}, nil
 	}
 
-	return s.availability().listClaimablePersonalAddresses(ctx, s.readDB, scope, formatTimestamp(s.now()))
+	return s.listClaimablePersonalAddresses(ctx, s.readDB, scope, formatTimestamp(s.now()))
 }
 
 func (s *Store) listPersonalStaleAddresses(ctx context.Context, addresses []string, olderThan time.Duration) ([]StaleAddress, error) {
@@ -98,7 +98,7 @@ func (s *Store) listPersonalStaleAddresses(ctx context.Context, addresses []stri
 		return nil, err
 	}
 
-	scope, err := s.availability().resolvePersonal(ctx, s.readDB, addresses)
+	scope, err := s.resolvePersonal(ctx, s.readDB, addresses)
 	if err != nil {
 		return nil, err
 	}
@@ -108,19 +108,18 @@ func (s *Store) listPersonalStaleAddresses(ctx context.Context, addresses []stri
 
 	now := s.now()
 	staleBeforeText := formatTimestamp(now.Add(-olderThan))
-	return s.availability().listPersonalStaleAddresses(ctx, s.readDB, scope, formatTimestamp(now), staleBeforeText)
+	return s.queryPersonalStaleAddresses(ctx, s.readDB, scope, formatTimestamp(now), staleBeforeText)
 }
 
 func (s *Store) listGroupStaleAddresses(ctx context.Context, groupViews []GroupStaleView, olderThan time.Duration) ([]StaleAddress, error) {
 	staleBeforeText := formatTimestamp(s.now().Add(-olderThan))
 	stale := make([]StaleAddress, 0, len(groupViews))
-	availability := s.availability()
 	for _, groupView := range groupViews {
-		scope, err := availability.resolveGroup(ctx, s.readDB, groupView.Address, groupView.Person)
+		scope, err := s.resolveGroup(ctx, s.readDB, groupView.Address, groupView.Person)
 		if err != nil {
 			return nil, err
 		}
-		records, err := availability.listGroupMessages(ctx, s.readDB, scope, true, 0)
+		records, err := s.listGroupMessages(ctx, s.readDB, scope, true, 0)
 		if err != nil {
 			return nil, err
 		}
