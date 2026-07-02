@@ -100,7 +100,7 @@ func (o *Operations) Forward(ctx context.Context, params ForwardParams) (Forward
 	if err != nil {
 		return ForwardResult{}, err
 	}
-	sendResult, err := o.store.Send(ctx, prepared.SendParams)
+	sendResult, err := o.Send(ctx, prepared.SendParams)
 	if err != nil {
 		return ForwardResult{}, err
 	}

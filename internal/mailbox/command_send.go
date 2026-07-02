@@ -69,8 +69,7 @@ func (a *App) prepareSendCommand(args []string) (preparedCommand, error) {
 	}
 
 	return func(ctx context.Context, store *Store) error {
-		ops := NewOperations(store)
-		result, err := ops.Send(ctx, params)
+		result, err := store.Send(ctx, params)
 		if err != nil {
 			return err
 		}

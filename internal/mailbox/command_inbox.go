@@ -40,12 +40,11 @@ func (a *App) prepareListCommand(args []string) (preparedCommand, error) {
 	}
 
 	return func(ctx context.Context, store *Store) error {
-		ops := NewOperations(store)
 		if strings.TrimSpace(person) != "" {
 			if strings.TrimSpace(state) != "" {
 				return errors.New("--state is not supported with --as")
 			}
-			messages, err := ops.ListGroupMessages(ctx, GroupListParams{
+			messages, err := store.ListGroupMessages(ctx, GroupListParams{
 				Address: address,
 				Person:  person,
 			})
@@ -67,7 +66,7 @@ func (a *App) prepareListCommand(args []string) (preparedCommand, error) {
 			return nil
 		}
 
-		deliveries, err := ops.List(ctx, params)
+		deliveries, err := store.List(ctx, params)
 		if err != nil {
 			return err
 		}
@@ -129,8 +128,7 @@ func (a *App) prepareStaleCommand(args []string) (preparedCommand, error) {
 	}
 
 	return func(ctx context.Context, store *Store) error {
-		ops := NewOperations(store)
-		stale, err := ops.ListStaleAddresses(ctx, params)
+		stale, err := store.ListStaleAddresses(ctx, params)
 		if err != nil {
 			return err
 		}
@@ -177,7 +175,6 @@ func (a *App) prepareRecvCommand(args []string) (preparedCommand, error) {
 	}
 
 	return func(ctx context.Context, store *Store) error {
-		ops := NewOperations(store)
 		if person != "" {
 			if maxProvided {
 				return errors.New("--max is not supported with --as")
@@ -209,7 +206,7 @@ func (a *App) prepareRecvCommand(args []string) (preparedCommand, error) {
 			return a.writeReceiveOutput(format, full, message)
 		}
 
-		result, err := ops.ReceiveBatch(claimCtx, params)
+		result, err := store.ReceiveBatch(claimCtx, params)
 		if err != nil {
 			return err
 		}
@@ -302,7 +299,6 @@ func (a *App) prepareWaitCommand(args []string) (preparedCommand, error) {
 	}
 
 	return func(ctx context.Context, store *Store) error {
-		ops := NewOperations(store)
 		if person != "" {
 			if len(normalizedAddresses) != 1 {
 				return errors.New("--as requires exactly one --for address")
@@ -318,7 +314,7 @@ func (a *App) prepareWaitCommand(args []string) (preparedCommand, error) {
 			return a.writeGroupWaitOutput(format, full, message)
 		}
 
-		delivery, err := ops.Wait(ctx, params)
+		delivery, err := store.Wait(ctx, params)
 		if err != nil {
 			return err
 		}
@@ -393,9 +389,8 @@ func (a *App) prepareReadCommand(args []string) (preparedCommand, error) {
 	state = strings.TrimSpace(state)
 
 	return func(ctx context.Context, store *Store) error {
-		ops := NewOperations(store)
 		if len(normalizedMessageIDs) > 0 {
-			messages, err := ops.ReadMessages(ctx, normalizedMessageIDs)
+			messages, err := store.ReadMessages(ctx, normalizedMessageIDs)
 			if err != nil {
 				return err
 			}
@@ -410,7 +405,7 @@ func (a *App) prepareReadCommand(args []string) (preparedCommand, error) {
 		}
 
 		if latest {
-			deliveries, hasMore, err := ops.ReadLatestDeliveries(ctx, normalizedAddresses, state, limit)
+			deliveries, hasMore, err := store.ReadLatestDeliveries(ctx, normalizedAddresses, state, limit)
 			if err != nil {
 				return err
 			}
@@ -424,7 +419,7 @@ func (a *App) prepareReadCommand(args []string) (preparedCommand, error) {
 			return a.writeReadDeliveryResultText(result)
 		}
 
-		deliveries, err := ops.ReadDeliveries(ctx, normalizedDeliveryIDs)
+		deliveries, err := store.ReadDeliveries(ctx, normalizedDeliveryIDs)
 		if err != nil {
 			return err
 		}

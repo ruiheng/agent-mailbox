@@ -29,8 +29,7 @@ func (a *App) prepareAckCommand(args []string) (preparedCommand, error) {
 	}
 
 	return func(ctx context.Context, store *Store) error {
-		ops := NewOperations(store)
-		result, err := ops.Ack(ctx, deliveryID, leaseToken)
+		result, err := store.Ack(ctx, deliveryID, leaseToken)
 		if err != nil {
 			return err
 		}
@@ -63,8 +62,7 @@ func (a *App) prepareRenewCommand(args []string) (preparedCommand, error) {
 	}
 
 	return func(ctx context.Context, store *Store) error {
-		ops := NewOperations(store)
-		result, err := ops.Renew(ctx, deliveryID, leaseToken, extendBy)
+		result, err := store.Renew(ctx, deliveryID, leaseToken, extendBy)
 		if err != nil {
 			return err
 		}
@@ -92,8 +90,7 @@ func (a *App) prepareReleaseCommand(args []string) (preparedCommand, error) {
 	}
 
 	return func(ctx context.Context, store *Store) error {
-		ops := NewOperations(store)
-		result, err := ops.Release(ctx, deliveryID, leaseToken)
+		result, err := store.Release(ctx, deliveryID, leaseToken)
 		if err != nil {
 			return err
 		}
@@ -131,8 +128,7 @@ func (a *App) prepareDeferCommand(args []string) (preparedCommand, error) {
 	}
 
 	return func(ctx context.Context, store *Store) error {
-		ops := NewOperations(store)
-		result, err := ops.Defer(ctx, deliveryID, leaseToken, until)
+		result, err := store.Defer(ctx, deliveryID, leaseToken, until)
 		if err != nil {
 			return err
 		}
@@ -155,8 +151,7 @@ func (a *App) prepareUndeferCommand(args []string) (preparedCommand, error) {
 	}
 
 	return func(ctx context.Context, store *Store) error {
-		ops := NewOperations(store)
-		result, err := ops.Undefer(ctx, deliveryID)
+		result, err := store.Undefer(ctx, deliveryID)
 		if err != nil {
 			return err
 		}
@@ -189,8 +184,7 @@ func (a *App) prepareFailCommand(args []string) (preparedCommand, error) {
 	}
 
 	return func(ctx context.Context, store *Store) error {
-		ops := NewOperations(store)
-		result, err := ops.Fail(ctx, deliveryID, leaseToken, reason)
+		result, err := store.Fail(ctx, deliveryID, leaseToken, reason)
 		if err != nil {
 			return err
 		}
