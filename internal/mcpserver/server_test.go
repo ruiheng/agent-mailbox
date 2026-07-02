@@ -356,8 +356,9 @@ func (f fakeMailboxServiceFactory) Open(context.Context) (mailboxService, func()
 }
 
 type fakeRunner struct {
-	t       *testing.T
-	handler func(args []string, input string) (RunResult, error)
+	t          *testing.T
+	handler    func(args []string, input string) (RunResult, error)
+	ctxHandler func(context.Context, []string, string) (RunResult, error)
 
 	mu    sync.Mutex
 	calls []runnerCall
@@ -377,7 +378,7 @@ func waitForTestSignal(t *testing.T, ch <-chan struct{}, name string) {
 	}
 }
 
-func (r *fakeRunner) Run(_ context.Context, args []string, input string) (RunResult, error) {
+func (r *fakeRunner) Run(ctx context.Context, args []string, input string) (RunResult, error) {
 	r.mu.Lock()
 	r.calls = append(r.calls, runnerCall{Args: append([]string(nil), args...), Input: input})
 	r.mu.Unlock()
@@ -393,7 +394,11 @@ func (r *fakeRunner) Run(_ context.Context, args []string, input string) (RunRes
 		defer func() {
 			resultCh <- out
 		}()
-		out.runResult, out.err = r.handler(args, input)
+		if r.ctxHandler != nil {
+			out.runResult, out.err = r.ctxHandler(ctx, args, input)
+		} else {
+			out.runResult, out.err = r.handler(args, input)
+		}
 		out.completed = true
 	}()
 	out := <-resultCh
@@ -1802,6 +1807,37 @@ func TestServiceCloseStopsWakeSchedulerLoop(t *testing.T) {
 	if calls != 1 {
 		t.Fatalf("ListClaimableAddresses calls = %d, want 1", calls)
 	}
+}
+
+func TestServiceCloseCancelsWakeSchedulerAutoBind(t *testing.T) {
+	t.Setenv("AGENTDECK_INSTANCE_ID", "")
+	t.Setenv("CODEX_THREAD_ID", "")
+
+	entered := make(chan struct{})
+	canceled := make(chan struct{})
+	var closeEntered sync.Once
+	var closeCanceled sync.Once
+	commandRunner := &fakeRunner{t: t, ctxHandler: func(ctx context.Context, args []string, input string) (RunResult, error) {
+		if strings.Join(args, "\x00") != strings.Join([]string{"agent-deck", "session", "current", "--json"}, "\x00") {
+			t.Fatalf("unexpected command args: %v", args)
+		}
+		closeEntered.Do(func() { close(entered) })
+		<-ctx.Done()
+		closeCanceled.Do(func() { close(canceled) })
+		return RunResult{}, ctx.Err()
+	}}
+
+	service := newService(Options{
+		MailboxServiceFactory: fakeMailboxServiceFactory{service: &fakeMailboxService{t: t}},
+		CommandRunner:         commandRunner,
+		WakePollInterval:      time.Hour,
+	})
+	service.sessions.parentPID = func() int { return 1 }
+
+	service.startBackgroundLoop(&service.wakeSchedulerLoopOnce, service.runWakeSchedulerLoop)
+	waitForTestSignal(t, entered, "wake scheduler auto-bind entered")
+	service.Close()
+	waitForTestSignal(t, canceled, "wake scheduler auto-bind canceled")
 }
 
 func TestProcessWakeSchedulerIgnoresDisconnectedOverviewSubscriber(t *testing.T) {

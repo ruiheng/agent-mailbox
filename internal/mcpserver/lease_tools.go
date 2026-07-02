@@ -28,6 +28,9 @@ func (s *Service) runLeaseRenewLoop() {
 		case <-s.ctx.Done():
 			return
 		case <-ticker.C:
+			if s.ctx.Err() != nil {
+				return
+			}
 			s.processLeaseRenewals(s.ctx)
 		}
 	}

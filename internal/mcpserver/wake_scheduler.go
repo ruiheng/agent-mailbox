@@ -69,7 +69,7 @@ func (s *Service) startWakeSchedulerLoop() {
 	if s.disableWakeScheduler {
 		return
 	}
-	scope, err := s.currentLocalWakeScope()
+	scope, err := s.currentLocalWakeScope(s.ctx)
 	if err != nil || scope == nil {
 		return
 	}
@@ -86,13 +86,16 @@ func (s *Service) runWakeSchedulerLoop() {
 		case <-s.ctx.Done():
 			return
 		case <-ticker.C:
+			if s.ctx.Err() != nil {
+				return
+			}
 			_ = s.processWakeScheduler(s.ctx)
 		}
 	}
 }
 
 func (s *Service) processWakeScheduler(ctx context.Context) error {
-	scope, err := s.currentLocalWakeScope()
+	scope, err := s.currentLocalWakeScope(ctx)
 	if err != nil {
 		return err
 	}
@@ -177,8 +180,9 @@ func (s *Service) tryWakeChannel(ctx context.Context, snapshot wakeSnapshot, run
 	}
 }
 
-func (s *Service) currentLocalWakeScope() (*wakeScope, error) {
-	if err := s.sessions.tryAutoBindCurrentSession(ctxOrBackground(nil)); err != nil {
+func (s *Service) currentLocalWakeScope(ctx context.Context) (*wakeScope, error) {
+	ctx = ctxOrBackground(ctx)
+	if err := s.sessions.tryAutoBindCurrentSession(ctx); err != nil {
 		return nil, err
 	}
 	snapshot := s.sessions.snapshotState()
