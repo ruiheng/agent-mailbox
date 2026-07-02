@@ -2107,7 +2107,7 @@ func TestAgentDeckRequireSessionRejectsMissingTarget(t *testing.T) {
 	commandRunner := &fakeRunner{t: t, handler: func(args []string, input string) (RunResult, error) {
 		switch {
 		case strings.Join(args, "\x00") == strings.Join([]string{"agent-deck", "session", "show", "coder-ref", "--json"}, "\x00"):
-			return RunResult{ExitCode: 1, Stderr: "not found"}, nil
+			return RunResult{ExitCode: 1, Stderr: "session lookup failed"}, nil
 		default:
 			t.Fatalf("unexpected command args: %v", args)
 			return RunResult{}, nil
@@ -2126,6 +2126,42 @@ func TestAgentDeckRequireSessionRejectsMissingTarget(t *testing.T) {
 	})
 	if err == nil || !strings.Contains(err.Error(), "target session not found") {
 		t.Fatalf("agent_deck_require_session error = %v, want missing target validation", err)
+	}
+}
+
+func TestProbeSessionShowBestEffortUsesStructuredMissingResult(t *testing.T) {
+	commandRunner := &fakeRunner{t: t, handler: func(args []string, input string) (RunResult, error) {
+		if strings.Join(args, "\x00") != strings.Join([]string{"agent-deck", "session", "show", "coder-ref", "--json"}, "\x00") {
+			t.Fatalf("unexpected command args: %v", args)
+		}
+		return RunResult{ExitCode: 1, Stdout: `{"success":false}`}, nil
+	}}
+
+	manager := newSessionManager(commandRunner, &serverState{})
+	probe, err := manager.probeSessionShowBestEffort(context.Background(), "coder-ref")
+	if err != nil {
+		t.Fatalf("probeSessionShowBestEffort() error = %v", err)
+	}
+	if probe.Status != sessionShowProbeNotFound {
+		t.Fatalf("probe status = %v, want %v", probe.Status, sessionShowProbeNotFound)
+	}
+}
+
+func TestProbeSessionShowBestEffortDoesNotSniffMissingText(t *testing.T) {
+	commandRunner := &fakeRunner{t: t, handler: func(args []string, input string) (RunResult, error) {
+		if strings.Join(args, "\x00") != strings.Join([]string{"agent-deck", "session", "show", "coder-ref", "--json"}, "\x00") {
+			t.Fatalf("unexpected command args: %v", args)
+		}
+		return RunResult{ExitCode: 1, Stderr: "session not found"}, nil
+	}}
+
+	manager := newSessionManager(commandRunner, &serverState{})
+	probe, err := manager.probeSessionShowBestEffort(context.Background(), "coder-ref")
+	if err != nil {
+		t.Fatalf("probeSessionShowBestEffort() error = %v", err)
+	}
+	if probe.Status != sessionShowProbeUnknown {
+		t.Fatalf("probe status = %v, want %v", probe.Status, sessionShowProbeUnknown)
 	}
 }
 

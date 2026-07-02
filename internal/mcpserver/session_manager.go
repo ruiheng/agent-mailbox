@@ -730,8 +730,14 @@ func (m *sessionManager) probeSessionShowBestEffort(ctx context.Context, identif
 		return sessionShowProbeResult{Status: sessionShowProbeUnknown}, nil
 	}
 	if result.ExitCode != 0 {
-		detail := strings.ToLower(strings.TrimSpace(result.Stderr + "\n" + result.Stdout))
-		if strings.Contains(detail, "not found") {
+		if strings.TrimSpace(result.Stdout) == "" {
+			return sessionShowProbeResult{Status: sessionShowProbeUnknown}, nil
+		}
+		data, err := parseSessionData(result.Stdout, "agent-deck session show")
+		if err != nil {
+			return sessionShowProbeResult{}, err
+		}
+		if data.Success != nil && !*data.Success {
 			return sessionShowProbeResult{Status: sessionShowProbeNotFound}, nil
 		}
 		return sessionShowProbeResult{Status: sessionShowProbeUnknown}, nil
