@@ -1024,7 +1024,37 @@ func (s *Store) ReadLatestDeliveries(ctx context.Context, addresses []string, st
 	args = append(args, limit+1)
 
 	rows, err := s.readDB.QueryContext(ctx, fmt.Sprintf(`
-SELECT d.delivery_id
+SELECT
+  d.delivery_id,
+  d.message_id,
+  m.forwarded_message_id,
+  m.forwarded_from_address,
+  (
+    SELECT recipient_ea.address
+    FROM endpoint_addresses AS recipient_ea
+    WHERE recipient_ea.endpoint_id = d.recipient_endpoint_id
+    ORDER BY recipient_ea.created_at ASC, recipient_ea.address ASC
+    LIMIT 1
+  ) AS recipient_address,
+  d.recipient_endpoint_id,
+  m.sender_endpoint_id,
+  (
+    SELECT sender_ea.address
+    FROM endpoint_addresses AS sender_ea
+    WHERE sender_ea.endpoint_id = m.sender_endpoint_id
+    ORDER BY sender_ea.created_at ASC, sender_ea.address ASC
+    LIMIT 1
+  ) AS sender_address,
+  d.state,
+  d.visible_at,
+  d.acked_at,
+  m.created_at,
+  m.subject,
+  m.content_type,
+  m.schema_version,
+  m.body_blob_ref,
+  m.body_size,
+  m.body_sha256
 FROM deliveries AS d
 JOIN messages AS m ON m.message_id = d.message_id
 `+whereClause+`
@@ -1036,26 +1066,68 @@ LIMIT ?
 	}
 	defer rows.Close()
 
-	deliveryIDs := make([]string, 0, limit+1)
+	deliveries := make([]ReadDelivery, 0, limit+1)
 	for rows.Next() {
-		var deliveryID string
-		if err := rows.Scan(&deliveryID); err != nil {
-			return nil, false, fmt.Errorf("scan latest delivery id: %w", err)
+		var delivery ReadDelivery
+		var forwardedMessageID sql.NullString
+		var forwardedFromAddress sql.NullString
+		var senderID sql.NullString
+		var senderAddress sql.NullString
+		var ackedAt sql.NullString
+		if err := rows.Scan(
+			&delivery.DeliveryID,
+			&delivery.MessageID,
+			&forwardedMessageID,
+			&forwardedFromAddress,
+			&delivery.RecipientAddress,
+			&delivery.RecipientEndpointID,
+			&senderID,
+			&senderAddress,
+			&delivery.State,
+			&delivery.VisibleAt,
+			&ackedAt,
+			&delivery.MessageCreatedAt,
+			&delivery.Subject,
+			&delivery.ContentType,
+			&delivery.SchemaVersion,
+			&delivery.BodyBlobRef,
+			&delivery.BodySize,
+			&delivery.BodySHA256,
+		); err != nil {
+			return nil, false, fmt.Errorf("scan latest delivery: %w", err)
 		}
-		deliveryIDs = append(deliveryIDs, deliveryID)
+		if forwardedMessageID.Valid {
+			delivery.ForwardedMessageID = &forwardedMessageID.String
+		}
+		if forwardedFromAddress.Valid {
+			delivery.ForwardedFromAddress = &forwardedFromAddress.String
+		}
+		if senderID.Valid {
+			delivery.SenderEndpointID = &senderID.String
+		}
+		if senderAddress.Valid {
+			delivery.SenderAddress = &senderAddress.String
+		}
+		if ackedAt.Valid {
+			delivery.AckedAt = &ackedAt.String
+		}
+		deliveries = append(deliveries, delivery)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, false, fmt.Errorf("iterate latest delivery ids: %w", err)
+		return nil, false, fmt.Errorf("iterate latest deliveries: %w", err)
 	}
 
-	hasMore := len(deliveryIDs) > limit
+	hasMore := len(deliveries) > limit
 	if hasMore {
-		deliveryIDs = deliveryIDs[:limit]
+		deliveries = deliveries[:limit]
 	}
 
-	deliveries, err := s.ReadDeliveries(ctx, deliveryIDs)
-	if err != nil {
-		return nil, false, err
+	for i := range deliveries {
+		body, err := s.readBlob(deliveries[i].BodyBlobRef, deliveries[i].BodySize, deliveries[i].BodySHA256)
+		if err != nil {
+			return nil, false, err
+		}
+		deliveries[i].Body = string(body)
 	}
 	return deliveries, hasMore, nil
 }

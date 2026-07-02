@@ -456,6 +456,9 @@ func TestReadLatestDeliveriesReturnsMostRecentAckedForAddress(t *testing.T) {
 	if readQueued[0].DeliveryID != queued.DeliveryID {
 		t.Fatalf("ReadLatestDeliveries(queued) delivery_id = %q, want %q", readQueued[0].DeliveryID, queued.DeliveryID)
 	}
+	if readQueued[0].Body != "queued body" {
+		t.Fatalf("ReadLatestDeliveries(queued) body = %q, want queued body", readQueued[0].Body)
+	}
 }
 
 func TestReadLatestDeliveriesDefaultsToAnyState(t *testing.T) {
@@ -496,6 +499,9 @@ func TestReadLatestDeliveriesDefaultsToAnyState(t *testing.T) {
 	}
 	if read[0].State != "queued" {
 		t.Fatalf("ReadLatestDeliveries(any) state = %q, want queued", read[0].State)
+	}
+	if read[0].Body != "new queued body" {
+		t.Fatalf("ReadLatestDeliveries(any) body = %q, want new queued body", read[0].Body)
 	}
 }
 
