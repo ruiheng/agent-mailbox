@@ -51,39 +51,85 @@ type RunResult struct {
 	Stderr   string
 }
 
-type mailboxService interface {
+type mailboxServiceFactory interface {
+	Open(context.Context) (any, func() error, error)
+}
+
+type mailboxSender interface {
 	Send(context.Context, mailbox.SendParams) (mailbox.SendResult, error)
+}
+
+type mailboxLister interface {
 	List(context.Context, mailbox.ListParams) ([]mailbox.ListedDelivery, error)
+}
+
+type mailboxGroupMessageLister interface {
 	ListGroupMessages(context.Context, mailbox.GroupListParams) ([]mailbox.GroupListedMessage, error)
+}
+
+type mailboxGroupMessageWaiter interface {
 	WaitGroupMessage(context.Context, mailbox.GroupWaitParams) (mailbox.GroupListedMessage, error)
+}
+
+type mailboxGroupMessageReceiver interface {
 	ReceiveGroupMessage(context.Context, mailbox.GroupReceiveParams) (mailbox.GroupReceivedMessage, error)
+}
+
+type mailboxGroupManager interface {
 	CreateGroup(context.Context, string) (mailbox.GroupRecord, error)
 	AddGroupMember(context.Context, string, string) (mailbox.GroupMembershipRecord, error)
 	RemoveGroupMember(context.Context, string, string) (mailbox.GroupMembershipRecord, error)
 	ListGroupMembers(context.Context, string) ([]mailbox.GroupMembershipRecord, error)
+}
+
+type mailboxGroupSubscriberManager interface {
 	AddGroupNotificationSubscriber(context.Context, string, string, string) (mailbox.GroupNotificationSubscriberRecord, error)
 	RemoveGroupNotificationSubscriber(context.Context, string, string) (mailbox.GroupNotificationSubscriberRecord, error)
 	ListGroupNotificationSubscribers(context.Context, string) ([]mailbox.GroupNotificationSubscriberRecord, error)
+}
+
+type mailboxAddressInspector interface {
 	InspectAddress(context.Context, string) (mailbox.AddressInspection, error)
+}
+
+type mailboxClaimableLister interface {
 	ListClaimableAddresses(context.Context, []string) ([]mailbox.ClaimableAddress, error)
-	ListStaleAddresses(context.Context, mailbox.StaleAddressesParams) ([]mailbox.StaleAddress, error)
-	ReceiveBatch(context.Context, mailbox.ReceiveBatchParams) (mailbox.ReceiveResult, error)
+}
+
+type mailboxBatchReceiver interface {
 	ReceiveBatchWithLeaseTTL(context.Context, mailbox.ReceiveBatchParams, time.Duration) (mailbox.ReceiveResult, error)
+}
+
+type mailboxWaiter interface {
 	Wait(context.Context, mailbox.WaitParams) (mailbox.ListedDelivery, error)
+}
+
+type mailboxVisibleDeliveryChecker interface {
 	HasVisibleDelivery(context.Context, mailbox.WaitParams) (bool, error)
-	ReadMessages(context.Context, []string) ([]mailbox.ReadMessage, error)
-	ReadLatestDeliveries(context.Context, []string, string, int) ([]mailbox.ReadDelivery, bool, error)
+}
+
+type mailboxDeliveryReader interface {
 	ReadDeliveries(context.Context, []string) ([]mailbox.ReadDelivery, error)
+}
+
+type mailboxMessageReader interface {
+	ReadMessages(context.Context, []string) ([]mailbox.ReadMessage, error)
+}
+
+type mailboxLatestDeliveryReader interface {
+	ReadLatestDeliveries(context.Context, []string, string, int) ([]mailbox.ReadDelivery, bool, error)
+}
+
+type mailboxDeliveryTransitioner interface {
 	Ack(context.Context, string, string) (mailbox.DeliveryTransitionResult, error)
-	Renew(context.Context, string, string, time.Duration) (mailbox.LeaseRenewResult, error)
 	Release(context.Context, string, string) (mailbox.DeliveryTransitionResult, error)
 	Defer(context.Context, string, string, time.Time) (mailbox.DeliveryTransitionResult, error)
 	Undefer(context.Context, string) (mailbox.DeliveryTransitionResult, error)
 	Fail(context.Context, string, string, string) (mailbox.DeliveryTransitionResult, error)
 }
 
-type mailboxServiceFactory interface {
-	Open(context.Context) (mailboxService, func() error, error)
+type mailboxLeaseRenewer interface {
+	Renew(context.Context, string, string, time.Duration) (mailbox.LeaseRenewResult, error)
 }
 
 type runtimeMailboxServiceFactory struct {
@@ -91,7 +137,7 @@ type runtimeMailboxServiceFactory struct {
 	openRuntime func(context.Context, string) (*mailbox.Runtime, error)
 }
 
-func (f runtimeMailboxServiceFactory) Open(ctx context.Context) (mailboxService, func() error, error) {
+func (f runtimeMailboxServiceFactory) Open(ctx context.Context) (any, func() error, error) {
 	runtime, err := f.openRuntime(ctx, f.stateDir)
 	if err != nil {
 		return nil, nil, err
@@ -298,13 +344,17 @@ func (r osCommandRunner) Run(ctx context.Context, args []string, input string) (
 	return RunResult{}, err
 }
 
-func withMailboxService[T any](ctx context.Context, factory mailboxServiceFactory, fn func(mailboxService) (T, error)) (T, error) {
+func withMailboxService[T any, S any](ctx context.Context, factory mailboxServiceFactory, fn func(S) (T, error)) (T, error) {
 	var zero T
-	service, closeFunc, err := factory.Open(ctx)
+	rawService, closeFunc, err := factory.Open(ctx)
 	if err != nil {
 		return zero, err
 	}
 	defer closeFunc()
+	service, ok := rawService.(S)
+	if !ok {
+		return zero, fmt.Errorf("mailbox service %T does not satisfy %T", rawService, service)
+	}
 	return fn(service)
 }
 

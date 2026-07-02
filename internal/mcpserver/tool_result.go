@@ -19,7 +19,7 @@ func (s *Service) withMailHintBestEffort(ctx context.Context, result map[string]
 		return result
 	}
 
-	available, err := withMailboxService(ctx, s.mailboxServices, func(service mailboxService) (bool, error) {
+	available, err := withMailboxService(ctx, s.mailboxServices, func(service mailboxVisibleDeliveryChecker) (bool, error) {
 		return service.HasVisibleDelivery(ctx, mailbox.WaitParams{Addresses: bound})
 	})
 	if err != nil || !available {

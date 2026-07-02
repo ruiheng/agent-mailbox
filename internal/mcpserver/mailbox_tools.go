@@ -256,7 +256,7 @@ func (s *Service) sendMailboxMessage(ctx context.Context, input mailboxSendInput
 	}
 	input.FromAddress = fromAddress
 
-	sendResult, err := withMailboxService(ctx, s.mailboxServices, func(service mailboxService) (mailbox.SendResult, error) {
+	sendResult, err := withMailboxService(ctx, s.mailboxServices, func(service mailboxSender) (mailbox.SendResult, error) {
 		return service.Send(ctx, mailbox.SendParams{
 			ToAddress:            input.ToAddress,
 			FromAddress:          fromAddress,
@@ -331,7 +331,7 @@ func (s *Service) notifyMailboxSend(ctx context.Context, input mailboxSendInput,
 		}
 		return s.notifications.notifyMailboxSend(notifyCtx, input)
 	}
-	subscribers, err := withMailboxService(notifyCtx, s.mailboxServices, func(service mailboxService) ([]mailbox.GroupNotificationSubscriberRecord, error) {
+	subscribers, err := withMailboxService(notifyCtx, s.mailboxServices, func(service mailboxGroupSubscriberManager) ([]mailbox.GroupNotificationSubscriberRecord, error) {
 		return service.ListGroupNotificationSubscribers(notifyCtx, sendResult.GroupAddress)
 	})
 	if err != nil {
@@ -359,7 +359,7 @@ func (s *Service) waitBeforeNotify(ctx context.Context) error {
 }
 
 func (s *Service) deliveryStillQueued(ctx context.Context, deliveryID string) (bool, error) {
-	deliveries, err := withMailboxService(ctx, s.mailboxServices, func(service mailboxService) ([]mailbox.ReadDelivery, error) {
+	deliveries, err := withMailboxService(ctx, s.mailboxServices, func(service mailboxDeliveryReader) ([]mailbox.ReadDelivery, error) {
 		return service.ReadDeliveries(ctx, []string{deliveryID})
 	})
 	if err != nil {
@@ -380,7 +380,7 @@ func (s *Service) mailboxSend(ctx context.Context, _ *mcp.CallToolRequest, input
 }
 
 func (s *Service) mailboxForward(ctx context.Context, _ *mcp.CallToolRequest, input mailboxForwardInput) (*mcp.CallToolResult, map[string]any, error) {
-	prepared, err := withMailboxService(ctx, s.mailboxServices, func(service mailboxService) (mailbox.PreparedForward, error) {
+	prepared, err := withMailboxService(ctx, s.mailboxServices, func(service mailbox.ForwardSourceReader) (mailbox.PreparedForward, error) {
 		return mailbox.PrepareForward(ctx, service, "mailbox_forward", mailbox.ForwardParams{
 			MessageID:   input.MessageID,
 			DeliveryID:  input.DeliveryID,
@@ -436,7 +436,7 @@ func (s *Service) mailboxWait(ctx context.Context, _ *mcp.CallToolRequest, input
 		return s.mailboxWaitGroup(ctx, addresses, person, timeout)
 	}
 
-	delivery, err := withMailboxService(ctx, s.mailboxServices, func(service mailboxService) (mailbox.ListedDelivery, error) {
+	delivery, err := withMailboxService(ctx, s.mailboxServices, func(service mailboxWaiter) (mailbox.ListedDelivery, error) {
 		return service.Wait(ctx, mailbox.WaitParams{
 			Addresses: addresses,
 			Timeout:   timeout,
@@ -465,7 +465,7 @@ func (s *Service) mailboxWaitGroup(ctx context.Context, addresses []string, pers
 	if err != nil {
 		return nil, nil, err
 	}
-	message, err := withMailboxService(ctx, s.mailboxServices, func(service mailboxService) (mailbox.GroupListedMessage, error) {
+	message, err := withMailboxService(ctx, s.mailboxServices, func(service mailboxGroupMessageWaiter) (mailbox.GroupListedMessage, error) {
 		return service.WaitGroupMessage(ctx, mailbox.GroupWaitParams{
 			Address: address,
 			Person:  person,
@@ -657,7 +657,7 @@ func (s *Service) mailboxRecvGroup(ctx context.Context, addresses []string, pers
 
 func (s *Service) receivePersonalNow(ctx context.Context, addresses []string) (mailbox.ReceiveResult, error) {
 	claimMetadata := s.receiveClaimMetadata(addresses)
-	return withMailboxService(ctx, s.mailboxServices, func(service mailboxService) (mailbox.ReceiveResult, error) {
+	return withMailboxService(ctx, s.mailboxServices, func(service mailboxBatchReceiver) (mailbox.ReceiveResult, error) {
 		// MCP claims only immediately visible work. Waiting stays in mailbox_wait so
 		// abandoned tool calls cannot later claim mail into an unreachable result.
 		return service.ReceiveBatchWithLeaseTTL(mailbox.WithClaimMetadata(ctx, claimMetadata), mailbox.ReceiveBatchParams{
@@ -680,7 +680,7 @@ func (s *Service) receiveClaimMetadata(addresses []string) mailbox.ClaimMetadata
 }
 
 func (s *Service) receiveGroupNow(ctx context.Context, address, person string) (mailbox.GroupReceivedMessage, error) {
-	return withMailboxService(ctx, s.mailboxServices, func(service mailboxService) (mailbox.GroupReceivedMessage, error) {
+	return withMailboxService(ctx, s.mailboxServices, func(service mailboxGroupMessageReceiver) (mailbox.GroupReceivedMessage, error) {
 		return service.ReceiveGroupMessage(ctx, mailbox.GroupReceiveParams{
 			Address: address,
 			Person:  person,
@@ -733,7 +733,10 @@ func (s *Service) mailboxList(ctx context.Context, _ *mcp.CallToolRequest, input
 		return nil, nil, errors.New("mailbox_list does not support state together with as_person")
 	}
 
-	deliveries, err := withMailboxService(ctx, s.mailboxServices, func(service mailboxService) (any, error) {
+	deliveries, err := withMailboxService(ctx, s.mailboxServices, func(service interface {
+		mailboxLister
+		mailboxGroupMessageLister
+	}) (any, error) {
 		if input.AsPerson != "" {
 			messages, err := service.ListGroupMessages(ctx, mailbox.GroupListParams{
 				Address: address,
@@ -813,7 +816,7 @@ func (s *Service) mailboxRead(ctx context.Context, _ *mcp.CallToolRequest, input
 		messageIDs := dedupe(input.MessageIDs)
 		result["mode"] = "message_ids"
 		result["message_ids"] = messageIDs
-		messages, err := withMailboxService(ctx, s.mailboxServices, func(service mailboxService) ([]mailbox.ReadMessage, error) {
+		messages, err := withMailboxService(ctx, s.mailboxServices, func(service mailboxMessageReader) ([]mailbox.ReadMessage, error) {
 			return service.ReadMessages(ctx, messageIDs)
 		})
 		if err != nil {
@@ -829,7 +832,7 @@ func (s *Service) mailboxRead(ctx context.Context, _ *mcp.CallToolRequest, input
 		deliveryIDs := dedupe(input.DeliveryIDs)
 		result["mode"] = "delivery_ids"
 		result["delivery_ids"] = deliveryIDs
-		deliveries, err := withMailboxService(ctx, s.mailboxServices, func(service mailboxService) ([]mailbox.ReadDelivery, error) {
+		deliveries, err := withMailboxService(ctx, s.mailboxServices, func(service mailboxDeliveryReader) ([]mailbox.ReadDelivery, error) {
 			return service.ReadDeliveries(ctx, deliveryIDs)
 		})
 		if err != nil {
@@ -840,7 +843,7 @@ func (s *Service) mailboxRead(ctx context.Context, _ *mcp.CallToolRequest, input
 		return s.mailboxToolResult(ctx, result)
 	}
 
-	latest, err := withMailboxService(ctx, s.mailboxServices, func(service mailboxService) (readLatestResult, error) {
+	latest, err := withMailboxService(ctx, s.mailboxServices, func(service mailboxLatestDeliveryReader) (readLatestResult, error) {
 		limit := 1
 		if input.Limit != nil {
 			limit = *input.Limit
@@ -863,7 +866,7 @@ func (s *Service) mailboxAck(ctx context.Context, _ *mcp.CallToolRequest, input 
 	if err := s.activeLeases.terminalMutationAllowed(input.DeliveryID); err != nil {
 		return nil, nil, err
 	}
-	_, err := withMailboxService(ctx, s.mailboxServices, func(service mailboxService) (mailbox.DeliveryTransitionResult, error) {
+	_, err := withMailboxService(ctx, s.mailboxServices, func(service mailboxDeliveryTransitioner) (mailbox.DeliveryTransitionResult, error) {
 		return service.Ack(ctx, input.DeliveryID, input.LeaseToken)
 	})
 	if err != nil {
@@ -877,7 +880,7 @@ func (s *Service) mailboxRelease(ctx context.Context, _ *mcp.CallToolRequest, in
 	if err := s.activeLeases.terminalMutationAllowed(input.DeliveryID); err != nil {
 		return nil, nil, err
 	}
-	_, err := withMailboxService(ctx, s.mailboxServices, func(service mailboxService) (mailbox.DeliveryTransitionResult, error) {
+	_, err := withMailboxService(ctx, s.mailboxServices, func(service mailboxDeliveryTransitioner) (mailbox.DeliveryTransitionResult, error) {
 		return service.Release(ctx, input.DeliveryID, input.LeaseToken)
 	})
 	if err != nil {
@@ -895,7 +898,7 @@ func (s *Service) mailboxDefer(ctx context.Context, _ *mcp.CallToolRequest, inpu
 	if err != nil {
 		return nil, nil, fmt.Errorf("parse until: %w", err)
 	}
-	_, err = withMailboxService(ctx, s.mailboxServices, func(service mailboxService) (mailbox.DeliveryTransitionResult, error) {
+	_, err = withMailboxService(ctx, s.mailboxServices, func(service mailboxDeliveryTransitioner) (mailbox.DeliveryTransitionResult, error) {
 		return service.Defer(ctx, input.DeliveryID, input.LeaseToken, until)
 	})
 	if err != nil {
@@ -906,7 +909,7 @@ func (s *Service) mailboxDefer(ctx context.Context, _ *mcp.CallToolRequest, inpu
 }
 
 func (s *Service) mailboxUndefer(ctx context.Context, _ *mcp.CallToolRequest, input mailboxUndeferInput) (*mcp.CallToolResult, map[string]any, error) {
-	result, err := withMailboxService(ctx, s.mailboxServices, func(service mailboxService) (mailbox.DeliveryTransitionResult, error) {
+	result, err := withMailboxService(ctx, s.mailboxServices, func(service mailboxDeliveryTransitioner) (mailbox.DeliveryTransitionResult, error) {
 		return service.Undefer(ctx, input.DeliveryID)
 	})
 	if err != nil {
@@ -923,7 +926,7 @@ func (s *Service) mailboxFail(ctx context.Context, _ *mcp.CallToolRequest, input
 	if err := s.activeLeases.terminalMutationAllowed(input.DeliveryID); err != nil {
 		return nil, nil, err
 	}
-	_, err := withMailboxService(ctx, s.mailboxServices, func(service mailboxService) (mailbox.DeliveryTransitionResult, error) {
+	_, err := withMailboxService(ctx, s.mailboxServices, func(service mailboxDeliveryTransitioner) (mailbox.DeliveryTransitionResult, error) {
 		return service.Fail(ctx, input.DeliveryID, input.LeaseToken, input.Reason)
 	})
 	if err != nil {
@@ -934,7 +937,7 @@ func (s *Service) mailboxFail(ctx context.Context, _ *mcp.CallToolRequest, input
 }
 
 func (s *Service) mailboxGroupCreate(ctx context.Context, _ *mcp.CallToolRequest, input mailboxGroupInput) (*mcp.CallToolResult, map[string]any, error) {
-	group, err := withMailboxService(ctx, s.mailboxServices, func(service mailboxService) (mailbox.GroupRecord, error) {
+	group, err := withMailboxService(ctx, s.mailboxServices, func(service mailboxGroupManager) (mailbox.GroupRecord, error) {
 		return service.CreateGroup(ctx, input.GroupAddress)
 	})
 	if err != nil {
@@ -947,7 +950,7 @@ func (s *Service) mailboxGroupCreate(ctx context.Context, _ *mcp.CallToolRequest
 }
 
 func (s *Service) mailboxGroupAddMember(ctx context.Context, _ *mcp.CallToolRequest, input mailboxGroupMemberInput) (*mcp.CallToolResult, map[string]any, error) {
-	membership, err := withMailboxService(ctx, s.mailboxServices, func(service mailboxService) (mailbox.GroupMembershipRecord, error) {
+	membership, err := withMailboxService(ctx, s.mailboxServices, func(service mailboxGroupManager) (mailbox.GroupMembershipRecord, error) {
 		return service.AddGroupMember(ctx, input.GroupAddress, input.Person)
 	})
 	if err != nil {
@@ -960,7 +963,7 @@ func (s *Service) mailboxGroupAddMember(ctx context.Context, _ *mcp.CallToolRequ
 }
 
 func (s *Service) mailboxGroupRemoveMember(ctx context.Context, _ *mcp.CallToolRequest, input mailboxGroupMemberInput) (*mcp.CallToolResult, map[string]any, error) {
-	membership, err := withMailboxService(ctx, s.mailboxServices, func(service mailboxService) (mailbox.GroupMembershipRecord, error) {
+	membership, err := withMailboxService(ctx, s.mailboxServices, func(service mailboxGroupManager) (mailbox.GroupMembershipRecord, error) {
 		return service.RemoveGroupMember(ctx, input.GroupAddress, input.Person)
 	})
 	if err != nil {
@@ -973,7 +976,7 @@ func (s *Service) mailboxGroupRemoveMember(ctx context.Context, _ *mcp.CallToolR
 }
 
 func (s *Service) mailboxGroupMembers(ctx context.Context, _ *mcp.CallToolRequest, input mailboxGroupInput) (*mcp.CallToolResult, map[string]any, error) {
-	memberships, err := withMailboxService(ctx, s.mailboxServices, func(service mailboxService) ([]mailbox.GroupMembershipRecord, error) {
+	memberships, err := withMailboxService(ctx, s.mailboxServices, func(service mailboxGroupManager) ([]mailbox.GroupMembershipRecord, error) {
 		return service.ListGroupMembers(ctx, input.GroupAddress)
 	})
 	if err != nil {
@@ -987,7 +990,7 @@ func (s *Service) mailboxGroupMembers(ctx context.Context, _ *mcp.CallToolReques
 }
 
 func (s *Service) mailboxGroupAddSubscriber(ctx context.Context, _ *mcp.CallToolRequest, input mailboxGroupSubscriberInput) (*mcp.CallToolResult, map[string]any, error) {
-	subscriber, err := withMailboxService(ctx, s.mailboxServices, func(service mailboxService) (mailbox.GroupNotificationSubscriberRecord, error) {
+	subscriber, err := withMailboxService(ctx, s.mailboxServices, func(service mailboxGroupSubscriberManager) (mailbox.GroupNotificationSubscriberRecord, error) {
 		return service.AddGroupNotificationSubscriber(ctx, input.GroupAddress, input.NotifyAddress, input.Person)
 	})
 	if err != nil {
@@ -1000,7 +1003,7 @@ func (s *Service) mailboxGroupAddSubscriber(ctx context.Context, _ *mcp.CallTool
 }
 
 func (s *Service) mailboxGroupRemoveSubscriber(ctx context.Context, _ *mcp.CallToolRequest, input mailboxGroupSubscriberInput) (*mcp.CallToolResult, map[string]any, error) {
-	subscriber, err := withMailboxService(ctx, s.mailboxServices, func(service mailboxService) (mailbox.GroupNotificationSubscriberRecord, error) {
+	subscriber, err := withMailboxService(ctx, s.mailboxServices, func(service mailboxGroupSubscriberManager) (mailbox.GroupNotificationSubscriberRecord, error) {
 		return service.RemoveGroupNotificationSubscriber(ctx, input.GroupAddress, input.NotifyAddress)
 	})
 	if err != nil {
@@ -1013,7 +1016,7 @@ func (s *Service) mailboxGroupRemoveSubscriber(ctx context.Context, _ *mcp.CallT
 }
 
 func (s *Service) mailboxGroupSubscribers(ctx context.Context, _ *mcp.CallToolRequest, input mailboxGroupInput) (*mcp.CallToolResult, map[string]any, error) {
-	subscribers, err := withMailboxService(ctx, s.mailboxServices, func(service mailboxService) ([]mailbox.GroupNotificationSubscriberRecord, error) {
+	subscribers, err := withMailboxService(ctx, s.mailboxServices, func(service mailboxGroupSubscriberManager) ([]mailbox.GroupNotificationSubscriberRecord, error) {
 		return service.ListGroupNotificationSubscribers(ctx, input.GroupAddress)
 	})
 	if err != nil {
@@ -1027,7 +1030,7 @@ func (s *Service) mailboxGroupSubscribers(ctx context.Context, _ *mcp.CallToolRe
 }
 
 func (s *Service) mailboxAddressInspect(ctx context.Context, _ *mcp.CallToolRequest, input mailboxAddressInspectInput) (*mcp.CallToolResult, map[string]any, error) {
-	inspection, err := withMailboxService(ctx, s.mailboxServices, func(service mailboxService) (mailbox.AddressInspection, error) {
+	inspection, err := withMailboxService(ctx, s.mailboxServices, func(service mailboxAddressInspector) (mailbox.AddressInspection, error) {
 		return service.InspectAddress(ctx, input.Address)
 	})
 	if err != nil {

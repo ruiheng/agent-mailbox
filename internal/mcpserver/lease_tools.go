@@ -60,7 +60,7 @@ func (s *Service) processLeaseRenewals(ctx context.Context) error {
 func (s *Service) renewLeaseWithRetry(ctx context.Context, lease activeLease) (mailbox.LeaseRenewResult, error) {
 	var lastErr error
 	for attempt := 0; attempt < leaseRenewRetryAttempts; attempt++ {
-		renewed, err := withMailboxService(ctx, s.mailboxServices, func(service mailboxService) (mailbox.LeaseRenewResult, error) {
+		renewed, err := withMailboxService(ctx, s.mailboxServices, func(service mailboxLeaseRenewer) (mailbox.LeaseRenewResult, error) {
 			return service.Renew(ctx, lease.DeliveryID, lease.LeaseToken, s.mcpLeaseTTL)
 		})
 		if err == nil {

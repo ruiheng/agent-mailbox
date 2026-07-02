@@ -281,7 +281,7 @@ func (s *Service) visibleMailboxSnapshot(ctx context.Context, addresses []string
 	if len(addresses) == 0 {
 		return visibleMailboxState{}, nil
 	}
-	return withMailboxService(ctx, s.mailboxServices, func(service mailboxService) (visibleMailboxState, error) {
+	return withMailboxService(ctx, s.mailboxServices, func(service mailboxClaimableLister) (visibleMailboxState, error) {
 		state := visibleMailboxState{}
 		claimable, err := service.ListClaimableAddresses(ctx, addresses)
 		if err != nil {

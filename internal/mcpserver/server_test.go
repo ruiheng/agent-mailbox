@@ -38,7 +38,6 @@ type fakeMailboxService struct {
 	listGroupSubscribersFunc  func(context.Context, string) ([]mailbox.GroupNotificationSubscriberRecord, error)
 	inspectAddressFunc        func(context.Context, string) (mailbox.AddressInspection, error)
 	listClaimableFunc         func(context.Context, []string) ([]mailbox.ClaimableAddress, error)
-	listStaleAddressesFunc    func(context.Context, mailbox.StaleAddressesParams) ([]mailbox.StaleAddress, error)
 	receiveBatchFunc          func(context.Context, mailbox.ReceiveBatchParams) (mailbox.ReceiveResult, error)
 	receiveBatchWithTTLFunc   func(context.Context, mailbox.ReceiveBatchParams, time.Duration) (mailbox.ReceiveResult, error)
 	waitFunc                  func(context.Context, mailbox.WaitParams) (mailbox.ListedDelivery, error)
@@ -239,20 +238,6 @@ func (f *fakeMailboxService) ListClaimableAddresses(ctx context.Context, address
 	return f.listClaimableFunc(ctx, addresses)
 }
 
-func (f *fakeMailboxService) ListStaleAddresses(ctx context.Context, params mailbox.StaleAddressesParams) ([]mailbox.StaleAddress, error) {
-	if f.listStaleAddressesFunc == nil {
-		return nil, nil
-	}
-	return f.listStaleAddressesFunc(ctx, params)
-}
-
-func (f *fakeMailboxService) ReceiveBatch(ctx context.Context, params mailbox.ReceiveBatchParams) (mailbox.ReceiveResult, error) {
-	if f.receiveBatchFunc == nil {
-		f.t.Fatalf("unexpected ReceiveBatch call: %+v", params)
-	}
-	return f.receiveBatchFunc(ctx, params)
-}
-
 func (f *fakeMailboxService) ReceiveBatchWithLeaseTTL(ctx context.Context, params mailbox.ReceiveBatchParams, ttl time.Duration) (mailbox.ReceiveResult, error) {
 	if f.receiveBatchWithTTLFunc != nil {
 		return f.receiveBatchWithTTLFunc(ctx, params, ttl)
@@ -348,10 +333,10 @@ func (f *fakeMailboxService) Fail(ctx context.Context, deliveryID, leaseToken, r
 }
 
 type fakeMailboxServiceFactory struct {
-	service mailboxService
+	service any
 }
 
-func (f fakeMailboxServiceFactory) Open(context.Context) (mailboxService, func() error, error) {
+func (f fakeMailboxServiceFactory) Open(context.Context) (any, func() error, error) {
 	return f.service, func() error { return nil }, nil
 }
 
