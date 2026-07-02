@@ -34,7 +34,6 @@ const (
 	defaultNotifyDelay           = 2 * time.Second
 	defaultStartupInstruction    = ""
 	defaultNotifyMessage         = "NOTICE: There might be new mail in agent-mailbox."
-	defaultMailHint              = "mailbox_recv"
 	agentDeckBindRecoveryHint    = "agent-deck address auto-bind did not find your current session; run `agent-deck session current --json` to find your `agent-deck/<session-id>` address, then call `mailbox_bind` with that address."
 	toolSessionBindRecoveryHint  = "AI tool session auto-bind did not find codex/..., claude/..., gemini/..., or opencode/...; expose CODEX_THREAD_ID, CLAUDE_CODE_SESSION_ID, GEMINI_SESSION_ID, or OPENCODE_SESSION_ID, wait for agent-deck state sync for the current session, then call `mailbox_status` again or call `mailbox_bind` manually."
 	serverInstructions           = "Bootstrap this MCP process once per agent-managed session. The first tool call must be `mailbox_status`; it auto-binds any detectable agent-deck/codex/claude/gemini/opencode address and reports warnings. All other tools fail until `mailbox_status` has been called."
@@ -102,10 +101,6 @@ type mailboxBatchReceiver interface {
 
 type mailboxWaiter interface {
 	Wait(context.Context, mailbox.WaitParams) (mailbox.ListedDelivery, error)
-}
-
-type mailboxVisibleDeliveryChecker interface {
-	HasVisibleDelivery(context.Context, mailbox.WaitParams) (bool, error)
 }
 
 type mailboxDeliveryReader interface {

@@ -340,6 +340,15 @@ func (f fakeMailboxServiceFactory) Open(context.Context) (any, func() error, err
 	return f.service, func() error { return nil }, nil
 }
 
+type failOpenMailboxServiceFactory struct {
+	t *testing.T
+}
+
+func (f failOpenMailboxServiceFactory) Open(context.Context) (any, func() error, error) {
+	f.t.Fatal("unexpected mailbox service open")
+	return nil, nil, nil
+}
+
 type fakeRunner struct {
 	t          *testing.T
 	handler    func(args []string, input string) (RunResult, error)
@@ -1326,55 +1335,9 @@ func TestMailboxSendReturnsReceiptWhenNotifyFails(t *testing.T) {
 	}
 }
 
-func TestToolResultsIncludeMailHintWhenBoundAddressesHaveMail(t *testing.T) {
-	mailboxService := &fakeMailboxService{t: t}
-	mailboxService.hasVisibleDeliveryFunc = func(_ context.Context, params mailbox.WaitParams) (bool, error) {
-		if len(params.Addresses) != 1 || params.Addresses[0] != "agent-deck/self" {
-			t.Fatalf("hasVisibleDelivery params = %+v, want bound self address", params)
-		}
-		return true, nil
-	}
-
+func TestToolResultDoesNotOpenMailboxServiceForHint(t *testing.T) {
 	service := newService(Options{
-		MailboxServiceFactory: fakeMailboxServiceFactory{service: mailboxService},
-		CommandRunner: &fakeRunner{t: t, handler: func(args []string, input string) (RunResult, error) {
-			switch {
-			case strings.Join(args, "\x00") == strings.Join([]string{"agent-deck", "session", "show", "planner", "--json"}, "\x00"):
-				return RunResult{ExitCode: 0, Stdout: `{"id":"planner","title":"planner","status":"waiting"}`}, nil
-			default:
-				t.Fatalf("unexpected command call: %v", args)
-				return RunResult{}, nil
-			}
-		}},
-	})
-	service.state.boundAddresses = []string{"agent-deck/self"}
-	service.state.defaultSender = "agent-deck/self"
-	service.state.autoBindAttempted = true
-
-	status := callServiceTool(t, service, "mailbox_status", nil)
-	if got := status["mail_hint"]; got != defaultMailHint {
-		t.Fatalf("mailbox_status mail_hint = %v, want %q", got, defaultMailHint)
-	}
-
-	resolve := callServiceTool(t, service, "agent_deck_resolve_session", map[string]any{
-		"session": "planner",
-	})
-	if got := resolve["mail_hint"]; got != defaultMailHint {
-		t.Fatalf("agent_deck_resolve_session mail_hint = %v, want %q", got, defaultMailHint)
-	}
-}
-
-func TestMailboxSendOmitsMailHintWhenAvailabilityCheckFails(t *testing.T) {
-	mailboxService := &fakeMailboxService{t: t}
-	mailboxService.sendFunc = func(_ context.Context, params mailbox.SendParams) (mailbox.SendResult, error) {
-		return mailbox.SendResult{DeliveryID: "dlv_side_effect"}, nil
-	}
-	mailboxService.hasVisibleDeliveryFunc = func(_ context.Context, params mailbox.WaitParams) (bool, error) {
-		return false, context.DeadlineExceeded
-	}
-
-	service := newService(Options{
-		MailboxServiceFactory: fakeMailboxServiceFactory{service: mailboxService},
+		MailboxServiceFactory: failOpenMailboxServiceFactory{t: t},
 		CommandRunner: &fakeRunner{t: t, handler: func(args []string, input string) (RunResult, error) {
 			t.Fatalf("unexpected command call: %v", args)
 			return RunResult{}, nil
@@ -1385,37 +1348,15 @@ func TestMailboxSendOmitsMailHintWhenAvailabilityCheckFails(t *testing.T) {
 	service.state.defaultSender = "agent-deck/self"
 	service.state.autoBindAttempted = true
 
-	output := callServiceTool(t, service, "mailbox_send", map[string]any{
-		"to_address":   "agent-deck/self",
-		"from_address": "agent-deck/self",
-		"subject":      "delegate",
-		"body":         "body",
-	})
-	if got := output["status"]; got != "sent" {
-		t.Fatalf("status = %v, want sent", got)
-	}
-	if got := output["delivery_id"]; got != "dlv_side_effect" {
-		t.Fatalf("delivery_id = %v, want dlv_side_effect", got)
-	}
-	if got := output["notify_status"]; got != "skipped_local" {
-		t.Fatalf("notify_status = %v, want skipped_local", got)
-	}
-	if got := output["mail_hint"]; got != nil {
-		t.Fatalf("mail_hint = %v, want nil when availability check fails", got)
+	status := callServiceTool(t, service, "mailbox_status", nil)
+	if got := status["mail_hint"]; got != nil {
+		t.Fatalf("mailbox_status mail_hint = %v, want nil", got)
 	}
 }
 
-func TestMailboxBindIncludesMailHint(t *testing.T) {
-	mailboxService := &fakeMailboxService{t: t}
-	mailboxService.hasVisibleDeliveryFunc = func(_ context.Context, params mailbox.WaitParams) (bool, error) {
-		if len(params.Addresses) != 1 || params.Addresses[0] != "agent-deck/self" {
-			t.Fatalf("hasVisibleDelivery params = %+v, want bound self address", params)
-		}
-		return true, nil
-	}
-
+func TestMailboxBindDoesNotOpenMailboxServiceForHint(t *testing.T) {
 	service := newService(Options{
-		MailboxServiceFactory: fakeMailboxServiceFactory{service: mailboxService},
+		MailboxServiceFactory: failOpenMailboxServiceFactory{t: t},
 		CommandRunner: &fakeRunner{t: t, handler: func(args []string, input string) (RunResult, error) {
 			t.Fatalf("unexpected command call: %v", args)
 			return RunResult{}, nil
@@ -1427,8 +1368,8 @@ func TestMailboxBindIncludesMailHint(t *testing.T) {
 	bind := callServiceTool(t, service, "mailbox_bind", map[string]any{
 		"addresses": []string{"agent-deck/self"},
 	})
-	if got := bind["mail_hint"]; got != defaultMailHint {
-		t.Fatalf("mailbox_bind mail_hint = %v, want %q", got, defaultMailHint)
+	if got := bind["mail_hint"]; got != nil {
+		t.Fatalf("mailbox_bind mail_hint = %v, want nil", got)
 	}
 }
 
