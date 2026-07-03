@@ -130,6 +130,26 @@ func TestMailboxClaimHistorySchemaExposesRecoveryFields(t *testing.T) {
 	}
 }
 
+func TestMailboxGroupAddSubscriberSchemaRequiresPerson(t *testing.T) {
+	schema, err := jsonschema.For[mailboxGroupSubscriberInput](nil)
+	if err != nil {
+		t.Fatalf("jsonschema.For() error = %v", err)
+	}
+	if !slices.Contains(schema.Required, "person") {
+		t.Fatalf("required fields = %v, want person", schema.Required)
+	}
+}
+
+func TestMailboxGroupRemoveSubscriberSchemaOmitsPerson(t *testing.T) {
+	schema, err := jsonschema.For[mailboxGroupSubscriberRemoveInput](nil)
+	if err != nil {
+		t.Fatalf("jsonschema.For() error = %v", err)
+	}
+	if _, ok := schema.Properties["person"]; ok {
+		t.Fatalf("schema.Properties unexpectedly includes person: %v", schema.Properties)
+	}
+}
+
 func TestMailboxUndeferSchemaExposesDeliveryID(t *testing.T) {
 	schema, err := jsonschema.For[mailboxUndeferInput](nil)
 	if err != nil {

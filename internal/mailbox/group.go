@@ -383,6 +383,9 @@ func (s *Store) AddGroupNotificationSubscriber(ctx context.Context, groupAddress
 		return GroupNotificationSubscriberRecord{}, fmt.Errorf("notify address %q uses reserved group/ prefix", notifyAddress)
 	}
 	person = strings.TrimSpace(person)
+	if person == "" {
+		return GroupNotificationSubscriberRecord{}, errors.New("person is required")
+	}
 
 	tx, err := s.writeDB.BeginTx(ctx, nil)
 	if err != nil {

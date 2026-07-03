@@ -171,6 +171,9 @@ func TestGroupNotificationSubscriberLifecycle(t *testing.T) {
 		t.Fatalf("readd subscriber_id = %q, want a new subscriber id", secondSubscriber.SubscriberID)
 	}
 
+	if _, err := store.AddGroupNotificationSubscriber(context.Background(), group.Address, "agent-deck/empty-person", " "); err == nil || !strings.Contains(err.Error(), "person is required") {
+		t.Fatalf("AddGroupNotificationSubscriber(empty person) error = %v, want person required", err)
+	}
 	if _, err := store.AddGroupNotificationSubscriber(context.Background(), group.Address, "group/not-a-personal-target", "moderator"); err == nil || !strings.Contains(err.Error(), "reserved group/ prefix") {
 		t.Fatalf("AddGroupNotificationSubscriber(group target) error = %v, want reserved group prefix rejection", err)
 	}

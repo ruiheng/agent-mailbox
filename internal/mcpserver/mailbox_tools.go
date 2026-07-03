@@ -90,7 +90,12 @@ type mailboxGroupMemberInput struct {
 type mailboxGroupSubscriberInput struct {
 	GroupAddress  string `json:"group_address"`
 	NotifyAddress string `json:"notify_address"`
-	Person        string `json:"person,omitempty"`
+	Person        string `json:"person"`
+}
+
+type mailboxGroupSubscriberRemoveInput struct {
+	GroupAddress  string `json:"group_address"`
+	NotifyAddress string `json:"notify_address"`
 }
 
 type mailboxAddressInspectInput struct {
@@ -1005,7 +1010,7 @@ func (s *Service) mailboxGroupAddSubscriber(ctx context.Context, _ *mcp.CallTool
 	})
 }
 
-func (s *Service) mailboxGroupRemoveSubscriber(ctx context.Context, _ *mcp.CallToolRequest, input mailboxGroupSubscriberInput) (*mcp.CallToolResult, map[string]any, error) {
+func (s *Service) mailboxGroupRemoveSubscriber(ctx context.Context, _ *mcp.CallToolRequest, input mailboxGroupSubscriberRemoveInput) (*mcp.CallToolResult, map[string]any, error) {
 	subscriber, err := withMailboxService(ctx, s.mailboxServices, func(service mailboxGroupSubscriberManager) (mailbox.GroupNotificationSubscriberRecord, error) {
 		return service.RemoveGroupNotificationSubscriber(ctx, input.GroupAddress, input.NotifyAddress)
 	})
