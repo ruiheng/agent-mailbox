@@ -345,15 +345,15 @@ func (a *App) prepareReadCommand(args []string) (preparedCommand, error) {
 		return nil, err
 	}
 	normalizedDeliveryIDs, err := normalizeFlagValues([]string(deliveryIDs), "--delivery")
-	if err != nil && !strings.Contains(err.Error(), "is required") {
+	if err != nil && !errors.Is(err, errFlagValueRequired) {
 		return nil, err
 	}
 	normalizedMessageIDs, err := normalizeFlagValues([]string(messageIDs), "--message")
-	if err != nil && !strings.Contains(err.Error(), "is required") {
+	if err != nil && !errors.Is(err, errFlagValueRequired) {
 		return nil, err
 	}
 	normalizedAddresses, err := normalizeFlagValues([]string(addresses), "--for")
-	if err != nil && !strings.Contains(err.Error(), "is required") {
+	if err != nil && !errors.Is(err, errFlagValueRequired) {
 		return nil, err
 	}
 	selectorCount := 0

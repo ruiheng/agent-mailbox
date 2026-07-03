@@ -1176,6 +1176,57 @@ func TestInvalidCLIPathsDoNotCreateRuntimeState(t *testing.T) {
 	}
 }
 
+func TestPrepareReadCommandDistinguishesAbsentAndEmptySelectorFlags(t *testing.T) {
+	t.Parallel()
+
+	testCases := []struct {
+		name    string
+		args    []string
+		wantErr string
+	}{
+		{
+			name:    "missing selector",
+			args:    []string{"read"},
+			wantErr: "one of --delivery, --message, or --latest is required",
+		},
+		{
+			name:    "latest missing for",
+			args:    []string{"read", "--latest"},
+			wantErr: "--latest requires at least one --for address",
+		},
+		{
+			name:    "empty delivery",
+			args:    []string{"read", "--delivery", ""},
+			wantErr: "--delivery must not be empty",
+		},
+		{
+			name:    "empty message",
+			args:    []string{"read", "--message", "   "},
+			wantErr: "--message must not be empty",
+		},
+		{
+			name:    "empty latest for",
+			args:    []string{"read", "--latest", "--for", ""},
+			wantErr: "--for must not be empty",
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			app := NewApp(strings.NewReader(""), &bytes.Buffer{}, &bytes.Buffer{})
+			_, err := app.prepareReadCommand(tc.args[1:])
+			if err == nil {
+				t.Fatal("prepareReadCommand() error = nil, want non-nil")
+			}
+			if err.Error() != tc.wantErr {
+				t.Fatalf("prepareReadCommand() error = %q, want %q", err.Error(), tc.wantErr)
+			}
+		})
+	}
+}
+
 func TestHelpCLIPathsDoNotCreateRuntimeState(t *testing.T) {
 	t.Parallel()
 

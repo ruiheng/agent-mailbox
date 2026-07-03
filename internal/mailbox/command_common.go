@@ -13,6 +13,20 @@ type preparedCommand func(context.Context, *Store) error
 
 type stringListFlag []string
 
+var errFlagValueRequired = errors.New("flag value required")
+
+type requiredFlagValueError struct {
+	flagName string
+}
+
+func (e requiredFlagValueError) Error() string {
+	return fmt.Sprintf("%s is required", e.flagName)
+}
+
+func (e requiredFlagValueError) Is(target error) bool {
+	return target == errFlagValueRequired
+}
+
 func (f *stringListFlag) String() string {
 	return strings.Join(*f, ",")
 }
@@ -48,7 +62,7 @@ func normalizeAddresses(address string, addresses []string, flagName string) ([]
 
 func normalizeFlagValues(values []string, flagName string) ([]string, error) {
 	if len(values) == 0 {
-		return nil, fmt.Errorf("%s is required", flagName)
+		return nil, requiredFlagValueError{flagName: flagName}
 	}
 
 	normalized := make([]string, 0, len(values))
@@ -65,7 +79,7 @@ func normalizeFlagValues(values []string, flagName string) ([]string, error) {
 		normalized = append(normalized, trimmed)
 	}
 	if len(normalized) == 0 {
-		return nil, fmt.Errorf("%s is required", flagName)
+		return nil, requiredFlagValueError{flagName: flagName}
 	}
 	return normalized, nil
 }
