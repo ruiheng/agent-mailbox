@@ -353,6 +353,53 @@ func (f failOpenMailboxServiceFactory) Open(context.Context) (any, func() error,
 	return nil, nil, nil
 }
 
+func TestDefaultMailboxServiceReusesRuntimeUntilServiceClose(t *testing.T) {
+	service := newService(Options{
+		StateDir:              filepath.Join(t.TempDir(), "mailbox-state"),
+		CommandRunner:         &fakeRunner{t: t},
+		DisableWakeScheduler:  true,
+		DisableLeaseRenewLoop: true,
+	})
+	factory := service.mailboxServices.(*runtimeMailboxServiceFactory)
+	closeCount := 0
+	factory.closeRuntime = func(runtime *mailbox.Runtime) error {
+		closeCount++
+		return runtime.Close()
+	}
+
+	first, err := withMailboxService[string, *mailbox.Operations](context.Background(), service.mailboxServices, func(ops *mailbox.Operations) (string, error) {
+		return fmt.Sprintf("%p", ops), nil
+	})
+	if err != nil {
+		t.Fatalf("first Open() error = %v", err)
+	}
+	second, err := withMailboxService[string, *mailbox.Operations](context.Background(), service.mailboxServices, func(ops *mailbox.Operations) (string, error) {
+		return fmt.Sprintf("%p", ops), nil
+	})
+	if err != nil {
+		t.Fatalf("second Open() error = %v", err)
+	}
+	if first != second {
+		t.Fatalf("mailbox service pointer changed: first=%s second=%s", first, second)
+	}
+	if closeCount != 0 {
+		t.Fatalf("runtime closes before Service.Close = %d, want 0", closeCount)
+	}
+
+	service.Close()
+	service.Close()
+
+	if closeCount != 1 {
+		t.Fatalf("runtime closes = %d, want 1", closeCount)
+	}
+	_, err = withMailboxService[string, *mailbox.Operations](context.Background(), service.mailboxServices, func(ops *mailbox.Operations) (string, error) {
+		return fmt.Sprintf("%p", ops), nil
+	})
+	if err == nil || !strings.Contains(err.Error(), "mailbox runtime is closed") {
+		t.Fatalf("Open() after Service.Close error = %v, want closed runtime error", err)
+	}
+}
+
 type fakeRunner struct {
 	t          *testing.T
 	handler    func(args []string, input string) (RunResult, error)

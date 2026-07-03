@@ -128,16 +128,54 @@ type mailboxLeaseRenewer interface {
 }
 
 type runtimeMailboxServiceFactory struct {
-	stateDir    string
-	openRuntime func(context.Context, string) (*mailbox.Runtime, error)
+	stateDir     string
+	openRuntime  func(context.Context, string) (*mailbox.Runtime, error)
+	closeRuntime func(*mailbox.Runtime) error
+
+	mu      sync.Mutex
+	service any
+	runtime *mailbox.Runtime
+	closed  bool
 }
 
-func (f runtimeMailboxServiceFactory) Open(ctx context.Context) (any, func() error, error) {
+func (f *runtimeMailboxServiceFactory) Open(ctx context.Context) (any, func() error, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.closed {
+		return nil, nil, errors.New("mailbox runtime is closed")
+	}
+	if f.service != nil {
+		return f.service, func() error { return nil }, nil
+	}
 	runtime, err := f.openRuntime(ctx, f.stateDir)
 	if err != nil {
 		return nil, nil, err
 	}
-	return mailbox.NewOperations(runtime.Store()), runtime.Close, nil
+	f.runtime = runtime
+	f.service = mailbox.NewOperations(runtime.Store())
+	return f.service, func() error { return nil }, nil
+}
+
+func (f *runtimeMailboxServiceFactory) Close() error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.closed {
+		return nil
+	}
+	f.closed = true
+	if f.runtime == nil {
+		return nil
+	}
+	closeRuntime := f.closeRuntime
+	if closeRuntime == nil {
+		closeRuntime = func(runtime *mailbox.Runtime) error {
+			return runtime.Close()
+		}
+	}
+	err := closeRuntime(f.runtime)
+	f.runtime = nil
+	f.service = nil
+	return err
 }
 
 type Options struct {
@@ -157,6 +195,7 @@ type Service struct {
 	ctx                    context.Context
 	cancel                 context.CancelFunc
 	mailboxServices        mailboxServiceFactory
+	closeMailboxServices   func() error
 	commandRunner          Runner
 	sessions               *sessionManager
 	notifications          *notificationManager
@@ -177,6 +216,7 @@ type Service struct {
 	backgroundMu           sync.Mutex
 	backgroundLoops        sync.WaitGroup
 	closeOnce              sync.Once
+	closeMailboxOnce       sync.Once
 	serverMu               sync.Mutex
 	server                 *mcp.Server
 }
@@ -203,11 +243,14 @@ func NewService(opts Options) *Service {
 }
 
 func newService(opts Options) *Service {
+	var closeMailboxServices func() error
 	if opts.MailboxServiceFactory == nil {
-		opts.MailboxServiceFactory = runtimeMailboxServiceFactory{
+		factory := &runtimeMailboxServiceFactory{
 			stateDir:    opts.StateDir,
 			openRuntime: mailbox.OpenRuntime,
 		}
+		opts.MailboxServiceFactory = factory
+		closeMailboxServices = factory.Close
 	}
 	if opts.CommandRunner == nil {
 		opts.CommandRunner = osCommandRunner{cwd: currentWorkingDir()}
@@ -219,6 +262,7 @@ func newService(opts Options) *Service {
 		ctx:                   ctx,
 		cancel:                cancel,
 		mailboxServices:       opts.MailboxServiceFactory,
+		closeMailboxServices:  closeMailboxServices,
 		commandRunner:         opts.CommandRunner,
 		sessions:              sessions,
 		state:                 state,
@@ -262,6 +306,11 @@ func (s *Service) Close() {
 		s.backgroundMu.Unlock()
 	})
 	s.backgroundLoops.Wait()
+	s.closeMailboxOnce.Do(func() {
+		if s.closeMailboxServices != nil {
+			_ = s.closeMailboxServices()
+		}
+	})
 }
 
 func (s *Service) startBackgroundLoop(once *sync.Once, run func()) {
