@@ -4,8 +4,6 @@ import (
 	"context"
 	"errors"
 	"strings"
-
-	"github.com/ruiheng/agent-mailbox/internal/mailbox"
 )
 
 type notificationRoute struct {
@@ -77,8 +75,8 @@ func (m *notificationManager) notifyMailboxSend(ctx context.Context, input mailb
 	return m.notifyDirectWakeScope(ctx, *scope, input)
 }
 
-func (m *notificationManager) notifyGroupSubscribers(ctx context.Context, input mailboxSendInput, subscribers []mailbox.GroupNotificationSubscriberRecord) notificationOutcome {
-	if len(subscribers) == 0 {
+func (m *notificationManager) notifyGroupSubscribers(ctx context.Context, input mailboxSendInput, notifyAddresses []string) notificationOutcome {
+	if len(notifyAddresses) == 0 {
 		return notificationOutcome{Status: "no_subscribers"}
 	}
 	if wakeNotifyDisabled(input.DisableNotifyMessage) {
@@ -92,12 +90,12 @@ func (m *notificationManager) notifyGroupSubscribers(ctx context.Context, input 
 	attemptedCount := 0
 	sentCount := 0
 	var failures []error
-	for _, subscriber := range subscribers {
-		if strings.TrimSpace(subscriber.NotifyAddress) == strings.TrimSpace(input.FromAddress) {
+	for _, notifyAddress := range notifyAddresses {
+		if strings.TrimSpace(notifyAddress) == strings.TrimSpace(input.FromAddress) {
 			continue
 		}
 		attemptedCount++
-		scope, scheme, err := directWakeScopeForAddress(subscriber.NotifyAddress)
+		scope, scheme, err := directWakeScopeForAddress(notifyAddress)
 		if err != nil {
 			outcome = notificationOutcome{Status: "failed", Err: err}
 			failures = append(failures, err)

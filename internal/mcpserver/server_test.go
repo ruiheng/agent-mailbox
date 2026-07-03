@@ -400,6 +400,49 @@ func TestDefaultMailboxServiceReusesRuntimeUntilServiceClose(t *testing.T) {
 	}
 }
 
+func TestLegacyNewServerCanCloseService(t *testing.T) {
+	server := New(Options{
+		StateDir:              filepath.Join(t.TempDir(), "mailbox-state"),
+		CommandRunner:         &fakeRunner{t: t},
+		DisableWakeScheduler:  true,
+		DisableLeaseRenewLoop: true,
+	})
+
+	value, ok := legacyServerServices.Load(server)
+	if !ok {
+		t.Fatal("legacy server service was not registered")
+	}
+	service := value.(*Service)
+	factory := service.mailboxServices.(*runtimeMailboxServiceFactory)
+	closeCount := 0
+	factory.closeRuntime = func(runtime *mailbox.Runtime) error {
+		closeCount++
+		return runtime.Close()
+	}
+
+	if _, err := withMailboxService[string, *mailbox.Operations](context.Background(), service.mailboxServices, func(ops *mailbox.Operations) (string, error) {
+		return fmt.Sprintf("%p", ops), nil
+	}); err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+
+	CloseServer(server)
+	CloseServer(server)
+
+	if closeCount != 1 {
+		t.Fatalf("runtime closes = %d, want 1", closeCount)
+	}
+	if _, ok := legacyServerServices.Load(server); ok {
+		t.Fatal("legacy server service still registered after CloseServer")
+	}
+	_, err := withMailboxService[string, *mailbox.Operations](context.Background(), service.mailboxServices, func(ops *mailbox.Operations) (string, error) {
+		return fmt.Sprintf("%p", ops), nil
+	})
+	if err == nil || !strings.Contains(err.Error(), "mailbox runtime is closed") {
+		t.Fatalf("Open() after CloseServer error = %v, want closed runtime error", err)
+	}
+}
+
 type fakeRunner struct {
 	t          *testing.T
 	handler    func(args []string, input string) (RunResult, error)
@@ -796,35 +839,18 @@ func TestMailboxSendGroupModeNotifiesSubscriber(t *testing.T) {
 			t.Fatal("send group = false, want true")
 		}
 		return mailbox.SendResult{
-			Mode:             mailbox.SendModeGroup,
-			MessageID:        "msg_group",
-			GroupID:          "grp_1",
-			GroupAddress:     "group/review",
-			EligibleCount:    1,
-			MessageCreatedAt: "2026-04-18T00:00:00Z",
+			Mode:                       mailbox.SendModeGroup,
+			MessageID:                  "msg_group",
+			GroupID:                    "grp_1",
+			GroupAddress:               "group/review",
+			EligibleCount:              1,
+			GroupNotificationAddresses: []string{"agent-deck/moderator", "agent-deck/observer"},
+			MessageCreatedAt:           "2026-04-18T00:00:00Z",
 		}, nil
 	}
 	mailboxService.listGroupSubscribersFunc = func(_ context.Context, groupAddress string) ([]mailbox.GroupNotificationSubscriberRecord, error) {
-		if groupAddress != "group/review" {
-			t.Fatalf("ListGroupNotificationSubscribers address = %q, want group/review", groupAddress)
-		}
-		return []mailbox.GroupNotificationSubscriberRecord{{
-			SubscriberID:  "gns_1",
-			GroupID:       "grp_1",
-			GroupAddress:  "group/review",
-			NotifyAddress: "agent-deck/moderator",
-			Person:        "moderator",
-			CreatedAt:     "2026-04-18T00:00:00Z",
-			Active:        true,
-		}, {
-			SubscriberID:  "gns_2",
-			GroupID:       "grp_1",
-			GroupAddress:  "group/review",
-			NotifyAddress: "agent-deck/observer",
-			Person:        "observer",
-			CreatedAt:     "2026-04-18T00:01:00Z",
-			Active:        true,
-		}}, nil
+		t.Fatalf("ListGroupNotificationSubscribers should not be called for group send notify: %q", groupAddress)
+		return nil, nil
 	}
 
 	commandRunner := &fakeRunner{t: t, handler: func(args []string, input string) (RunResult, error) {
@@ -882,7 +908,7 @@ func TestMailboxSendGroupModeNotifiesSubscriber(t *testing.T) {
 	}
 }
 
-func TestMailboxSendGroupModeSkipsSenderSubscriber(t *testing.T) {
+func TestMailboxSendGroupModeReportsNoSubscribersWhenSendQueuesNoNotifications(t *testing.T) {
 	mailboxService := &fakeMailboxService{t: t}
 	mailboxService.sendFunc = func(_ context.Context, params mailbox.SendParams) (mailbox.SendResult, error) {
 		return mailbox.SendResult{
@@ -894,13 +920,8 @@ func TestMailboxSendGroupModeSkipsSenderSubscriber(t *testing.T) {
 		}, nil
 	}
 	mailboxService.listGroupSubscribersFunc = func(_ context.Context, groupAddress string) ([]mailbox.GroupNotificationSubscriberRecord, error) {
-		return []mailbox.GroupNotificationSubscriberRecord{{
-			SubscriberID:  "gns_1",
-			GroupID:       "grp_1",
-			GroupAddress:  groupAddress,
-			NotifyAddress: "agent-deck/moderator",
-			Active:        true,
-		}}, nil
+		t.Fatalf("ListGroupNotificationSubscribers should not be called for group send notify: %q", groupAddress)
+		return nil, nil
 	}
 
 	service := newService(Options{
@@ -922,12 +943,12 @@ func TestMailboxSendGroupModeSkipsSenderSubscriber(t *testing.T) {
 	if got := output["message_id"]; got != "msg_group" {
 		t.Fatalf("message_id = %v, want msg_group", got)
 	}
-	if got := output["notify_status"]; got != "skipped_sender" {
-		t.Fatalf("notify_status = %v, want skipped_sender", got)
+	if got := output["notify_status"]; got != "no_subscribers" {
+		t.Fatalf("notify_status = %v, want no_subscribers", got)
 	}
 }
 
-func TestMailboxSendGroupModeSkipsResolvedDefaultSenderSubscriber(t *testing.T) {
+func TestMailboxSendGroupModeReportsNoSubscribersForResolvedDefaultSender(t *testing.T) {
 	mailboxService := &fakeMailboxService{t: t}
 	mailboxService.sendFunc = func(_ context.Context, params mailbox.SendParams) (mailbox.SendResult, error) {
 		if params.FromAddress != "agent-deck/moderator" {
@@ -942,13 +963,8 @@ func TestMailboxSendGroupModeSkipsResolvedDefaultSenderSubscriber(t *testing.T) 
 		}, nil
 	}
 	mailboxService.listGroupSubscribersFunc = func(_ context.Context, groupAddress string) ([]mailbox.GroupNotificationSubscriberRecord, error) {
-		return []mailbox.GroupNotificationSubscriberRecord{{
-			SubscriberID:  "gns_1",
-			GroupID:       "grp_1",
-			GroupAddress:  groupAddress,
-			NotifyAddress: "agent-deck/moderator",
-			Active:        true,
-		}}, nil
+		t.Fatalf("ListGroupNotificationSubscribers should not be called for group send notify: %q", groupAddress)
+		return nil, nil
 	}
 
 	service := newService(Options{
@@ -972,8 +988,8 @@ func TestMailboxSendGroupModeSkipsResolvedDefaultSenderSubscriber(t *testing.T) 
 	if got := output["from_address"]; got != "agent-deck/moderator" {
 		t.Fatalf("from_address = %v, want agent-deck/moderator", got)
 	}
-	if got := output["notify_status"]; got != "skipped_sender" {
-		t.Fatalf("notify_status = %v, want skipped_sender", got)
+	if got := output["notify_status"]; got != "no_subscribers" {
+		t.Fatalf("notify_status = %v, want no_subscribers", got)
 	}
 }
 
@@ -982,21 +998,17 @@ func TestMailboxSendGroupModeKeepsReceiptWhenSubscriberNotifyFails(t *testing.T)
 	openCount := 0
 	mailboxService.sendFunc = func(_ context.Context, params mailbox.SendParams) (mailbox.SendResult, error) {
 		return mailbox.SendResult{
-			Mode:             mailbox.SendModeGroup,
-			MessageID:        "msg_group",
-			GroupID:          "grp_1",
-			GroupAddress:     "group/review",
-			MessageCreatedAt: "2026-04-18T00:00:00Z",
+			Mode:                       mailbox.SendModeGroup,
+			MessageID:                  "msg_group",
+			GroupID:                    "grp_1",
+			GroupAddress:               "group/review",
+			GroupNotificationAddresses: []string{"agent-deck/moderator"},
+			MessageCreatedAt:           "2026-04-18T00:00:00Z",
 		}, nil
 	}
 	mailboxService.listGroupSubscribersFunc = func(_ context.Context, groupAddress string) ([]mailbox.GroupNotificationSubscriberRecord, error) {
-		return []mailbox.GroupNotificationSubscriberRecord{{
-			SubscriberID:  "gns_1",
-			GroupID:       "grp_1",
-			GroupAddress:  groupAddress,
-			NotifyAddress: "agent-deck/moderator",
-			Active:        true,
-		}}, nil
+		t.Fatalf("ListGroupNotificationSubscribers should not be called for group send notify: %q", groupAddress)
+		return nil, nil
 	}
 
 	commandRunner := &fakeRunner{t: t, handler: func(args []string, input string) (RunResult, error) {

@@ -231,8 +231,25 @@ type osCommandRunner struct {
 	cwd string
 }
 
+var legacyServerServices sync.Map
+
 func New(opts Options) *mcp.Server {
-	return NewService(opts).Server()
+	service := NewService(opts)
+	server := service.Server()
+	legacyServerServices.Store(server, service)
+	return server
+}
+
+// CloseServer closes the Service created by New.
+func CloseServer(server *mcp.Server) {
+	if server == nil {
+		return
+	}
+	service, ok := legacyServerServices.LoadAndDelete(server)
+	if !ok {
+		return
+	}
+	service.(*Service).Close()
 }
 
 func NewService(opts Options) *Service {

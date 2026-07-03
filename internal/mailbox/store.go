@@ -65,19 +65,20 @@ type SendParams struct {
 }
 
 type SendResult struct {
-	Mode             string
-	MessageID        string
-	DeliveryID       string
-	BodyBlobRef      string
-	RecipientID      string
-	SenderID         *string
-	BodySHA256       string
-	BodySize         int64
-	VisibleAtUTC     string
-	GroupID          string
-	GroupAddress     string
-	EligibleCount    int
-	MessageCreatedAt string
+	Mode                       string
+	MessageID                  string
+	DeliveryID                 string
+	BodyBlobRef                string
+	RecipientID                string
+	SenderID                   *string
+	BodySHA256                 string
+	BodySize                   int64
+	VisibleAtUTC               string
+	GroupID                    string
+	GroupAddress               string
+	EligibleCount              int
+	GroupNotificationAddresses []string
+	MessageCreatedAt           string
 }
 
 const (
@@ -625,11 +626,12 @@ VALUES (?, ?, ?, ?, ?, ?)
 	}
 
 	return SendResult{
-		GroupID:          group.GroupID,
-		GroupAddress:     group.Address,
-		EligibleCount:    eligibleCount,
-		MessageCreatedAt: timestamp,
-		SenderID:         senderEndpointID,
+		GroupID:                    group.GroupID,
+		GroupAddress:               group.Address,
+		EligibleCount:              eligibleCount,
+		GroupNotificationAddresses: groupSubscriberNotifyAddresses(revalidatedPlan.subscriberDeliveries),
+		MessageCreatedAt:           timestamp,
+		SenderID:                   senderEndpointID,
 	}, nil
 }
 
@@ -749,6 +751,14 @@ func matchGroupSubscriberDeliveries(deliveries []groupSubscriberDelivery, keys [
 		matched = append(matched, delivery)
 	}
 	return matched, nil
+}
+
+func groupSubscriberNotifyAddresses(deliveries []groupSubscriberDelivery) []string {
+	addresses := make([]string, 0, len(deliveries))
+	for _, delivery := range deliveries {
+		addresses = append(addresses, delivery.NotifyAddress)
+	}
+	return addresses
 }
 
 func (s *Store) removeUnusedGroupSubscriberDeliveryBlobs(all, used []groupSubscriberDelivery) {

@@ -335,23 +335,7 @@ func (s *Service) notifyMailboxSend(ctx context.Context, input mailboxSendInput,
 		}
 		return s.notifications.notifyMailboxSend(notifyCtx, input)
 	}
-	subscriberManager, ok := service.(mailboxGroupSubscriberManager)
-	if !ok {
-		return notificationOutcome{
-			Status: "failed",
-			Scheme: "group_subscribers",
-			Err:    fmt.Errorf("mailbox service %T does not satisfy %T", service, subscriberManager),
-		}
-	}
-	subscribers, err := subscriberManager.ListGroupNotificationSubscribers(notifyCtx, sendResult.GroupAddress)
-	if err != nil {
-		return notificationOutcome{
-			Status: "failed",
-			Scheme: "group_subscribers",
-			Err:    err,
-		}
-	}
-	return s.notifications.notifyGroupSubscribers(notifyCtx, input, subscribers)
+	return s.notifications.notifyGroupSubscribers(notifyCtx, input, sendResult.GroupNotificationAddresses)
 }
 
 func (s *Service) waitBeforeNotify(ctx context.Context) error {

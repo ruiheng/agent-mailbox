@@ -699,6 +699,9 @@ func TestGroupSendMarksSenderReadAndQueuesSubscriberDeliveries(t *testing.T) {
 	if control.ForwardedFromAddress == nil || *control.ForwardedFromAddress != "agent-deck/moderator" {
 		t.Fatalf("control forwarded_from_address = %v, want sender", control.ForwardedFromAddress)
 	}
+	if len(sent.GroupNotificationAddresses) != 1 || sent.GroupNotificationAddresses[0] != "agent-deck/observer" {
+		t.Fatalf("group notification addresses = %v, want [agent-deck/observer]", sent.GroupNotificationAddresses)
+	}
 }
 
 func TestGroupSendWritesSubscriberBlobsBeforeSendTransaction(t *testing.T) {
@@ -778,7 +781,7 @@ func TestGroupSendRetriesWhenSubscriberSnapshotChangesBeforeTransaction(t *testi
 		return nil
 	}
 
-	if _, err := store.Send(context.Background(), SendParams{
+	sent, err := store.Send(context.Background(), SendParams{
 		ToAddress:     group.Address,
 		FromAddress:   "agent-deck/moderator",
 		Subject:       "roundtable turn",
@@ -786,7 +789,8 @@ func TestGroupSendRetriesWhenSubscriberSnapshotChangesBeforeTransaction(t *testi
 		SchemaVersion: "v1",
 		Body:          []byte("group body"),
 		Group:         true,
-	}); err != nil {
+	})
+	if err != nil {
 		t.Fatalf("Send(group) error = %v", err)
 	}
 	if !addedLateSubscriber {
@@ -794,6 +798,9 @@ func TestGroupSendRetriesWhenSubscriberSnapshotChangesBeforeTransaction(t *testi
 	}
 	if blobWrites != 4 {
 		t.Fatalf("blob writes = %d, want body plus stale notification plus retried notifications", blobWrites)
+	}
+	if len(sent.GroupNotificationAddresses) != 2 || sent.GroupNotificationAddresses[0] != "agent-deck/observer" || sent.GroupNotificationAddresses[1] != "agent-deck/late" {
+		t.Fatalf("group notification addresses = %v, want observer and late", sent.GroupNotificationAddresses)
 	}
 	if _, err := store.Receive(context.Background(), ReceiveParams{Address: "agent-deck/observer"}); err != nil {
 		t.Fatalf("Receive(observer subscriber) error = %v", err)
@@ -839,7 +846,7 @@ INSERT INTO group_notification_subscribers (
 		t.Fatalf("insert legacy group-prefixed subscriber error = %v", err)
 	}
 
-	if _, err := store.Send(context.Background(), SendParams{
+	sent, err := store.Send(context.Background(), SendParams{
 		ToAddress:     group.Address,
 		FromAddress:   "agent-deck/alice",
 		Subject:       "update",
@@ -847,8 +854,12 @@ INSERT INTO group_notification_subscribers (
 		SchemaVersion: "v1",
 		Body:          []byte("group body"),
 		Group:         true,
-	}); err != nil {
+	})
+	if err != nil {
 		t.Fatalf("Send(group) error = %v", err)
+	}
+	if len(sent.GroupNotificationAddresses) != 0 {
+		t.Fatalf("group notification addresses = %v, want none", sent.GroupNotificationAddresses)
 	}
 
 	if _, err := store.Receive(context.Background(), ReceiveParams{Address: "agent-deck/observer"}); !errors.Is(err, ErrNoMessage) {
