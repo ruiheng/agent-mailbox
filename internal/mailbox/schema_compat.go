@@ -21,6 +21,8 @@ func migrateLegacyGroupMessageSchema(ctx context.Context, db *sql.DB) error {
 	}
 	defer tx.Rollback()
 
+	// Legacy group-message data came from the pre-v1 experimental schema and is
+	// intentionally discarded instead of migrated.
 	statements := []string{
 		`DROP INDEX IF EXISTS idx_group_reads_person_message`,
 		`DROP INDEX IF EXISTS idx_group_message_eligibility_person_message`,
