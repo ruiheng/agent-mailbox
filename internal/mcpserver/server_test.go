@@ -571,7 +571,8 @@ func TestMailboxSendSkipsNotifyWhenDeliveryAlreadyClaimed(t *testing.T) {
 			t.Fatalf("unexpected command call: %v", args)
 			return RunResult{}, nil
 		}},
-		NotifyDelay: -1,
+		NotifyDelay:          -1,
+		DisableWakeScheduler: true,
 	})
 	service.state.boundAddresses = []string{"agent-deck/self"}
 	service.state.defaultSender = "agent-deck/self"
