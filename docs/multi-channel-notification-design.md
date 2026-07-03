@@ -567,30 +567,29 @@ Minimum trigger points:
 This is intentionally a hint channel only. Missing an update notification must
 not break correctness because the resource remains readable on demand.
 
-## Relation To Existing `mail_hint`
+## Relation To Former `mail_hint`
 
-The existing `mail_hint` field in tool results remains a separate local
-best-effort hint in the first rollout.
+The former inline `mail_hint` field was removed from generic tool results to
+avoid opening mailbox storage as a side effect of ordinary MCP calls.
 
 Rules:
 
-- `mail_hint` stays as the immediate inline hint returned from mailbox MCP tool
-  calls
 - `mailbox://bound/overview` is the standard MCP-readable summary surface
 - `resources/updated` is an optional best-effort push hint for subscribed
   clients
+- `mailbox_recv` remains the authoritative receive path when an agent wants to
+  claim available mail
 
-`mail_hint` and the resource path overlap in purpose, but not in transport
-shape:
+The removed inline hint and the resource path overlapped in purpose, but not in
+transport shape:
 
-- `mail_hint` piggybacks on a tool result that is already being returned
 - the overview resource supports out-of-band reads and optional standard MCP
   updates
 - the resource update path remains local-instance only, unlike external
   session-manager wakes
 
-Do not remove `mail_hint` in the first rollout. Revisit removal only after the
-resource path proves useful in real clients.
+Do not reintroduce inline result probing unless a caller needs it enough to pay
+the mailbox storage cost explicitly.
 
 ## Server Lifetime Requirement
 
@@ -661,7 +660,8 @@ This design is additive.
 - clients that do not support MCP resources or subscriptions still work
 - external session-manager wake paths still work without MCP subscription
   support
-- existing `mail_hint` behavior remains valid in the first rollout
+- removed inline `mail_hint` behavior is replaced by explicit receive/resource
+  reads
 
 ## Alternatives Considered
 
