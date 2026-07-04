@@ -20,10 +20,6 @@ import (
 
 var ErrEmptyBody = errors.New("message body must not be empty")
 
-var errGroupSendPlanStale = errors.New("group send plan changed before commit")
-
-const maxGroupSendPlanAttempts = 3
-
 type blobTempFile interface {
 	Write([]byte) (int, error)
 	Sync() error
@@ -312,37 +308,35 @@ func (s *Store) Send(ctx context.Context, params SendParams) (SendResult, error)
 		}
 	}
 
-	for attempt := 0; ; attempt++ {
-		result, err := func() (SendResult, error) {
-			tx, err := s.writeDB.BeginTx(ctx, nil)
-			if err != nil {
-				return SendResult{}, fmt.Errorf("begin send transaction: %w", err)
-			}
-			defer tx.Rollback()
-			txCtx := context.WithValue(ctx, writeTransactionContextKey{}, true)
+	tx, err := s.writeDB.BeginTx(ctx, nil)
+	if err != nil {
+		return SendResult{}, fmt.Errorf("begin send transaction: %w", err)
+	}
+	defer tx.Rollback()
+	txCtx := context.WithValue(ctx, writeTransactionContextKey{}, true)
 
-			var senderEndpointID *string
-			if fromAddress != "" {
-				registration, err := s.ensureEndpointAddress(txCtx, tx, fromAddress)
-				if err != nil {
-					return SendResult{}, fmt.Errorf("resolve sender address: %w", err)
-				}
-				senderEndpointID = &registration.EndpointID
-			}
-			var senderEndpointValue any
-			if senderEndpointID != nil {
-				senderEndpointValue = *senderEndpointID
-			}
-			var forwardedMessageIDValue any
-			if forwardedMessageID := strings.TrimSpace(params.ForwardedMessageID); forwardedMessageID != "" {
-				forwardedMessageIDValue = forwardedMessageID
-			}
-			var forwardedFromAddressValue any
-			if forwardedFromAddress := strings.TrimSpace(params.ForwardedFromAddress); forwardedFromAddress != "" {
-				forwardedFromAddressValue = forwardedFromAddress
-			}
+	var senderEndpointID *string
+	if fromAddress != "" {
+		registration, err := s.ensureEndpointAddress(txCtx, tx, fromAddress)
+		if err != nil {
+			return SendResult{}, fmt.Errorf("resolve sender address: %w", err)
+		}
+		senderEndpointID = &registration.EndpointID
+	}
+	var senderEndpointValue any
+	if senderEndpointID != nil {
+		senderEndpointValue = *senderEndpointID
+	}
+	var forwardedMessageIDValue any
+	if forwardedMessageID := strings.TrimSpace(params.ForwardedMessageID); forwardedMessageID != "" {
+		forwardedMessageIDValue = forwardedMessageID
+	}
+	var forwardedFromAddressValue any
+	if forwardedFromAddress := strings.TrimSpace(params.ForwardedFromAddress); forwardedFromAddress != "" {
+		forwardedFromAddressValue = forwardedFromAddress
+	}
 
-			if _, err := tx.ExecContext(ctx, `
+	if _, err := tx.ExecContext(ctx, `
 INSERT INTO messages (
   message_id,
   created_at,
@@ -359,72 +353,67 @@ INSERT INTO messages (
   reply_to_message_id,
   metadata_json
 ) VALUES (?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, NULL, '{}')
-		`, messageID, timestamp, senderEndpointValue, params.Subject, contentType, schemaVersion, blobRef, bodySize, bodySHA256, forwardedMessageIDValue, forwardedFromAddressValue); err != nil {
-				return SendResult{}, fmt.Errorf("insert message: %w", err)
-			}
+	`, messageID, timestamp, senderEndpointValue, params.Subject, contentType, schemaVersion, blobRef, bodySize, bodySHA256, forwardedMessageIDValue, forwardedFromAddressValue); err != nil {
+		return SendResult{}, fmt.Errorf("insert message: %w", err)
+	}
 
-			if params.Group {
-				plannedDeliveries := groupPlan.subscriberDeliveries
-				result, err := s.sendGroupMessage(txCtx, tx, &groupPlan, messageID, timestamp, toAddress, fromAddress, params.Subject, senderEndpointValue, senderEndpointID)
-				if err != nil {
-					return SendResult{}, err
-				}
-				if err := tx.Commit(); err != nil {
-					return SendResult{}, fmt.Errorf("commit send transaction: %w", err)
-				}
+	if params.Group {
+		plannedDeliveries := groupPlan.subscriberDeliveries
+		committed := false
+		defer func() {
+			if committed {
 				s.removeUnusedGroupSubscriberDeliveryBlobs(plannedDeliveries, groupPlan.subscriberDeliveries)
-				result.Mode = SendModeGroup
-				result.MessageID = messageID
-				result.BodyBlobRef = blobRef
-				result.SenderID = senderEndpointID
-				result.BodySHA256 = bodySHA256
-				result.BodySize = bodySize
-				result.MessageCreatedAt = timestamp
-				return result, nil
+			} else {
+				s.removeGroupSubscriberDeliveryBlobs(plannedDeliveries)
 			}
-
-			queued, err := s.queuePersonalDelivery(txCtx, tx, messageID, timestamp, toAddress, senderEndpointValue,
-				map[string]string{
-					"recipient_address": toAddress,
-					"subject":           params.Subject,
-				},
-				map[string]string{
-					"recipient_address": toAddress,
-					"state":             "queued",
-				})
-			if err != nil {
-				return SendResult{}, err
-			}
-
-			if err := tx.Commit(); err != nil {
-				return SendResult{}, fmt.Errorf("commit send transaction: %w", err)
-			}
-
-			return SendResult{
-				Mode:             SendModePersonal,
-				MessageID:        messageID,
-				DeliveryID:       queued.DeliveryID,
-				BodyBlobRef:      blobRef,
-				RecipientID:      queued.RecipientEndpointID,
-				SenderID:         senderEndpointID,
-				BodySHA256:       bodySHA256,
-				BodySize:         bodySize,
-				VisibleAtUTC:     timestamp,
-				MessageCreatedAt: timestamp,
-			}, nil
 		}()
-		if !params.Group || !errors.Is(err, errGroupSendPlanStale) {
-			return result, err
-		}
-		s.removeGroupSubscriberDeliveryBlobs(groupPlan.subscriberDeliveries)
-		if attempt+1 >= maxGroupSendPlanAttempts {
-			return SendResult{}, err
-		}
-		groupPlan, err = s.prepareGroupSendPlan(ctx, s.readDB, toAddress, messageID, params.Subject, fromAddress)
+		result, err := s.sendGroupMessage(txCtx, tx, &groupPlan, messageID, timestamp, toAddress, fromAddress, params.Subject, senderEndpointValue, senderEndpointID)
 		if err != nil {
 			return SendResult{}, err
 		}
+		if err := tx.Commit(); err != nil {
+			return SendResult{}, fmt.Errorf("commit send transaction: %w", err)
+		}
+		committed = true
+		result.Mode = SendModeGroup
+		result.MessageID = messageID
+		result.BodyBlobRef = blobRef
+		result.SenderID = senderEndpointID
+		result.BodySHA256 = bodySHA256
+		result.BodySize = bodySize
+		result.MessageCreatedAt = timestamp
+		return result, nil
 	}
+
+	queued, err := s.queuePersonalDelivery(txCtx, tx, messageID, timestamp, toAddress, senderEndpointValue,
+		map[string]string{
+			"recipient_address": toAddress,
+			"subject":           params.Subject,
+		},
+		map[string]string{
+			"recipient_address": toAddress,
+			"state":             "queued",
+		})
+	if err != nil {
+		return SendResult{}, err
+	}
+
+	if err := tx.Commit(); err != nil {
+		return SendResult{}, fmt.Errorf("commit send transaction: %w", err)
+	}
+
+	return SendResult{
+		Mode:             SendModePersonal,
+		MessageID:        messageID,
+		DeliveryID:       queued.DeliveryID,
+		BodyBlobRef:      blobRef,
+		RecipientID:      queued.RecipientEndpointID,
+		SenderID:         senderEndpointID,
+		BodySHA256:       bodySHA256,
+		BodySize:         bodySize,
+		VisibleAtUTC:     timestamp,
+		MessageCreatedAt: timestamp,
+	}, nil
 }
 
 type queuedPersonalDelivery struct {
@@ -697,14 +686,10 @@ func (s *Store) revalidateGroupSendPlan(ctx context.Context, tx *sql.Tx, plan gr
 	if err != nil {
 		return groupSendPlan{}, err
 	}
-	deliveries, err := matchGroupSubscriberDeliveries(plan.subscriberDeliveries, groupSubscriberDeliveryKeys(snapshot.memberships, snapshot.subscribers, fromAddress))
-	if err != nil {
-		return groupSendPlan{}, err
-	}
 	return groupSendPlan{
 		group:                snapshot.group,
 		memberships:          snapshot.memberships,
-		subscriberDeliveries: deliveries,
+		subscriberDeliveries: matchGroupSubscriberDeliveries(plan.subscriberDeliveries, groupSubscriberDeliveryKeys(snapshot.memberships, snapshot.subscribers, fromAddress)),
 	}, nil
 }
 
@@ -733,7 +718,7 @@ func groupSubscriberDeliveryKeys(memberships []GroupMembershipRecord, subscriber
 	return keys
 }
 
-func matchGroupSubscriberDeliveries(deliveries []groupSubscriberDelivery, keys []groupSubscriberDeliveryKey) ([]groupSubscriberDelivery, error) {
+func matchGroupSubscriberDeliveries(deliveries []groupSubscriberDelivery, keys []groupSubscriberDeliveryKey) []groupSubscriberDelivery {
 	byKey := make(map[groupSubscriberDeliveryKey]groupSubscriberDelivery, len(deliveries))
 	for _, delivery := range deliveries {
 		byKey[groupSubscriberDeliveryKey{
@@ -746,11 +731,11 @@ func matchGroupSubscriberDeliveries(deliveries []groupSubscriberDelivery, keys [
 	for _, key := range keys {
 		delivery, ok := byKey[key]
 		if !ok {
-			return nil, fmt.Errorf("%w: subscriber %q for person %q needs a prepared blob", errGroupSendPlanStale, key.NotifyAddress, key.Person)
+			continue
 		}
 		matched = append(matched, delivery)
 	}
-	return matched, nil
+	return matched
 }
 
 func groupSubscriberNotifyAddresses(deliveries []groupSubscriberDelivery) []string {

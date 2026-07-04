@@ -872,7 +872,7 @@ func TestGroupSendWritesSubscriberBlobsBeforeSendTransaction(t *testing.T) {
 	}
 }
 
-func TestGroupSendRetriesWhenSubscriberSnapshotChangesBeforeTransaction(t *testing.T) {
+func TestGroupSendUsesPreparedSubscriberSnapshot(t *testing.T) {
 	runtime, store := newLeaseTestStore(t)
 	defer runtime.Close()
 
@@ -919,19 +919,84 @@ func TestGroupSendRetriesWhenSubscriberSnapshotChangesBeforeTransaction(t *testi
 		t.Fatalf("Send(group) error = %v", err)
 	}
 	if !addedLateSubscriber {
-		t.Fatal("late subscriber was not added during stale plan window")
+		t.Fatal("late subscriber was not added during prewrite window")
 	}
-	if blobWrites != 4 {
-		t.Fatalf("blob writes = %d, want body plus stale notification plus retried notifications", blobWrites)
+	if blobWrites != 2 {
+		t.Fatalf("blob writes = %d, want body plus prepared observer notification", blobWrites)
 	}
-	if len(sent.GroupNotificationAddresses) != 2 || sent.GroupNotificationAddresses[0] != "agent-deck/observer" || sent.GroupNotificationAddresses[1] != "agent-deck/late" {
-		t.Fatalf("group notification addresses = %v, want observer and late", sent.GroupNotificationAddresses)
+	if len(sent.GroupNotificationAddresses) != 1 || sent.GroupNotificationAddresses[0] != "agent-deck/observer" {
+		t.Fatalf("group notification addresses = %v, want observer only", sent.GroupNotificationAddresses)
 	}
 	if _, err := store.Receive(context.Background(), ReceiveParams{Address: "agent-deck/observer"}); err != nil {
 		t.Fatalf("Receive(observer subscriber) error = %v", err)
 	}
-	if _, err := store.Receive(context.Background(), ReceiveParams{Address: "agent-deck/late"}); err != nil {
-		t.Fatalf("Receive(late subscriber) error = %v", err)
+	if _, err := store.Receive(context.Background(), ReceiveParams{Address: "agent-deck/late"}); !errors.Is(err, ErrNoMessage) {
+		t.Fatalf("Receive(late subscriber) error = %v, want ErrNoMessage", err)
+	}
+}
+
+func TestGroupSendRemovesUnusedPreparedSubscriberBlobs(t *testing.T) {
+	runtime, store := newLeaseTestStore(t)
+	defer runtime.Close()
+
+	group, err := store.CreateGroup(context.Background(), "group/ops")
+	if err != nil {
+		t.Fatalf("CreateGroup() error = %v", err)
+	}
+	if _, err := store.AddGroupMember(context.Background(), group.Address, "observer"); err != nil {
+		t.Fatalf("AddGroupMember(observer) error = %v", err)
+	}
+	if _, err := store.AddGroupNotificationSubscriber(context.Background(), group.Address, "agent-deck/observer", "observer"); err != nil {
+		t.Fatalf("AddGroupNotificationSubscriber(observer) error = %v", err)
+	}
+
+	blobWrites := 0
+	removedSubscriber := false
+	store.writeBlobHook = func(inWriteTransaction bool) error {
+		blobWrites++
+		if inWriteTransaction {
+			return errors.New("blob write during send transaction")
+		}
+		if blobWrites == 2 && !removedSubscriber {
+			removedSubscriber = true
+			if _, err := store.RemoveGroupNotificationSubscriber(context.Background(), group.Address, "agent-deck/observer"); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	var removedBlobs []string
+	removeFile := store.removeFile
+	store.removeFile = func(path string) error {
+		if strings.HasPrefix(filepath.Base(path), "blob_") {
+			removedBlobs = append(removedBlobs, filepath.Base(path))
+		}
+		return removeFile(path)
+	}
+
+	sent, err := store.Send(context.Background(), SendParams{
+		ToAddress:     group.Address,
+		FromAddress:   "agent-deck/moderator",
+		Subject:       "roundtable turn",
+		ContentType:   "text/plain",
+		SchemaVersion: "v1",
+		Body:          []byte("group body"),
+		Group:         true,
+	})
+	if err != nil {
+		t.Fatalf("Send(group) error = %v", err)
+	}
+	if !removedSubscriber {
+		t.Fatal("subscriber was not removed during prewrite window")
+	}
+	if len(sent.GroupNotificationAddresses) != 0 {
+		t.Fatalf("group notification addresses = %v, want none", sent.GroupNotificationAddresses)
+	}
+	if len(removedBlobs) != 1 {
+		t.Fatalf("removed prepared subscriber blobs = %v, want one", removedBlobs)
+	}
+	if _, err := store.Receive(context.Background(), ReceiveParams{Address: "agent-deck/observer"}); !errors.Is(err, ErrNoMessage) {
+		t.Fatalf("Receive(observer subscriber) error = %v, want ErrNoMessage", err)
 	}
 }
 
