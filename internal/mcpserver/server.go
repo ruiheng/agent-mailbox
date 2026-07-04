@@ -233,6 +233,9 @@ type osCommandRunner struct {
 
 var legacyServerServices sync.Map
 
+// New returns a legacy MCP server handle. Call CloseServer with the returned
+// server when done so service-owned background loops and runtimes are released.
+// Prefer NewService when the caller can own the Service lifecycle directly.
 func New(opts Options) *mcp.Server {
 	service := NewService(opts)
 	server := service.Server()
@@ -240,7 +243,8 @@ func New(opts Options) *mcp.Server {
 	return server
 }
 
-// CloseServer closes the Service created by New.
+// CloseServer closes the Service created by New. It is safe to call more than
+// once for the same server.
 func CloseServer(server *mcp.Server) {
 	if server == nil {
 		return
@@ -316,6 +320,9 @@ func newService(opts Options) *Service {
 	return service
 }
 
+// Close stops service-owned background loops and closes the service-owned
+// mailbox runtime. It does not wait for in-flight MCP handlers; callers that
+// need handler quiescence should close and drain their MCP sessions separately.
 func (s *Service) Close() {
 	s.closeOnce.Do(func() {
 		s.backgroundMu.Lock()

@@ -41,7 +41,6 @@ type fakeMailboxService struct {
 	receiveBatchFunc          func(context.Context, mailbox.ReceiveBatchParams) (mailbox.ReceiveResult, error)
 	receiveBatchWithTTLFunc   func(context.Context, mailbox.ReceiveBatchParams, time.Duration) (mailbox.ReceiveResult, error)
 	waitFunc                  func(context.Context, mailbox.WaitParams) (mailbox.ListedDelivery, error)
-	hasVisibleDeliveryFunc    func(context.Context, mailbox.WaitParams) (bool, error)
 	readMessagesFunc          func(context.Context, []string) ([]mailbox.ReadMessage, error)
 	readLatestFunc            func(context.Context, []string, string, int) ([]mailbox.ReadDelivery, bool, error)
 	readDeliveriesFunc        func(context.Context, []string) ([]mailbox.ReadDelivery, error)
@@ -273,13 +272,6 @@ func (f *fakeMailboxService) Wait(ctx context.Context, params mailbox.WaitParams
 		f.t.Fatalf("unexpected Wait call: %+v", params)
 	}
 	return f.waitFunc(ctx, params)
-}
-
-func (f *fakeMailboxService) HasVisibleDelivery(ctx context.Context, params mailbox.WaitParams) (bool, error) {
-	if f.hasVisibleDeliveryFunc == nil {
-		return false, nil
-	}
-	return f.hasVisibleDeliveryFunc(ctx, params)
 }
 
 func (f *fakeMailboxService) ReadMessages(ctx context.Context, messageIDs []string) ([]mailbox.ReadMessage, error) {
