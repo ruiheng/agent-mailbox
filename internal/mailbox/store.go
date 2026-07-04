@@ -577,6 +577,10 @@ INSERT INTO group_message_eligibility (
 	if err := markGroupSenderRead(ctx, tx, messageID, group.GroupID, fromAddress, asPerson, timestamp); err != nil {
 		return SendResult{}, fmt.Errorf("mark group sender read: %w", err)
 	}
+	plan.subscriberDeliveries, err = filterQueuedGroupSubscriberDeliveries(ctx, tx, group, plan.subscriberDeliveries)
+	if err != nil {
+		return SendResult{}, err
+	}
 	if err := s.queueGroupSubscriberDeliveries(ctx, tx, group, plan.subscriberDeliveries, messageID, timestamp, fromAddress, senderEndpointValue); err != nil {
 		return SendResult{}, fmt.Errorf("queue group subscriber deliveries: %w", err)
 	}
@@ -624,7 +628,7 @@ VALUES (?, ?, ?, ?, ?, ?)
 		GroupID:                    group.GroupID,
 		GroupAddress:               group.Address,
 		EligibleCount:              eligibleCount,
-		GroupNotificationAddresses: groupSubscriberNotifyAddresses(revalidatedPlan.subscriberDeliveries),
+		GroupNotificationAddresses: groupSubscriberNotifyAddresses(plan.subscriberDeliveries),
 		MessageCreatedAt:           timestamp,
 		SenderID:                   senderEndpointID,
 	}, nil
@@ -771,6 +775,47 @@ func groupSubscriberNotifyAddresses(deliveries []groupSubscriberDelivery) []stri
 		addresses = append(addresses, delivery.NotifyAddress)
 	}
 	return addresses
+}
+
+func filterQueuedGroupSubscriberDeliveries(ctx context.Context, tx *sql.Tx, group GroupRecord, deliveries []groupSubscriberDelivery) ([]groupSubscriberDelivery, error) {
+	filtered := make([]groupSubscriberDelivery, 0, len(deliveries))
+	for _, delivery := range deliveries {
+		exists, err := queuedGroupSubscriberDeliveryExists(ctx, tx, group.Address, delivery.NotifyAddress)
+		if err != nil {
+			return nil, err
+		}
+		if exists {
+			continue
+		}
+		filtered = append(filtered, delivery)
+	}
+	return filtered, nil
+}
+
+func queuedGroupSubscriberDeliveryExists(ctx context.Context, tx *sql.Tx, groupAddress, notifyAddress string) (bool, error) {
+	var exists bool
+	if err := tx.QueryRowContext(ctx, `
+SELECT EXISTS (
+  SELECT 1
+  FROM deliveries AS d
+  JOIN endpoint_addresses AS ea
+    ON ea.endpoint_id = d.recipient_endpoint_id
+  JOIN messages AS m
+    ON m.message_id = d.message_id
+  JOIN group_messages AS gm
+    ON gm.message_id = m.forwarded_message_id
+  JOIN groups AS g
+    ON g.group_id = gm.group_id
+  WHERE d.state = 'queued'
+    AND ea.address = ?
+    AND m.schema_version = 'group-notification/v1'
+    AND g.address = ?
+  LIMIT 1
+)
+`, notifyAddress, groupAddress).Scan(&exists); err != nil {
+		return false, fmt.Errorf("check queued subscriber notification for %q in %q: %w", notifyAddress, groupAddress, err)
+	}
+	return exists, nil
 }
 
 func (s *Store) removeUnusedGroupSubscriberDeliveryBlobs(all, used []groupSubscriberDelivery) {

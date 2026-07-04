@@ -768,6 +768,94 @@ func TestGroupSendMarksSenderReadAndQueuesSubscriberDeliveries(t *testing.T) {
 	}
 }
 
+func TestGroupSendCoalescesQueuedSubscriberDeliveries(t *testing.T) {
+	t.Parallel()
+
+	runtime, store := newLeaseTestStore(t)
+	defer runtime.Close()
+
+	group, err := store.CreateGroup(context.Background(), "group/coalesce")
+	if err != nil {
+		t.Fatalf("CreateGroup() error = %v", err)
+	}
+	if _, err := store.AddGroupMember(context.Background(), group.Address, "observer"); err != nil {
+		t.Fatalf("AddGroupMember(observer) error = %v", err)
+	}
+	if _, err := store.AddGroupNotificationSubscriber(context.Background(), group.Address, "agent-deck/observer", "observer"); err != nil {
+		t.Fatalf("AddGroupNotificationSubscriber(observer) error = %v", err)
+	}
+
+	first := mustSendGroupMessage(t, store, group.Address, "agent-deck/sender", "first", "first body")
+	second := mustSendGroupMessage(t, store, group.Address, "agent-deck/sender", "second", "second body")
+
+	if len(first.GroupNotificationAddresses) != 1 || first.GroupNotificationAddresses[0] != "agent-deck/observer" {
+		t.Fatalf("first group notification addresses = %v, want observer", first.GroupNotificationAddresses)
+	}
+	if len(second.GroupNotificationAddresses) != 0 {
+		t.Fatalf("second group notification addresses = %v, want coalesced", second.GroupNotificationAddresses)
+	}
+	if countGroupSubscriberNotifications(t, runtime, group.Address, "agent-deck/observer", "queued") != 1 {
+		t.Fatalf("queued subscriber notifications = %d, want 1", countGroupSubscriberNotifications(t, runtime, group.Address, "agent-deck/observer", "queued"))
+	}
+
+	control, err := store.Receive(context.Background(), ReceiveParams{Address: "agent-deck/observer"})
+	if err != nil {
+		t.Fatalf("Receive(observer subscriber) error = %v", err)
+	}
+	if !strings.Contains(control.Body, "Message-ID: "+first.MessageID) {
+		t.Fatalf("control body = %q, want retained first message id %q", control.Body, first.MessageID)
+	}
+	if _, err := store.Receive(context.Background(), ReceiveParams{Address: "agent-deck/observer"}); !errors.Is(err, ErrNoMessage) {
+		t.Fatalf("Receive(observer subscriber second) error = %v, want ErrNoMessage", err)
+	}
+}
+
+func TestGroupSendQueuesSubscriberDeliveryWhenExistingNoticeLeased(t *testing.T) {
+	t.Parallel()
+
+	runtime, store := newLeaseTestStore(t)
+	defer runtime.Close()
+
+	group, err := store.CreateGroup(context.Background(), "group/coalesce-leased")
+	if err != nil {
+		t.Fatalf("CreateGroup() error = %v", err)
+	}
+	if _, err := store.AddGroupMember(context.Background(), group.Address, "observer"); err != nil {
+		t.Fatalf("AddGroupMember(observer) error = %v", err)
+	}
+	if _, err := store.AddGroupNotificationSubscriber(context.Background(), group.Address, "agent-deck/observer", "observer"); err != nil {
+		t.Fatalf("AddGroupNotificationSubscriber(observer) error = %v", err)
+	}
+
+	first := mustSendGroupMessage(t, store, group.Address, "agent-deck/sender", "first", "first body")
+	leased, err := store.Receive(context.Background(), ReceiveParams{Address: "agent-deck/observer"})
+	if err != nil {
+		t.Fatalf("Receive(first observer subscriber) error = %v", err)
+	}
+	if !strings.Contains(leased.Body, "Message-ID: "+first.MessageID) {
+		t.Fatalf("leased body = %q, want first message id %q", leased.Body, first.MessageID)
+	}
+
+	second := mustSendGroupMessage(t, store, group.Address, "agent-deck/sender", "second", "second body")
+	if len(second.GroupNotificationAddresses) != 1 || second.GroupNotificationAddresses[0] != "agent-deck/observer" {
+		t.Fatalf("second group notification addresses = %v, want observer", second.GroupNotificationAddresses)
+	}
+	if countGroupSubscriberNotifications(t, runtime, group.Address, "agent-deck/observer", "leased") != 1 {
+		t.Fatalf("leased subscriber notifications = %d, want 1", countGroupSubscriberNotifications(t, runtime, group.Address, "agent-deck/observer", "leased"))
+	}
+	if countGroupSubscriberNotifications(t, runtime, group.Address, "agent-deck/observer", "queued") != 1 {
+		t.Fatalf("queued subscriber notifications = %d, want 1", countGroupSubscriberNotifications(t, runtime, group.Address, "agent-deck/observer", "queued"))
+	}
+
+	control, err := store.Receive(context.Background(), ReceiveParams{Address: "agent-deck/observer"})
+	if err != nil {
+		t.Fatalf("Receive(second observer subscriber) error = %v", err)
+	}
+	if !strings.Contains(control.Body, "Message-ID: "+second.MessageID) {
+		t.Fatalf("control body = %q, want second message id %q", control.Body, second.MessageID)
+	}
+}
+
 func TestGroupSendMarksSenderReadOnlyThroughSubscriberBinding(t *testing.T) {
 	t.Parallel()
 
@@ -2008,6 +2096,31 @@ func TestGroupTranscriptDisplaySenderPrefersForwardedFromAddress(t *testing.T) {
 	if messages[0].SenderAddress == nil || *messages[0].SenderAddress != "agent/forwarder" {
 		t.Fatalf("sender_address = %v, want agent/forwarder", messages[0].SenderAddress)
 	}
+}
+
+func countGroupSubscriberNotifications(t *testing.T, runtime *Runtime, groupAddress, notifyAddress, state string) int {
+	t.Helper()
+
+	var count int
+	if err := runtime.DB().QueryRow(`
+SELECT COUNT(*)
+FROM deliveries AS d
+JOIN endpoint_addresses AS ea
+  ON ea.endpoint_id = d.recipient_endpoint_id
+JOIN messages AS m
+  ON m.message_id = d.message_id
+JOIN group_messages AS gm
+  ON gm.message_id = m.forwarded_message_id
+JOIN groups AS g
+  ON g.group_id = gm.group_id
+WHERE d.state = ?
+  AND ea.address = ?
+  AND m.schema_version = 'group-notification/v1'
+  AND g.address = ?
+`, state, notifyAddress, groupAddress).Scan(&count); err != nil {
+		t.Fatalf("count group subscriber notifications error = %v", err)
+	}
+	return count
 }
 
 func mustSendGroupMessage(t *testing.T, store *Store, toAddress, fromAddress, subject, body string) SendResult {
