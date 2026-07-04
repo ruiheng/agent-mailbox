@@ -58,30 +58,28 @@ type stateSnapshot struct {
 }
 
 type boundState struct {
-	BoundAddresses               []string `json:"bound_addresses"`
-	DefaultSender                string   `json:"default_sender"`
-	DefaultWorkdir               string   `json:"default_workdir"`
-	DetectedAgentDeckSession     string   `json:"detected_agent_deck_session_id"`
-	DetectedAgentSession         string   `json:"detected_agent_session_id"`
-	DetectedClaudeCodeSession    string   `json:"detected_claude_code_session_id"`
-	DetectedGeminiSession        string   `json:"detected_gemini_session_id"`
-	DetectedOpencodeSession      string   `json:"detected_opencode_session_id"`
-	DetectedToolSessionAddresses []string `json:"detected_tool_session_addresses"`
-	Warnings                     []string `json:"warnings"`
+	BoundAddresses               []string       `json:"bound_addresses"`
+	DefaultSender                string         `json:"default_sender"`
+	DefaultWorkdir               string         `json:"default_workdir"`
+	DetectedAgentDeckSession     string         `json:"detected_agent_deck_session_id"`
+	DetectedToolSessions         toolSessionIDs `json:"-"`
+	DetectedToolSessionAddresses []string       `json:"detected_tool_session_addresses"`
+	Warnings                     []string       `json:"warnings"`
 }
 
 type toolSessionDescriptor struct {
-	Scheme string
-	Env    string
+	Scheme        string
+	Env           string
+	StatusJSONKey string
 }
 
 type toolSessionIDs map[string]string
 
 var toolSessionDescriptors = []toolSessionDescriptor{
-	{Scheme: "codex", Env: "CODEX_THREAD_ID"},
-	{Scheme: "claude", Env: "CLAUDE_CODE_SESSION_ID"},
-	{Scheme: "gemini", Env: "GEMINI_SESSION_ID"},
-	{Scheme: "opencode", Env: "OPENCODE_SESSION_ID"},
+	{Scheme: "codex", Env: "CODEX_THREAD_ID", StatusJSONKey: "detected_agent_session_id"},
+	{Scheme: "claude", Env: "CLAUDE_CODE_SESSION_ID", StatusJSONKey: "detected_claude_code_session_id"},
+	{Scheme: "gemini", Env: "GEMINI_SESSION_ID", StatusJSONKey: "detected_gemini_session_id"},
+	{Scheme: "opencode", Env: "OPENCODE_SESSION_ID", StatusJSONKey: "detected_opencode_session_id"},
 }
 
 type sessionData struct {
@@ -198,10 +196,7 @@ func (m *sessionManager) boundState(ctx context.Context) (boundState, error) {
 		DefaultSender:                snapshot.DefaultSender,
 		DefaultWorkdir:               snapshot.DefaultWorkdir,
 		DetectedAgentDeckSession:     snapshot.DetectedAgentDeckSession,
-		DetectedAgentSession:         snapshot.DetectedToolSessions["codex"],
-		DetectedClaudeCodeSession:    snapshot.DetectedToolSessions["claude"],
-		DetectedGeminiSession:        snapshot.DetectedToolSessions["gemini"],
-		DetectedOpencodeSession:      snapshot.DetectedToolSessions["opencode"],
+		DetectedToolSessions:         snapshot.DetectedToolSessions.clone(),
 		DetectedToolSessionAddresses: toolAddresses,
 		Warnings:                     warnings,
 	}, nil
@@ -574,6 +569,14 @@ func toolSessionIDValidationFailure(sessionID string) string {
 
 func detectedToolSessionAddresses(snapshot stateSnapshot) []string {
 	return snapshot.DetectedToolSessions.addresses()
+}
+
+func detectedToolSessionOutputFields(ids toolSessionIDs, value func(string) any) map[string]any {
+	out := make(map[string]any, len(toolSessionDescriptors))
+	for _, descriptor := range toolSessionDescriptors {
+		out[descriptor.StatusJSONKey] = value(ids[descriptor.Scheme])
+	}
+	return out
 }
 
 func boundToolSessionAddresses(boundAddresses []string) []string {

@@ -514,18 +514,18 @@ func toolSessionAddress(scheme, sessionID string) string {
 }
 
 func boundStateMap(bound boundState) map[string]any {
-	return map[string]any{
+	out := map[string]any{
 		"bound_addresses":                 bound.BoundAddresses,
 		"default_sender":                  nilIfEmpty(bound.DefaultSender),
 		"default_workdir":                 nilIfEmpty(bound.DefaultWorkdir),
 		"detected_agent_deck_session_id":  nilIfEmpty(bound.DetectedAgentDeckSession),
-		"detected_agent_session_id":       nilIfEmpty(bound.DetectedAgentSession),
-		"detected_claude_code_session_id": nilIfEmpty(bound.DetectedClaudeCodeSession),
-		"detected_gemini_session_id":      nilIfEmpty(bound.DetectedGeminiSession),
-		"detected_opencode_session_id":    nilIfEmpty(bound.DetectedOpencodeSession),
 		"detected_tool_session_addresses": bound.DetectedToolSessionAddresses,
 		"warnings":                        bound.Warnings,
 	}
+	for key, value := range detectedToolSessionOutputFields(bound.DetectedToolSessions, nilIfEmpty) {
+		out[key] = value
+	}
+	return out
 }
 
 func firstNonEmpty(values ...string) string {

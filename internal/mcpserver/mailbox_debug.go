@@ -41,7 +41,7 @@ func (m *sessionManager) debugState() map[string]any {
 }
 
 func debugSessionState(snapshot stateSnapshot) map[string]any {
-	return map[string]any{
+	out := map[string]any{
 		"bound_addresses":                  snapshot.BoundAddresses,
 		"default_sender":                   snapshot.DefaultSender,
 		"default_workdir":                  snapshot.DefaultWorkdir,
@@ -51,14 +51,14 @@ func debugSessionState(snapshot stateSnapshot) map[string]any {
 		"auto_bound_tool_fallback":         snapshot.AutoBoundToolFallback,
 		"auto_bind_warnings":               snapshot.AutoBindWarnings,
 		"detected_agent_deck_session_id":   snapshot.DetectedAgentDeckSession,
-		"detected_agent_session_id":        snapshot.DetectedToolSessions["codex"],
-		"detected_claude_code_session_id":  snapshot.DetectedToolSessions["claude"],
-		"detected_gemini_session_id":       snapshot.DetectedToolSessions["gemini"],
-		"detected_opencode_session_id":     snapshot.DetectedToolSessions["opencode"],
 		"detected_tool_session_addresses":  detectedToolSessionAddresses(snapshot),
 		"bound_tool_session_addresses":     boundToolSessionAddresses(snapshot.BoundAddresses),
 		"bound_agent_deck_session_address": boundAddressesByScheme(snapshot.BoundAddresses, "agent-deck"),
 	}
+	for key, value := range detectedToolSessionOutputFields(snapshot.DetectedToolSessions, func(value string) any { return value }) {
+		out[key] = value
+	}
+	return out
 }
 
 func currentToolSessionEnvDiagnostics() map[string]any {

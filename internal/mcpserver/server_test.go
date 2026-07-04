@@ -4598,6 +4598,29 @@ func TestMailboxDebugWorksBeforeStatusAndDoesNotAutoBind(t *testing.T) {
 	}
 }
 
+func TestToolSessionDescriptorsDriveOutputFields(t *testing.T) {
+	sessions := toolSessionIDs{}
+	for _, descriptor := range toolSessionDescriptors {
+		if descriptor.StatusJSONKey == "" {
+			t.Fatalf("tool session descriptor %q has no status JSON key", descriptor.Scheme)
+		}
+		sessions[descriptor.Scheme] = descriptor.Scheme + "-session"
+	}
+
+	status := boundStateMap(boundState{DetectedToolSessions: sessions})
+	debug := debugSessionState(stateSnapshot{DetectedToolSessions: sessions})
+
+	for _, descriptor := range toolSessionDescriptors {
+		want := descriptor.Scheme + "-session"
+		if got := status[descriptor.StatusJSONKey]; got != want {
+			t.Fatalf("status[%q] = %v, want %v", descriptor.StatusJSONKey, got, want)
+		}
+		if got := debug[descriptor.StatusJSONKey]; got != want {
+			t.Fatalf("debug[%q] = %v, want %v", descriptor.StatusJSONKey, got, want)
+		}
+	}
+}
+
 func TestMailboxStatusReportsAutoBindInvalidJSONWarningAndUnlocksManualBind(t *testing.T) {
 	isolateAutoBindEnv(t)
 
