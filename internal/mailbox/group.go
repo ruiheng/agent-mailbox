@@ -426,9 +426,33 @@ INSERT OR IGNORE INTO group_notification_subscribers (
 		return GroupNotificationSubscriberRecord{}, fmt.Errorf("read add-subscriber rows affected: %w", err)
 	}
 	if rowsAffected == 0 {
-		if _, found, err := lookupActiveGroupNotificationSubscriber(ctx, tx, group.GroupID, notifyAddress); err != nil {
+		if existing, found, err := lookupActiveGroupNotificationSubscriber(ctx, tx, group.GroupID, notifyAddress); err != nil {
 			return GroupNotificationSubscriberRecord{}, fmt.Errorf("check active subscriber for group %q notify %q: %w", groupAddress, notifyAddress, err)
 		} else if found {
+			if strings.TrimSpace(existing.Person) == "" {
+				result, err := tx.ExecContext(ctx, `
+UPDATE group_notification_subscribers
+SET person = ?
+WHERE subscriber_id = ?
+  AND removed_at IS NULL
+  AND person = ?
+`, person, existing.SubscriberID, existing.Person)
+				if err != nil {
+					return GroupNotificationSubscriberRecord{}, fmt.Errorf("repair legacy subscriber %q: %w", existing.SubscriberID, err)
+				}
+				rowsAffected, err := result.RowsAffected()
+				if err != nil {
+					return GroupNotificationSubscriberRecord{}, fmt.Errorf("read repair-subscriber rows affected: %w", err)
+				}
+				if rowsAffected != 1 {
+					return GroupNotificationSubscriberRecord{}, fmt.Errorf("repair legacy subscriber %q: changed while updating", existing.SubscriberID)
+				}
+				if err := tx.Commit(); err != nil {
+					return GroupNotificationSubscriberRecord{}, fmt.Errorf("commit repair-subscriber transaction: %w", err)
+				}
+				existing.Person = person
+				return existing, nil
+			}
 			return GroupNotificationSubscriberRecord{}, fmt.Errorf("group %q notify %q: %w", groupAddress, notifyAddress, ErrActiveSubscriberExists)
 		}
 		return GroupNotificationSubscriberRecord{}, fmt.Errorf("add subscriber group %q notify %q: subscriber insert did not apply", groupAddress, notifyAddress)

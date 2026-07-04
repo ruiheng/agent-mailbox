@@ -179,6 +179,67 @@ func TestGroupNotificationSubscriberLifecycle(t *testing.T) {
 	}
 }
 
+func TestGroupNotificationSubscriberRepairsLegacyEmptyPerson(t *testing.T) {
+	t.Parallel()
+
+	runtime, store := newLeaseTestStore(t)
+	defer runtime.Close()
+
+	group, err := store.CreateGroup(context.Background(), "group/ops")
+	if err != nil {
+		t.Fatalf("CreateGroup() error = %v", err)
+	}
+	if _, err := store.AddGroupMember(context.Background(), group.Address, "alice"); err != nil {
+		t.Fatalf("AddGroupMember(alice) error = %v", err)
+	}
+	if _, err := store.AddGroupMember(context.Background(), group.Address, "observer"); err != nil {
+		t.Fatalf("AddGroupMember(observer) error = %v", err)
+	}
+	if _, err := runtime.DB().Exec(`
+INSERT INTO group_notification_subscribers (
+  subscriber_id,
+  group_id,
+  notify_address,
+  person,
+  created_at,
+  removed_at,
+  metadata_json
+) VALUES ('gns_legacy_empty_person', ?, 'agent-deck/observer', '', '2026-04-18T00:00:00Z', NULL, '{}')
+`, group.GroupID); err != nil {
+		t.Fatalf("insert legacy empty-person subscriber error = %v", err)
+	}
+
+	repaired, err := store.AddGroupNotificationSubscriber(context.Background(), group.Address, "agent-deck/observer", "observer")
+	if err != nil {
+		t.Fatalf("AddGroupNotificationSubscriber(repair legacy) error = %v", err)
+	}
+	if repaired.SubscriberID != "gns_legacy_empty_person" || repaired.Person != "observer" {
+		t.Fatalf("repaired subscriber = (%q, %q), want legacy id and observer", repaired.SubscriberID, repaired.Person)
+	}
+	if _, err := store.AddGroupNotificationSubscriber(context.Background(), group.Address, "agent-deck/observer", "observer"); !errors.Is(err, ErrActiveSubscriberExists) {
+		t.Fatalf("AddGroupNotificationSubscriber(duplicate repaired) error = %v, want ErrActiveSubscriberExists", err)
+	}
+
+	sent, err := store.Send(context.Background(), SendParams{
+		ToAddress:     group.Address,
+		FromAddress:   "agent-deck/alice",
+		Subject:       "update",
+		ContentType:   "text/plain",
+		SchemaVersion: "v1",
+		Body:          []byte("group body"),
+		Group:         true,
+	})
+	if err != nil {
+		t.Fatalf("Send(group) error = %v", err)
+	}
+	if len(sent.GroupNotificationAddresses) != 1 || sent.GroupNotificationAddresses[0] != "agent-deck/observer" {
+		t.Fatalf("group notification addresses = %v, want [agent-deck/observer]", sent.GroupNotificationAddresses)
+	}
+	if _, err := store.Receive(context.Background(), ReceiveParams{Address: "agent-deck/observer"}); err != nil {
+		t.Fatalf("Receive(observer subscriber) error = %v", err)
+	}
+}
+
 func TestReadMessageReturnsGroupMessageBodyWithoutRecordingRead(t *testing.T) {
 	t.Parallel()
 
