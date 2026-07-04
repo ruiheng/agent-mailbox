@@ -768,6 +768,67 @@ func TestGroupSendMarksSenderReadAndQueuesSubscriberDeliveries(t *testing.T) {
 	}
 }
 
+func TestGroupSendMarksSenderReadOnlyThroughSubscriberBinding(t *testing.T) {
+	t.Parallel()
+
+	runtime, store := newLeaseTestStore(t)
+	defer runtime.Close()
+
+	group, err := store.CreateGroup(context.Background(), "group/ops")
+	if err != nil {
+		t.Fatalf("CreateGroup() error = %v", err)
+	}
+	if _, err := store.AddGroupMember(context.Background(), group.Address, "agent/sender"); err != nil {
+		t.Fatalf("AddGroupMember(collision) error = %v", err)
+	}
+	if _, err := store.AddGroupMember(context.Background(), group.Address, "moderator"); err != nil {
+		t.Fatalf("AddGroupMember(moderator) error = %v", err)
+	}
+	if _, err := store.AddGroupNotificationSubscriber(context.Background(), group.Address, "agent/sender", "moderator"); err != nil {
+		t.Fatalf("AddGroupNotificationSubscriber(moderator) error = %v", err)
+	}
+
+	if _, err := store.Send(context.Background(), SendParams{
+		ToAddress:     group.Address,
+		FromAddress:   "agent/sender",
+		Subject:       "roundtable turn",
+		ContentType:   "text/plain",
+		SchemaVersion: "v1",
+		Body:          []byte("group body"),
+		Group:         true,
+	}); err != nil {
+		t.Fatalf("Send(group) error = %v", err)
+	}
+
+	collisionMessages, err := store.ListGroupMessages(context.Background(), GroupListParams{
+		Address: group.Address,
+		Person:  "agent/sender",
+	})
+	if err != nil {
+		t.Fatalf("ListGroupMessages(collision) error = %v", err)
+	}
+	if collisionMessages[0].Read {
+		t.Fatal("collision person read = true, want false")
+	}
+	if collisionMessages[0].ReadCount != 1 || collisionMessages[0].EligibleCount != 2 {
+		t.Fatalf("collision counts = (%d, %d), want (1, 2)", collisionMessages[0].ReadCount, collisionMessages[0].EligibleCount)
+	}
+
+	moderatorMessages, err := store.ListGroupMessages(context.Background(), GroupListParams{
+		Address: group.Address,
+		Person:  "moderator",
+	})
+	if err != nil {
+		t.Fatalf("ListGroupMessages(moderator) error = %v", err)
+	}
+	if !moderatorMessages[0].Read {
+		t.Fatal("moderator message read = false, want true")
+	}
+	if moderatorMessages[0].ReadCount != 1 || moderatorMessages[0].EligibleCount != 2 {
+		t.Fatalf("moderator counts = (%d, %d), want (1, 2)", moderatorMessages[0].ReadCount, moderatorMessages[0].EligibleCount)
+	}
+}
+
 func TestGroupSendWritesSubscriberBlobsBeforeSendTransaction(t *testing.T) {
 	runtime, store := newLeaseTestStore(t)
 	defer runtime.Close()

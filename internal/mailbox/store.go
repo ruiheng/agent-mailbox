@@ -790,13 +790,6 @@ INSERT OR IGNORE INTO group_reads (message_id, person_id, first_read_at)
 SELECT ?, person_id, ?
 FROM (
   SELECT gm.person_id
-  FROM group_memberships AS gm
-  JOIN persons AS p ON p.person_id = gm.person_id
-  WHERE gm.group_id = ?
-    AND gm.left_at IS NULL
-    AND p.person = ?
-  UNION
-  SELECT gm.person_id
   FROM group_notification_subscribers AS gns
   JOIN persons AS p ON p.person = gns.person
   JOIN group_memberships AS gm
@@ -808,7 +801,7 @@ FROM (
     AND gns.notify_address = ?
     AND gns.person <> ''
 )
-`, messageID, timestamp, groupID, fromAddress, groupID, fromAddress)
+`, messageID, timestamp, groupID, fromAddress)
 	return err
 }
 
