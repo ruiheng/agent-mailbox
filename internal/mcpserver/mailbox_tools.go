@@ -25,6 +25,7 @@ type mailboxDebugInput struct{}
 type mailboxSendInput struct {
 	ToAddress            string `json:"to_address"`
 	FromAddress          string `json:"from_address,omitempty"`
+	AsPerson             string `json:"as_person,omitempty"`
 	Subject              string `json:"subject"`
 	Body                 string `json:"body"`
 	ContentType          string `json:"content_type,omitempty"`
@@ -270,6 +271,7 @@ func (s *Service) sendMailboxMessageWithService(ctx context.Context, input mailb
 	sendResult, err := service.Send(ctx, mailbox.SendParams{
 		ToAddress:            input.ToAddress,
 		FromAddress:          fromAddress,
+		AsPerson:             strings.TrimSpace(input.AsPerson),
 		Subject:              input.Subject,
 		ContentType:          strings.TrimSpace(input.ContentType),
 		SchemaVersion:        strings.TrimSpace(input.SchemaVersion),

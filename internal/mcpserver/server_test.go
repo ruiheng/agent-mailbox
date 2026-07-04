@@ -102,6 +102,9 @@ func TestMailboxSendSchemaExposesGroup(t *testing.T) {
 	if _, ok := schema.Properties["group"]; !ok {
 		t.Fatalf("schema.Properties missing group: %v", schema.Properties)
 	}
+	if _, ok := schema.Properties["as_person"]; !ok {
+		t.Fatalf("schema.Properties missing as_person: %v", schema.Properties)
+	}
 }
 
 func TestMailboxRecvSchemaOmitsTimeout(t *testing.T) {
@@ -792,7 +795,7 @@ func TestMailboxSendGroupModeUsesGroupSendParams(t *testing.T) {
 		if !params.Group {
 			t.Fatal("send group = false, want true")
 		}
-		if params.ToAddress != "group/review" || params.FromAddress != "agent/sender" {
+		if params.ToAddress != "group/review" || params.FromAddress != "agent/sender" || params.AsPerson != "alice" {
 			t.Fatalf("send params = %+v", params)
 		}
 		return mailbox.SendResult{
@@ -819,6 +822,7 @@ func TestMailboxSendGroupModeUsesGroupSendParams(t *testing.T) {
 		"subject":      "group update",
 		"body":         "body",
 		"group":        true,
+		"as_person":    " alice ",
 	})
 
 	if got := output["mode"]; got != mailbox.SendModeGroup {

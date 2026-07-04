@@ -829,6 +829,101 @@ func TestGroupSendMarksSenderReadOnlyThroughSubscriberBinding(t *testing.T) {
 	}
 }
 
+func TestGroupSendAsPersonMarksSenderReadAndSuppressesOwnNotification(t *testing.T) {
+	t.Parallel()
+
+	runtime, store := newLeaseTestStore(t)
+	defer runtime.Close()
+
+	group, err := store.CreateGroup(context.Background(), "group/ops")
+	if err != nil {
+		t.Fatalf("CreateGroup() error = %v", err)
+	}
+	if _, err := store.AddGroupMember(context.Background(), group.Address, "alice"); err != nil {
+		t.Fatalf("AddGroupMember(alice) error = %v", err)
+	}
+	if _, err := store.AddGroupMember(context.Background(), group.Address, "bob"); err != nil {
+		t.Fatalf("AddGroupMember(bob) error = %v", err)
+	}
+	if _, err := store.AddGroupNotificationSubscriber(context.Background(), group.Address, "agent-deck/alice", "alice"); err != nil {
+		t.Fatalf("AddGroupNotificationSubscriber(alice) error = %v", err)
+	}
+	if _, err := store.AddGroupNotificationSubscriber(context.Background(), group.Address, "agent-deck/bob", "bob"); err != nil {
+		t.Fatalf("AddGroupNotificationSubscriber(bob) error = %v", err)
+	}
+
+	sent, err := store.Send(context.Background(), SendParams{
+		ToAddress:     group.Address,
+		FromAddress:   "participant/alice",
+		AsPerson:      "alice",
+		Subject:       "roundtable turn",
+		ContentType:   "text/plain",
+		SchemaVersion: "v1",
+		Body:          []byte("group body"),
+		Group:         true,
+	})
+	if err != nil {
+		t.Fatalf("Send(group as person) error = %v", err)
+	}
+	if len(sent.GroupNotificationAddresses) != 1 || sent.GroupNotificationAddresses[0] != "agent-deck/bob" {
+		t.Fatalf("group notification addresses = %v, want [agent-deck/bob]", sent.GroupNotificationAddresses)
+	}
+
+	aliceMessages, err := store.ListGroupMessages(context.Background(), GroupListParams{
+		Address: group.Address,
+		Person:  "alice",
+	})
+	if err != nil {
+		t.Fatalf("ListGroupMessages(alice) error = %v", err)
+	}
+	if !aliceMessages[0].Read {
+		t.Fatal("alice message read = false, want true")
+	}
+	if aliceMessages[0].ReadCount != 1 || aliceMessages[0].EligibleCount != 2 {
+		t.Fatalf("alice counts = (%d, %d), want (1, 2)", aliceMessages[0].ReadCount, aliceMessages[0].EligibleCount)
+	}
+	if _, err := store.Receive(context.Background(), ReceiveParams{Address: "agent-deck/alice"}); !errors.Is(err, ErrNoMessage) {
+		t.Fatalf("Receive(alice subscriber) error = %v, want ErrNoMessage", err)
+	}
+	if _, err := store.Receive(context.Background(), ReceiveParams{Address: "agent-deck/bob"}); err != nil {
+		t.Fatalf("Receive(bob subscriber) error = %v", err)
+	}
+}
+
+func TestGroupSendAsPersonRequiresActiveMember(t *testing.T) {
+	t.Parallel()
+
+	runtime, store := newLeaseTestStore(t)
+	defer runtime.Close()
+
+	group, err := store.CreateGroup(context.Background(), "group/ops")
+	if err != nil {
+		t.Fatalf("CreateGroup() error = %v", err)
+	}
+	if _, err := store.AddGroupMember(context.Background(), group.Address, "inactive"); err != nil {
+		t.Fatalf("AddGroupMember(inactive) error = %v", err)
+	}
+	if _, err := store.RemoveGroupMember(context.Background(), group.Address, "inactive"); err != nil {
+		t.Fatalf("RemoveGroupMember(inactive) error = %v", err)
+	}
+
+	for _, asPerson := range []string{"missing", "inactive"} {
+		_, err := store.Send(context.Background(), SendParams{
+			ToAddress:     group.Address,
+			FromAddress:   "participant/" + asPerson,
+			AsPerson:      asPerson,
+			Subject:       "roundtable turn",
+			ContentType:   "text/plain",
+			SchemaVersion: "v1",
+			Body:          []byte("group body"),
+			Group:         true,
+		})
+		if !errors.Is(err, ErrActiveMembershipMissing) {
+			t.Fatalf("Send(group as %q) error = %v, want ErrActiveMembershipMissing", asPerson, err)
+		}
+	}
+}
+
 func TestGroupSendWritesSubscriberBlobsBeforeSendTransaction(t *testing.T) {
 	runtime, store := newLeaseTestStore(t)
 	defer runtime.Close()
