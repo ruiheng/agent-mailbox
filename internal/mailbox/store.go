@@ -723,7 +723,7 @@ func groupSubscriberDeliveryKeys(memberships []GroupMembershipRecord, subscriber
 	keys := make([]groupSubscriberDeliveryKey, 0, len(subscribers))
 	for _, subscriber := range subscribers {
 		notifyAddress := strings.TrimSpace(subscriber.NotifyAddress)
-		if notifyAddress == fromAddress {
+		if asPerson == "" && notifyAddress == fromAddress {
 			continue
 		}
 		person := strings.TrimSpace(subscriber.Person)
@@ -808,6 +808,7 @@ WHERE p.person = ?
 		if err != nil {
 			return err
 		}
+		return nil
 	}
 	fromAddress = strings.TrimSpace(fromAddress)
 	if fromAddress == "" {

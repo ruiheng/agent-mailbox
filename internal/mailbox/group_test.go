@@ -845,16 +845,22 @@ func TestGroupSendAsPersonMarksSenderReadAndSuppressesOwnNotification(t *testing
 	if _, err := store.AddGroupMember(context.Background(), group.Address, "bob"); err != nil {
 		t.Fatalf("AddGroupMember(bob) error = %v", err)
 	}
+	if _, err := store.AddGroupMember(context.Background(), group.Address, "moderator"); err != nil {
+		t.Fatalf("AddGroupMember(moderator) error = %v", err)
+	}
 	if _, err := store.AddGroupNotificationSubscriber(context.Background(), group.Address, "agent-deck/alice", "alice"); err != nil {
 		t.Fatalf("AddGroupNotificationSubscriber(alice) error = %v", err)
 	}
 	if _, err := store.AddGroupNotificationSubscriber(context.Background(), group.Address, "agent-deck/bob", "bob"); err != nil {
 		t.Fatalf("AddGroupNotificationSubscriber(bob) error = %v", err)
 	}
+	if _, err := store.AddGroupNotificationSubscriber(context.Background(), group.Address, "agent-deck/moderator", "moderator"); err != nil {
+		t.Fatalf("AddGroupNotificationSubscriber(moderator) error = %v", err)
+	}
 
 	sent, err := store.Send(context.Background(), SendParams{
 		ToAddress:     group.Address,
-		FromAddress:   "participant/alice",
+		FromAddress:   "agent-deck/moderator",
 		AsPerson:      "alice",
 		Subject:       "roundtable turn",
 		ContentType:   "text/plain",
@@ -865,8 +871,22 @@ func TestGroupSendAsPersonMarksSenderReadAndSuppressesOwnNotification(t *testing
 	if err != nil {
 		t.Fatalf("Send(group as person) error = %v", err)
 	}
-	if len(sent.GroupNotificationAddresses) != 1 || sent.GroupNotificationAddresses[0] != "agent-deck/bob" {
-		t.Fatalf("group notification addresses = %v, want [agent-deck/bob]", sent.GroupNotificationAddresses)
+	wantNotifications := map[string]bool{
+		"agent-deck/bob":       false,
+		"agent-deck/moderator": false,
+	}
+	for _, address := range sent.GroupNotificationAddresses {
+		if _, ok := wantNotifications[address]; ok {
+			wantNotifications[address] = true
+		}
+	}
+	for address, seen := range wantNotifications {
+		if !seen {
+			t.Fatalf("group notification addresses = %v, missing %s", sent.GroupNotificationAddresses, address)
+		}
+	}
+	if len(sent.GroupNotificationAddresses) != len(wantNotifications) {
+		t.Fatalf("group notification addresses = %v, want only bob and moderator", sent.GroupNotificationAddresses)
 	}
 
 	aliceMessages, err := store.ListGroupMessages(context.Background(), GroupListParams{
@@ -879,14 +899,30 @@ func TestGroupSendAsPersonMarksSenderReadAndSuppressesOwnNotification(t *testing
 	if !aliceMessages[0].Read {
 		t.Fatal("alice message read = false, want true")
 	}
-	if aliceMessages[0].ReadCount != 1 || aliceMessages[0].EligibleCount != 2 {
-		t.Fatalf("alice counts = (%d, %d), want (1, 2)", aliceMessages[0].ReadCount, aliceMessages[0].EligibleCount)
+	if aliceMessages[0].ReadCount != 1 || aliceMessages[0].EligibleCount != 3 {
+		t.Fatalf("alice counts = (%d, %d), want (1, 3)", aliceMessages[0].ReadCount, aliceMessages[0].EligibleCount)
+	}
+	moderatorMessages, err := store.ListGroupMessages(context.Background(), GroupListParams{
+		Address: group.Address,
+		Person:  "moderator",
+	})
+	if err != nil {
+		t.Fatalf("ListGroupMessages(moderator) error = %v", err)
+	}
+	if moderatorMessages[0].Read {
+		t.Fatal("moderator message read = true, want false")
+	}
+	if moderatorMessages[0].ReadCount != 1 || moderatorMessages[0].EligibleCount != 3 {
+		t.Fatalf("moderator counts = (%d, %d), want (1, 3)", moderatorMessages[0].ReadCount, moderatorMessages[0].EligibleCount)
 	}
 	if _, err := store.Receive(context.Background(), ReceiveParams{Address: "agent-deck/alice"}); !errors.Is(err, ErrNoMessage) {
 		t.Fatalf("Receive(alice subscriber) error = %v, want ErrNoMessage", err)
 	}
 	if _, err := store.Receive(context.Background(), ReceiveParams{Address: "agent-deck/bob"}); err != nil {
 		t.Fatalf("Receive(bob subscriber) error = %v", err)
+	}
+	if _, err := store.Receive(context.Background(), ReceiveParams{Address: "agent-deck/moderator"}); err != nil {
+		t.Fatalf("Receive(moderator subscriber) error = %v", err)
 	}
 }
 
