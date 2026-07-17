@@ -277,6 +277,12 @@ session; it resolves `session_id` or `session_ref`, verifies the existing
 session already belongs to the explicit `workdir`, and starts it if needed.
 `mailbox_send` remains transport-only and does not create downstream sessions.
 
+`agent_deck_resolve_session` is read-only. Pass one `session` for its original
+single-session response, or pass `sessions` as a non-empty array to resolve
+multiple references in one MCP call. Batch responses contain ordered `results`;
+each item is a normal `found` or `not_found` response, or an `error` response
+for an individual lookup failure without preventing the other lookups.
+
 ## Quick Start
 
 Use `--state-dir` for demos and tests so mailbox state stays isolated:

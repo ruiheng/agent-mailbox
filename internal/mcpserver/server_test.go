@@ -62,6 +62,21 @@ func TestAgentDeckCreateSessionSchemaRequiresWorkdir(t *testing.T) {
 	}
 }
 
+func TestAgentDeckResolveSessionSchemaSupportsSingleAndBatchInputs(t *testing.T) {
+	schema, err := jsonschema.For[agentDeckResolveSessionInput](nil)
+	if err != nil {
+		t.Fatalf("jsonschema.For() error = %v", err)
+	}
+	for _, field := range []string{"session", "sessions"} {
+		if _, ok := schema.Properties[field]; !ok {
+			t.Fatalf("schema.Properties missing %q: %v", field, schema.Properties)
+		}
+		if slices.Contains(schema.Required, field) {
+			t.Fatalf("required fields = %v, do not want %q", schema.Required, field)
+		}
+	}
+}
+
 func TestAgentDeckRequireSessionSchemaRequiresWorkdir(t *testing.T) {
 	schema, err := jsonschema.For[agentDeckRequireSessionInput](nil)
 	if err != nil {
@@ -2056,6 +2071,145 @@ func TestProcessWakeSchedulerFallsThroughWhenMailboxOverviewUpdateFails(t *testi
 	}
 	if runtime.LastWakeByChannel[WakeChannelAgentDeck] == "" {
 		t.Fatal("agent_deck wake should be recorded after local hint failure")
+	}
+}
+
+func TestAgentDeckResolveSessionSingleInputRemainsCompatible(t *testing.T) {
+	commandRunner := &fakeRunner{t: t, handler: func(args []string, input string) (RunResult, error) {
+		switch strings.Join(args, "\x00") {
+		case strings.Join([]string{"agent-deck", "session", "show", "worker-ref", "--json"}, "\x00"):
+			return RunResult{ExitCode: 0, Stdout: `{"id":"worker-1","title":"worker","status":"waiting","group":"team","path":"/tmp"}`}, nil
+		case strings.Join([]string{"agent-deck", "session", "show", "missing-ref", "--json"}, "\x00"):
+			return RunResult{ExitCode: 1, Stderr: "not found"}, nil
+		default:
+			t.Fatalf("unexpected command args: %v", args)
+			return RunResult{}, nil
+		}
+	}}
+	service := newService(Options{
+		MailboxServiceFactory: fakeMailboxServiceFactory{service: &fakeMailboxService{t: t}},
+		CommandRunner:         commandRunner,
+	})
+	service.state.autoBindAttempted = true
+
+	found := callServiceTool(t, service, "agent_deck_resolve_session", map[string]any{"session": "worker-ref"})
+	if got := found["status"]; got != "found" {
+		t.Fatalf("status = %v, want found", got)
+	}
+	if got := found["session_id"]; got != "worker-1" {
+		t.Fatalf("session_id = %v, want worker-1", got)
+	}
+	if got := found["session_ref"]; got != "worker-ref" {
+		t.Fatalf("session_ref = %v, want worker-ref", got)
+	}
+	if _, ok := found["results"]; ok {
+		t.Fatalf("single-session response unexpectedly includes results: %v", found)
+	}
+
+	notFound := callServiceTool(t, service, "agent_deck_resolve_session", map[string]any{"session": "missing-ref"})
+	if want := map[string]any{"status": "not_found", "session_ref": "missing-ref"}; !reflect.DeepEqual(notFound, want) {
+		t.Fatalf("not-found response = %v, want %v", notFound, want)
+	}
+}
+
+func TestAgentDeckResolveSessionBatchReturnsOrderedIndependentResults(t *testing.T) {
+	commandRunner := &fakeRunner{t: t, handler: func(args []string, input string) (RunResult, error) {
+		switch strings.Join(args, "\x00") {
+		case strings.Join([]string{"agent-deck", "session", "show", "found-ref", "--json"}, "\x00"):
+			return RunResult{ExitCode: 0, Stdout: `{"id":"worker-1","title":"worker","status":"waiting","path":"/tmp"}`}, nil
+		case strings.Join([]string{"agent-deck", "session", "show", "missing-ref", "--json"}, "\x00"):
+			return RunResult{ExitCode: 1, Stderr: "not found"}, nil
+		case strings.Join([]string{"agent-deck", "session", "show", "runner-error", "--json"}, "\x00"):
+			return RunResult{}, errors.New("agent-deck is unavailable")
+		case strings.Join([]string{"agent-deck", "session", "show", "invalid-json", "--json"}, "\x00"):
+			return RunResult{ExitCode: 0, Stdout: "not json"}, nil
+		default:
+			t.Fatalf("unexpected command args: %v", args)
+			return RunResult{}, nil
+		}
+	}}
+	service := newService(Options{
+		MailboxServiceFactory: fakeMailboxServiceFactory{service: &fakeMailboxService{t: t}},
+		CommandRunner:         commandRunner,
+	})
+	service.state.autoBindAttempted = true
+
+	output := callServiceTool(t, service, "agent_deck_resolve_session", map[string]any{
+		"sessions": []string{"found-ref", "missing-ref", "runner-error", "invalid-json"},
+	})
+	results, ok := output["results"].([]any)
+	if !ok {
+		t.Fatalf("results = %#v, want ordered array", output["results"])
+	}
+	if len(results) != 4 {
+		t.Fatalf("results length = %d, want 4", len(results))
+	}
+
+	found, ok := results[0].(map[string]any)
+	if !ok {
+		t.Fatalf("first result = %#v, want map", results[0])
+	}
+	if got := found["status"]; got != "found" {
+		t.Fatalf("first result status = %v, want found", got)
+	}
+	if got := found["session_ref"]; got != "found-ref" {
+		t.Fatalf("first result session_ref = %v, want found-ref", got)
+	}
+
+	missing, ok := results[1].(map[string]any)
+	if !ok {
+		t.Fatalf("second result = %#v, want map", results[1])
+	}
+	if want := map[string]any{"status": "not_found", "session_ref": "missing-ref"}; !reflect.DeepEqual(missing, want) {
+		t.Fatalf("second result = %v, want %v", missing, want)
+	}
+
+	for i, session := range []string{"runner-error", "invalid-json"} {
+		result, ok := results[i+2].(map[string]any)
+		if !ok {
+			t.Fatalf("result %d = %#v, want map", i+3, results[i+2])
+		}
+		if got := result["status"]; got != "error" {
+			t.Fatalf("result %d status = %v, want error", i+3, got)
+		}
+		if got := result["session_ref"]; got != session {
+			t.Fatalf("result %d session_ref = %v, want %s", i+3, got, session)
+		}
+		if got, ok := result["error"].(string); !ok || got == "" {
+			t.Fatalf("result %d error = %#v, want non-empty string", i+3, result["error"])
+		}
+	}
+	if got := len(commandRunner.Calls()); got != 4 {
+		t.Fatalf("command calls = %d, want 4", got)
+	}
+}
+
+func TestAgentDeckResolveSessionValidatesSingleOrBatchInput(t *testing.T) {
+	service := newService(Options{
+		MailboxServiceFactory: fakeMailboxServiceFactory{service: &fakeMailboxService{t: t}},
+		CommandRunner: &fakeRunner{t: t, handler: func(args []string, input string) (RunResult, error) {
+			t.Fatalf("unexpected command args: %v", args)
+			return RunResult{}, nil
+		}},
+	})
+	service.state.autoBindAttempted = true
+
+	for _, test := range []struct {
+		name string
+		args map[string]any
+		want string
+	}{
+		{name: "missing input", args: map[string]any{}, want: "exactly one of session or sessions"},
+		{name: "both inputs", args: map[string]any{"session": "worker-a", "sessions": []string{"worker-b"}}, want: "exactly one of session or sessions"},
+		{name: "empty batch", args: map[string]any{"sessions": []string{}}, want: "sessions must contain at least one session"},
+		{name: "unknown field", args: map[string]any{"session": "worker-a", "unexpected": true}, want: "unexpected additional properties"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			err := callServiceToolExpectError(t, service, "agent_deck_resolve_session", test.args)
+			if err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("agent_deck_resolve_session error = %v, want %q", err, test.want)
+			}
+		})
 	}
 }
 
