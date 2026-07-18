@@ -29,9 +29,10 @@ type agentDeckCreateSessionInput struct {
 }
 
 type agentDeckRequireSessionInput struct {
-	SessionID  string `json:"session_id,omitempty"`
-	SessionRef string `json:"session_ref,omitempty"`
-	Workdir    string `json:"workdir"`
+	SessionID  string   `json:"session_id,omitempty"`
+	SessionRef string   `json:"session_ref,omitempty"`
+	Sessions   []string `json:"sessions,omitempty"`
+	Workdir    string   `json:"workdir"`
 }
 
 func (s *Service) registerSessionTools(server *mcp.Server) {
@@ -45,7 +46,7 @@ func (s *Service) registerSessionTools(server *mcp.Server) {
 	}, s.agentDeckCreateSession)
 	addToolRequiringMailboxStatus(server, s, &mcp.Tool{
 		Name:        "agent_deck_require_session",
-		Description: "Require an existing agent-deck session in an explicit workdir. Resolves session_id or session_ref, verifies the existing session already matches the requested workdir, and starts it if it is inactive. Does not create sessions.",
+		Description: "Require one existing agent-deck session with session_id or session_ref, or multiple session ids or refs independently with sessions in the same explicit workdir. Verifies each session already matches the requested workdir and starts it if needed. Does not create sessions.",
 	}, s.agentDeckRequireSession)
 }
 
@@ -122,8 +123,31 @@ func (s *Service) agentDeckCreateSession(ctx context.Context, _ *mcp.CallToolReq
 }
 
 func (s *Service) agentDeckRequireSession(ctx context.Context, req *mcp.CallToolRequest, input agentDeckRequireSessionInput) (*mcp.CallToolResult, map[string]any, error) {
-	if err := validateRequireSessionArgs(req); err != nil {
+	batch, err := validateRequireSessionArgs(req, input)
+	if err != nil {
 		return nil, nil, err
+	}
+	if batch {
+		workdir, err := canonicalizeTargetWorkdir(input.Workdir, "requiring")
+		if err != nil {
+			return nil, nil, err
+		}
+		results := make([]map[string]any, 0, len(input.Sessions))
+		for _, session := range input.Sessions {
+			out, err := s.sessions.requireSessionWithCanonicalWorkdir(ctx, agentDeckRequireSessionInput{
+				SessionRef: session,
+				Workdir:    input.Workdir,
+			}, workdir)
+			if err != nil {
+				out = map[string]any{
+					"status":      "error",
+					"session_ref": session,
+					"error":       err.Error(),
+				}
+			}
+			results = append(results, out)
+		}
+		return s.toolResult(ctx, map[string]any{"results": results})
 	}
 	out, err := s.sessions.requireSession(ctx, input)
 	if err != nil {
@@ -132,19 +156,20 @@ func (s *Service) agentDeckRequireSession(ctx context.Context, req *mcp.CallTool
 	return s.toolResult(ctx, out)
 }
 
-func validateRequireSessionArgs(req *mcp.CallToolRequest) error {
+func validateRequireSessionArgs(req *mcp.CallToolRequest, input agentDeckRequireSessionInput) (bool, error) {
 	if req == nil || len(req.Params.Arguments) == 0 {
-		return nil
+		return false, nil
 	}
 
 	var rawArgs map[string]json.RawMessage
 	if err := json.Unmarshal(req.Params.Arguments, &rawArgs); err != nil {
-		return fmt.Errorf("invalid tool arguments: %w", err)
+		return false, fmt.Errorf("invalid tool arguments: %w", err)
 	}
 
 	allowedFields := map[string]bool{
 		"session_id":  true,
 		"session_ref": true,
+		"sessions":    true,
 		"workdir":     true,
 	}
 	unexpected := make([]string, 0, len(rawArgs))
@@ -153,10 +178,22 @@ func validateRequireSessionArgs(req *mcp.CallToolRequest) error {
 			unexpected = append(unexpected, field)
 		}
 	}
-	if len(unexpected) == 0 {
-		return nil
+	if len(unexpected) > 0 {
+		slices.Sort(unexpected)
+		return false, fmt.Errorf("agent_deck_require_session does not accept extra fields: %s", strings.Join(unexpected, ", "))
 	}
-	slices.Sort(unexpected)
 
-	return fmt.Errorf("agent_deck_require_session does not accept extra fields: %s", strings.Join(unexpected, ", "))
+	_, hasSessions := rawArgs["sessions"]
+	_, hasSessionID := rawArgs["session_id"]
+	_, hasSessionRef := rawArgs["session_ref"]
+	if !hasSessions {
+		return false, nil
+	}
+	if hasSessionID || hasSessionRef {
+		return false, errors.New("agent_deck_require_session sessions cannot be combined with session_id or session_ref")
+	}
+	if len(input.Sessions) == 0 {
+		return false, errors.New("agent_deck_require_session sessions must contain at least one session")
+	}
+	return true, nil
 }

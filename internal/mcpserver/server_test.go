@@ -85,6 +85,9 @@ func TestAgentDeckRequireSessionSchemaRequiresWorkdir(t *testing.T) {
 	if !slices.Contains(schema.Required, "workdir") {
 		t.Fatalf("required fields = %v, want workdir", schema.Required)
 	}
+	if _, ok := schema.Properties["sessions"]; !ok {
+		t.Fatalf("schema.Properties missing sessions: %v", schema.Properties)
+	}
 }
 
 func TestAgentDeckRequireSessionSchemaOmitsCreateOnlyFields(t *testing.T) {
@@ -2295,6 +2298,112 @@ func TestAgentDeckRequireSessionStartsInactiveTarget(t *testing.T) {
 	}
 }
 
+func TestAgentDeckRequireSessionBatchReturnsOrderedIndependentResults(t *testing.T) {
+	commandRunner := &fakeRunner{t: t, handler: func(args []string, input string) (RunResult, error) {
+		switch strings.Join(args, "\x00") {
+		case strings.Join([]string{"agent-deck", "session", "show", "active-ref", "--json"}, "\x00"):
+			return RunResult{ExitCode: 0, Stdout: `{"id":"active-1","title":"active","status":"waiting","path":"/tmp"}`}, nil
+		case strings.Join([]string{"agent-deck", "session", "show", "missing-ref", "--json"}, "\x00"):
+			return RunResult{ExitCode: 1, Stderr: "not found"}, nil
+		case strings.Join([]string{"agent-deck", "session", "show", "stopped-ref", "--json"}, "\x00"):
+			return RunResult{ExitCode: 0, Stdout: `{"id":"stopped-1","title":"stopped","status":"stopped","path":"/tmp"}`}, nil
+		case strings.Join([]string{"agent-deck", "session", "start", "--json", "stopped-1"}, "\x00"):
+			return RunResult{ExitCode: 0}, nil
+		case strings.Join([]string{"agent-deck", "session", "show", "stopped-1", "--json"}, "\x00"):
+			return RunResult{ExitCode: 0, Stdout: `{"id":"stopped-1","title":"stopped","status":"waiting","path":"/tmp"}`}, nil
+		default:
+			t.Fatalf("unexpected command args: %v", args)
+			return RunResult{}, nil
+		}
+	}}
+	service := newService(Options{
+		MailboxServiceFactory: fakeMailboxServiceFactory{service: &fakeMailboxService{t: t}},
+		CommandRunner:         commandRunner,
+	})
+	service.state.autoBindAttempted = true
+
+	output := callServiceTool(t, service, "agent_deck_require_session", map[string]any{
+		"sessions": []string{"active-ref", "missing-ref", "stopped-ref"},
+		"workdir":  "/tmp",
+	})
+	results, ok := output["results"].([]any)
+	if !ok {
+		t.Fatalf("results = %#v, want ordered array", output["results"])
+	}
+	if len(results) != 3 {
+		t.Fatalf("results length = %d, want 3", len(results))
+	}
+
+	active, ok := results[0].(map[string]any)
+	if !ok {
+		t.Fatalf("first result = %#v, want map", results[0])
+	}
+	if got := active["status"]; got != "ready" {
+		t.Fatalf("first result status = %v, want ready", got)
+	}
+	if got := active["session_ref"]; got != "active-ref" {
+		t.Fatalf("first result session_ref = %v, want active-ref", got)
+	}
+	if got := active["started_session"]; got != false {
+		t.Fatalf("first result started_session = %v, want false", got)
+	}
+
+	missing, ok := results[1].(map[string]any)
+	if !ok {
+		t.Fatalf("second result = %#v, want map", results[1])
+	}
+	if got := missing["status"]; got != "error" {
+		t.Fatalf("second result status = %v, want error", got)
+	}
+	if got := missing["session_ref"]; got != "missing-ref" {
+		t.Fatalf("second result session_ref = %v, want missing-ref", got)
+	}
+	if got, ok := missing["error"].(string); !ok || !strings.Contains(got, "target session not found") {
+		t.Fatalf("second result error = %#v, want missing-target error", missing["error"])
+	}
+
+	stopped, ok := results[2].(map[string]any)
+	if !ok {
+		t.Fatalf("third result = %#v, want map", results[2])
+	}
+	if got := stopped["status"]; got != "ready" {
+		t.Fatalf("third result status = %v, want ready", got)
+	}
+	if got := stopped["started_session"]; got != true {
+		t.Fatalf("third result started_session = %v, want true", got)
+	}
+	if got := len(commandRunner.Calls()); got != 5 {
+		t.Fatalf("command calls = %d, want 5", got)
+	}
+}
+
+func TestAgentDeckRequireSessionBatchValidatesInput(t *testing.T) {
+	service := newService(Options{
+		MailboxServiceFactory: fakeMailboxServiceFactory{service: &fakeMailboxService{t: t}},
+		CommandRunner: &fakeRunner{t: t, handler: func(args []string, input string) (RunResult, error) {
+			t.Fatalf("unexpected command args: %v", args)
+			return RunResult{}, nil
+		}},
+	})
+	service.state.autoBindAttempted = true
+
+	for _, test := range []struct {
+		name string
+		args map[string]any
+		want string
+	}{
+		{name: "empty batch", args: map[string]any{"sessions": []string{}, "workdir": "/tmp"}, want: "sessions must contain at least one session"},
+		{name: "combined inputs", args: map[string]any{"session_ref": "worker-a", "sessions": []string{"worker-b"}, "workdir": "/tmp"}, want: "sessions cannot be combined"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			err := callServiceToolExpectError(t, service, "agent_deck_require_session", test.args)
+			if err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("agent_deck_require_session error = %v, want %q", err, test.want)
+			}
+		})
+	}
+}
+
 func TestAgentDeckRequireSessionRejectsStartupInstruction(t *testing.T) {
 	service := newService(Options{
 		MailboxServiceFactory: fakeMailboxServiceFactory{service: &fakeMailboxService{t: t}},
@@ -2330,6 +2439,24 @@ func TestAgentDeckRequireSessionRequiresExplicitWorkdir(t *testing.T) {
 	})
 	if err == nil || !strings.Contains(err.Error(), "workdir") {
 		t.Fatalf("agent_deck_require_session error = %v, want workdir validation", err)
+	}
+}
+
+func TestAgentDeckRequireSessionValidatesTargetBeforeWorkdir(t *testing.T) {
+	service := newService(Options{
+		MailboxServiceFactory: fakeMailboxServiceFactory{service: &fakeMailboxService{t: t}},
+		CommandRunner: &fakeRunner{t: t, handler: func(args []string, input string) (RunResult, error) {
+			t.Fatalf("unexpected command args: %v", args)
+			return RunResult{}, nil
+		}},
+	})
+	service.state.autoBindAttempted = true
+
+	err := callServiceToolExpectError(t, service, "agent_deck_require_session", map[string]any{
+		"workdir": "/path/that/does/not/exist",
+	})
+	if err == nil || !strings.Contains(err.Error(), "session_id or session_ref is required") {
+		t.Fatalf("agent_deck_require_session error = %v, want missing target validation", err)
 	}
 }
 

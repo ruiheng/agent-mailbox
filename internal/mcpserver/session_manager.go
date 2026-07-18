@@ -832,14 +832,20 @@ func (m *sessionManager) createSession(ctx context.Context, input agentDeckCreat
 }
 
 func (m *sessionManager) requireSession(ctx context.Context, input agentDeckRequireSessionInput) (map[string]any, error) {
-	identifier := firstNonEmpty(input.SessionID, input.SessionRef)
-	if identifier == "" {
+	if firstNonEmpty(input.SessionID, input.SessionRef) == "" {
 		return nil, errors.New("session_id or session_ref is required when requiring a target session")
 	}
-
 	workdir, err := canonicalizeTargetWorkdir(input.Workdir, "requiring")
 	if err != nil {
 		return nil, err
+	}
+	return m.requireSessionWithCanonicalWorkdir(ctx, input, workdir)
+}
+
+func (m *sessionManager) requireSessionWithCanonicalWorkdir(ctx context.Context, input agentDeckRequireSessionInput, workdir string) (map[string]any, error) {
+	identifier := firstNonEmpty(input.SessionID, input.SessionRef)
+	if identifier == "" {
+		return nil, errors.New("session_id or session_ref is required when requiring a target session")
 	}
 
 	data, err := m.resolveSessionShow(ctx, identifier, ensureSessionShowTimeout)

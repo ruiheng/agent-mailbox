@@ -276,6 +276,11 @@ use it for task payloads or normal wakeups.
 session; it resolves `session_id` or `session_ref`, verifies the existing
 session already belongs to the explicit `workdir`, and starts it if needed.
 `mailbox_send` remains transport-only and does not create downstream sessions.
+Pass `sessions` as a non-empty array of session IDs or refs to require multiple
+sessions in one call. All batch items use the same explicit `workdir`, return
+ordered `results`, and
+report a per-session `error` without preventing the other sessions from being
+required.
 
 `agent_deck_resolve_session` is read-only. Pass one `session` for its original
 single-session response, or pass `sessions` as a non-empty array to resolve
