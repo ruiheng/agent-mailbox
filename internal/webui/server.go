@@ -16,7 +16,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/ruiheng/agent-mailbox/internal/mailbox"
+	"github.com/ruiheng/waypost/internal/waypost"
 )
 
 const (
@@ -39,7 +39,7 @@ type Server struct {
 	stateDir string
 	group    string
 	mu       sync.Mutex
-	runtime  *mailbox.Runtime
+	runtime  *waypost.Runtime
 }
 
 func Run(ctx context.Context, opts Options) error {
@@ -62,7 +62,7 @@ func Run(ctx context.Context, opts Options) error {
 	}
 
 	webURL := "http://" + listener.Addr().String()
-	writeLine(opts.Stdout, "agent-mailbox group web listening on "+webURL)
+	writeLine(opts.Stdout, "waypost group web listening on "+webURL)
 	if listensBeyondLoopback(listen) {
 		writeLine(opts.Stdout, "warning: group web read-only UI is listening beyond loopback")
 	}
@@ -227,13 +227,13 @@ func (s *Server) Close() error {
 	return err
 }
 
-func (s *Server) mailboxRuntime(ctx context.Context) (*mailbox.Runtime, error) {
+func (s *Server) waypostRuntime(ctx context.Context) (*waypost.Runtime, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.runtime != nil {
 		return s.runtime, nil
 	}
-	runtime, err := mailbox.OpenRuntime(ctx, s.stateDir)
+	runtime, err := waypost.OpenRuntime(ctx, s.stateDir)
 	if err != nil {
 		return nil, err
 	}
@@ -260,7 +260,7 @@ func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleGroups(w http.ResponseWriter, r *http.Request) {
-	runtime, err := s.mailboxRuntime(r.Context())
+	runtime, err := s.waypostRuntime(r.Context())
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return
@@ -294,15 +294,15 @@ func (s *Server) handleGroupPath(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleTranscript(w http.ResponseWriter, r *http.Request, groupAddress string) {
-	runtime, err := s.mailboxRuntime(r.Context())
+	runtime, err := s.waypostRuntime(r.Context())
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
 
-	messages, err := runtime.Store().ListGroupTranscript(r.Context(), mailbox.GroupTranscriptParams{Address: groupAddress})
+	messages, err := runtime.Store().ListGroupTranscript(r.Context(), waypost.GroupTranscriptParams{Address: groupAddress})
 	if err != nil {
-		writeError(w, statusForMailboxError(err), err)
+		writeError(w, statusForWaypostError(err), err)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
@@ -350,12 +350,12 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request, groupAddre
 	}
 }
 
-func (s *Server) transcript(ctx context.Context, groupAddress string) ([]mailbox.GroupTranscriptMessage, error) {
-	runtime, err := s.mailboxRuntime(ctx)
+func (s *Server) transcript(ctx context.Context, groupAddress string) ([]waypost.GroupTranscriptMessage, error) {
+	runtime, err := s.waypostRuntime(ctx)
 	if err != nil {
 		return nil, err
 	}
-	return runtime.Store().ListGroupTranscript(ctx, mailbox.GroupTranscriptParams{Address: groupAddress})
+	return runtime.Store().ListGroupTranscript(ctx, waypost.GroupTranscriptParams{Address: groupAddress})
 }
 
 func splitGroupAction(escapedPath string) (string, string, bool) {
@@ -377,7 +377,7 @@ func splitGroupAction(escapedPath string) (string, string, bool) {
 	return group, action, group != "" && action != ""
 }
 
-func messagesAfter(messages []mailbox.GroupTranscriptMessage, after string) []mailbox.GroupTranscriptMessage {
+func messagesAfter(messages []waypost.GroupTranscriptMessage, after string) []waypost.GroupTranscriptMessage {
 	if after == "" {
 		return messages
 	}
@@ -408,8 +408,8 @@ func writeSSE(w io.Writer, event string, value any) {
 	fmt.Fprintf(w, "event: %s\ndata: %s\n\n", event, body)
 }
 
-func statusForMailboxError(err error) int {
-	if errors.Is(err, mailbox.ErrGroupNotFound) {
+func statusForWaypostError(err error) int {
+	if errors.Is(err, waypost.ErrGroupNotFound) {
 		return http.StatusNotFound
 	}
 	return http.StatusBadRequest

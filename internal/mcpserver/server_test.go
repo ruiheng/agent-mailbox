@@ -18,38 +18,38 @@ import (
 
 	"github.com/google/jsonschema-go/jsonschema"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
-	"github.com/ruiheng/agent-mailbox/internal/mailbox"
+	"github.com/ruiheng/waypost/internal/waypost"
 )
 
-type fakeMailboxService struct {
+type fakeWaypostService struct {
 	t *testing.T
 
-	sendFunc                  func(context.Context, mailbox.SendParams) (mailbox.SendResult, error)
-	listFunc                  func(context.Context, mailbox.ListParams) ([]mailbox.ListedDelivery, error)
-	listGroupMessagesFunc     func(context.Context, mailbox.GroupListParams) ([]mailbox.GroupListedMessage, error)
-	waitGroupMessageFunc      func(context.Context, mailbox.GroupWaitParams) (mailbox.GroupListedMessage, error)
-	receiveGroupMessageFunc   func(context.Context, mailbox.GroupReceiveParams) (mailbox.GroupReceivedMessage, error)
-	createGroupFunc           func(context.Context, string) (mailbox.GroupRecord, error)
-	addGroupMemberFunc        func(context.Context, string, string) (mailbox.GroupMembershipRecord, error)
-	removeGroupMemberFunc     func(context.Context, string, string) (mailbox.GroupMembershipRecord, error)
-	listGroupMembersFunc      func(context.Context, string) ([]mailbox.GroupMembershipRecord, error)
-	addGroupSubscriberFunc    func(context.Context, string, string, string) (mailbox.GroupNotificationSubscriberRecord, error)
-	removeGroupSubscriberFunc func(context.Context, string, string) (mailbox.GroupNotificationSubscriberRecord, error)
-	listGroupSubscribersFunc  func(context.Context, string) ([]mailbox.GroupNotificationSubscriberRecord, error)
-	inspectAddressFunc        func(context.Context, string) (mailbox.AddressInspection, error)
-	listClaimableFunc         func(context.Context, []string) ([]mailbox.ClaimableAddress, error)
-	receiveBatchFunc          func(context.Context, mailbox.ReceiveBatchParams) (mailbox.ReceiveResult, error)
-	receiveBatchWithTTLFunc   func(context.Context, mailbox.ReceiveBatchParams, time.Duration) (mailbox.ReceiveResult, error)
-	waitFunc                  func(context.Context, mailbox.WaitParams) (mailbox.ListedDelivery, error)
-	readMessagesFunc          func(context.Context, []string) ([]mailbox.ReadMessage, error)
-	readLatestFunc            func(context.Context, []string, string, int) ([]mailbox.ReadDelivery, bool, error)
-	readDeliveriesFunc        func(context.Context, []string) ([]mailbox.ReadDelivery, error)
-	ackFunc                   func(context.Context, string, string) (mailbox.DeliveryTransitionResult, error)
-	renewFunc                 func(context.Context, string, string, time.Duration) (mailbox.LeaseRenewResult, error)
-	releaseFunc               func(context.Context, string, string) (mailbox.DeliveryTransitionResult, error)
-	deferFunc                 func(context.Context, string, string, time.Time) (mailbox.DeliveryTransitionResult, error)
-	undeferFunc               func(context.Context, string) (mailbox.DeliveryTransitionResult, error)
-	failFunc                  func(context.Context, string, string, string) (mailbox.DeliveryTransitionResult, error)
+	sendFunc                  func(context.Context, waypost.SendParams) (waypost.SendResult, error)
+	listFunc                  func(context.Context, waypost.ListParams) ([]waypost.ListedDelivery, error)
+	listGroupMessagesFunc     func(context.Context, waypost.GroupListParams) ([]waypost.GroupListedMessage, error)
+	waitGroupMessageFunc      func(context.Context, waypost.GroupWaitParams) (waypost.GroupListedMessage, error)
+	receiveGroupMessageFunc   func(context.Context, waypost.GroupReceiveParams) (waypost.GroupReceivedMessage, error)
+	createGroupFunc           func(context.Context, string) (waypost.GroupRecord, error)
+	addGroupMemberFunc        func(context.Context, string, string) (waypost.GroupMembershipRecord, error)
+	removeGroupMemberFunc     func(context.Context, string, string) (waypost.GroupMembershipRecord, error)
+	listGroupMembersFunc      func(context.Context, string) ([]waypost.GroupMembershipRecord, error)
+	addGroupSubscriberFunc    func(context.Context, string, string, string) (waypost.GroupNotificationSubscriberRecord, error)
+	removeGroupSubscriberFunc func(context.Context, string, string) (waypost.GroupNotificationSubscriberRecord, error)
+	listGroupSubscribersFunc  func(context.Context, string) ([]waypost.GroupNotificationSubscriberRecord, error)
+	inspectAddressFunc        func(context.Context, string) (waypost.AddressInspection, error)
+	listClaimableFunc         func(context.Context, []string) ([]waypost.ClaimableAddress, error)
+	receiveBatchFunc          func(context.Context, waypost.ReceiveBatchParams) (waypost.ReceiveResult, error)
+	receiveBatchWithTTLFunc   func(context.Context, waypost.ReceiveBatchParams, time.Duration) (waypost.ReceiveResult, error)
+	waitFunc                  func(context.Context, waypost.WaitParams) (waypost.ListedDelivery, error)
+	readMessagesFunc          func(context.Context, []string) ([]waypost.ReadMessage, error)
+	readLatestFunc            func(context.Context, []string, string, int) ([]waypost.ReadDelivery, bool, error)
+	readDeliveriesFunc        func(context.Context, []string) ([]waypost.ReadDelivery, error)
+	ackFunc                   func(context.Context, string, string) (waypost.DeliveryTransitionResult, error)
+	renewFunc                 func(context.Context, string, string, time.Duration) (waypost.LeaseRenewResult, error)
+	releaseFunc               func(context.Context, string, string) (waypost.DeliveryTransitionResult, error)
+	deferFunc                 func(context.Context, string, string, time.Time) (waypost.DeliveryTransitionResult, error)
+	undeferFunc               func(context.Context, string) (waypost.DeliveryTransitionResult, error)
+	failFunc                  func(context.Context, string, string, string) (waypost.DeliveryTransitionResult, error)
 }
 
 func TestAgentDeckCreateSessionSchemaRequiresWorkdir(t *testing.T) {
@@ -112,8 +112,8 @@ func TestAgentDeckRequireSessionSchemaOmitsCreateOnlyFields(t *testing.T) {
 	}
 }
 
-func TestMailboxSendSchemaExposesGroup(t *testing.T) {
-	schema, err := jsonschema.For[mailboxSendInput](nil)
+func TestWaypostSendSchemaExposesGroup(t *testing.T) {
+	schema, err := jsonschema.For[waypostSendInput](nil)
 	if err != nil {
 		t.Fatalf("jsonschema.For() error = %v", err)
 	}
@@ -125,8 +125,8 @@ func TestMailboxSendSchemaExposesGroup(t *testing.T) {
 	}
 }
 
-func TestMailboxRecvSchemaOmitsTimeout(t *testing.T) {
-	schema, err := jsonschema.For[mailboxRecvInput](nil)
+func TestWaypostRecvSchemaOmitsTimeout(t *testing.T) {
+	schema, err := jsonschema.For[waypostRecvInput](nil)
 	if err != nil {
 		t.Fatalf("jsonschema.For() error = %v", err)
 	}
@@ -138,8 +138,8 @@ func TestMailboxRecvSchemaOmitsTimeout(t *testing.T) {
 	}
 }
 
-func TestMailboxClaimHistorySchemaExposesRecoveryFields(t *testing.T) {
-	schema, err := jsonschema.For[mailboxClaimHistoryInput](nil)
+func TestWaypostClaimHistorySchemaExposesRecoveryFields(t *testing.T) {
+	schema, err := jsonschema.For[waypostClaimHistoryInput](nil)
 	if err != nil {
 		t.Fatalf("jsonschema.For() error = %v", err)
 	}
@@ -150,8 +150,8 @@ func TestMailboxClaimHistorySchemaExposesRecoveryFields(t *testing.T) {
 	}
 }
 
-func TestMailboxGroupAddSubscriberSchemaRequiresPerson(t *testing.T) {
-	schema, err := jsonschema.For[mailboxGroupSubscriberInput](nil)
+func TestWaypostGroupAddSubscriberSchemaRequiresPerson(t *testing.T) {
+	schema, err := jsonschema.For[waypostGroupSubscriberInput](nil)
 	if err != nil {
 		t.Fatalf("jsonschema.For() error = %v", err)
 	}
@@ -160,8 +160,8 @@ func TestMailboxGroupAddSubscriberSchemaRequiresPerson(t *testing.T) {
 	}
 }
 
-func TestMailboxGroupRemoveSubscriberSchemaOmitsPerson(t *testing.T) {
-	schema, err := jsonschema.For[mailboxGroupSubscriberRemoveInput](nil)
+func TestWaypostGroupRemoveSubscriberSchemaOmitsPerson(t *testing.T) {
+	schema, err := jsonschema.For[waypostGroupSubscriberRemoveInput](nil)
 	if err != nil {
 		t.Fatalf("jsonschema.For() error = %v", err)
 	}
@@ -170,8 +170,8 @@ func TestMailboxGroupRemoveSubscriberSchemaOmitsPerson(t *testing.T) {
 	}
 }
 
-func TestMailboxUndeferSchemaExposesDeliveryID(t *testing.T) {
-	schema, err := jsonschema.For[mailboxUndeferInput](nil)
+func TestWaypostUndeferSchemaExposesDeliveryID(t *testing.T) {
+	schema, err := jsonschema.For[waypostUndeferInput](nil)
 	if err != nil {
 		t.Fatalf("jsonschema.For() error = %v", err)
 	}
@@ -180,105 +180,105 @@ func TestMailboxUndeferSchemaExposesDeliveryID(t *testing.T) {
 	}
 }
 
-func (f *fakeMailboxService) Send(ctx context.Context, params mailbox.SendParams) (mailbox.SendResult, error) {
+func (f *fakeWaypostService) Send(ctx context.Context, params waypost.SendParams) (waypost.SendResult, error) {
 	if f.sendFunc == nil {
 		f.t.Fatalf("unexpected Send call: %+v", params)
 	}
 	return f.sendFunc(ctx, params)
 }
 
-func (f *fakeMailboxService) List(ctx context.Context, params mailbox.ListParams) ([]mailbox.ListedDelivery, error) {
+func (f *fakeWaypostService) List(ctx context.Context, params waypost.ListParams) ([]waypost.ListedDelivery, error) {
 	if f.listFunc == nil {
-		return []mailbox.ListedDelivery{}, nil
+		return []waypost.ListedDelivery{}, nil
 	}
 	return f.listFunc(ctx, params)
 }
 
-func (f *fakeMailboxService) ListGroupMessages(ctx context.Context, params mailbox.GroupListParams) ([]mailbox.GroupListedMessage, error) {
+func (f *fakeWaypostService) ListGroupMessages(ctx context.Context, params waypost.GroupListParams) ([]waypost.GroupListedMessage, error) {
 	if f.listGroupMessagesFunc == nil {
 		f.t.Fatalf("unexpected ListGroupMessages call: %+v", params)
 	}
 	return f.listGroupMessagesFunc(ctx, params)
 }
 
-func (f *fakeMailboxService) WaitGroupMessage(ctx context.Context, params mailbox.GroupWaitParams) (mailbox.GroupListedMessage, error) {
+func (f *fakeWaypostService) WaitGroupMessage(ctx context.Context, params waypost.GroupWaitParams) (waypost.GroupListedMessage, error) {
 	if f.waitGroupMessageFunc == nil {
 		f.t.Fatalf("unexpected WaitGroupMessage call: %+v", params)
 	}
 	return f.waitGroupMessageFunc(ctx, params)
 }
 
-func (f *fakeMailboxService) ReceiveGroupMessage(ctx context.Context, params mailbox.GroupReceiveParams) (mailbox.GroupReceivedMessage, error) {
+func (f *fakeWaypostService) ReceiveGroupMessage(ctx context.Context, params waypost.GroupReceiveParams) (waypost.GroupReceivedMessage, error) {
 	if f.receiveGroupMessageFunc == nil {
 		f.t.Fatalf("unexpected ReceiveGroupMessage call: %+v", params)
 	}
 	return f.receiveGroupMessageFunc(ctx, params)
 }
 
-func (f *fakeMailboxService) CreateGroup(ctx context.Context, groupAddress string) (mailbox.GroupRecord, error) {
+func (f *fakeWaypostService) CreateGroup(ctx context.Context, groupAddress string) (waypost.GroupRecord, error) {
 	if f.createGroupFunc == nil {
 		f.t.Fatalf("unexpected CreateGroup call: %q", groupAddress)
 	}
 	return f.createGroupFunc(ctx, groupAddress)
 }
 
-func (f *fakeMailboxService) AddGroupMember(ctx context.Context, groupAddress, person string) (mailbox.GroupMembershipRecord, error) {
+func (f *fakeWaypostService) AddGroupMember(ctx context.Context, groupAddress, person string) (waypost.GroupMembershipRecord, error) {
 	if f.addGroupMemberFunc == nil {
 		f.t.Fatalf("unexpected AddGroupMember call: group=%q person=%q", groupAddress, person)
 	}
 	return f.addGroupMemberFunc(ctx, groupAddress, person)
 }
 
-func (f *fakeMailboxService) RemoveGroupMember(ctx context.Context, groupAddress, person string) (mailbox.GroupMembershipRecord, error) {
+func (f *fakeWaypostService) RemoveGroupMember(ctx context.Context, groupAddress, person string) (waypost.GroupMembershipRecord, error) {
 	if f.removeGroupMemberFunc == nil {
 		f.t.Fatalf("unexpected RemoveGroupMember call: group=%q person=%q", groupAddress, person)
 	}
 	return f.removeGroupMemberFunc(ctx, groupAddress, person)
 }
 
-func (f *fakeMailboxService) ListGroupMembers(ctx context.Context, groupAddress string) ([]mailbox.GroupMembershipRecord, error) {
+func (f *fakeWaypostService) ListGroupMembers(ctx context.Context, groupAddress string) ([]waypost.GroupMembershipRecord, error) {
 	if f.listGroupMembersFunc == nil {
 		f.t.Fatalf("unexpected ListGroupMembers call: %q", groupAddress)
 	}
 	return f.listGroupMembersFunc(ctx, groupAddress)
 }
 
-func (f *fakeMailboxService) AddGroupNotificationSubscriber(ctx context.Context, groupAddress, notifyAddress, person string) (mailbox.GroupNotificationSubscriberRecord, error) {
+func (f *fakeWaypostService) AddGroupNotificationSubscriber(ctx context.Context, groupAddress, notifyAddress, person string) (waypost.GroupNotificationSubscriberRecord, error) {
 	if f.addGroupSubscriberFunc == nil {
 		f.t.Fatalf("unexpected AddGroupNotificationSubscriber call: group=%q notify=%q person=%q", groupAddress, notifyAddress, person)
 	}
 	return f.addGroupSubscriberFunc(ctx, groupAddress, notifyAddress, person)
 }
 
-func (f *fakeMailboxService) RemoveGroupNotificationSubscriber(ctx context.Context, groupAddress, notifyAddress string) (mailbox.GroupNotificationSubscriberRecord, error) {
+func (f *fakeWaypostService) RemoveGroupNotificationSubscriber(ctx context.Context, groupAddress, notifyAddress string) (waypost.GroupNotificationSubscriberRecord, error) {
 	if f.removeGroupSubscriberFunc == nil {
 		f.t.Fatalf("unexpected RemoveGroupNotificationSubscriber call: group=%q notify=%q", groupAddress, notifyAddress)
 	}
 	return f.removeGroupSubscriberFunc(ctx, groupAddress, notifyAddress)
 }
 
-func (f *fakeMailboxService) ListGroupNotificationSubscribers(ctx context.Context, groupAddress string) ([]mailbox.GroupNotificationSubscriberRecord, error) {
+func (f *fakeWaypostService) ListGroupNotificationSubscribers(ctx context.Context, groupAddress string) ([]waypost.GroupNotificationSubscriberRecord, error) {
 	if f.listGroupSubscribersFunc == nil {
 		return nil, nil
 	}
 	return f.listGroupSubscribersFunc(ctx, groupAddress)
 }
 
-func (f *fakeMailboxService) InspectAddress(ctx context.Context, address string) (mailbox.AddressInspection, error) {
+func (f *fakeWaypostService) InspectAddress(ctx context.Context, address string) (waypost.AddressInspection, error) {
 	if f.inspectAddressFunc == nil {
 		f.t.Fatalf("unexpected InspectAddress call: %q", address)
 	}
 	return f.inspectAddressFunc(ctx, address)
 }
 
-func (f *fakeMailboxService) ListClaimableAddresses(ctx context.Context, addresses []string) ([]mailbox.ClaimableAddress, error) {
+func (f *fakeWaypostService) ListClaimableAddresses(ctx context.Context, addresses []string) ([]waypost.ClaimableAddress, error) {
 	if f.listClaimableFunc == nil {
-		return []mailbox.ClaimableAddress{}, nil
+		return []waypost.ClaimableAddress{}, nil
 	}
 	return f.listClaimableFunc(ctx, addresses)
 }
 
-func (f *fakeMailboxService) ReceiveBatchWithLeaseTTL(ctx context.Context, params mailbox.ReceiveBatchParams, ttl time.Duration) (mailbox.ReceiveResult, error) {
+func (f *fakeWaypostService) ReceiveBatchWithLeaseTTL(ctx context.Context, params waypost.ReceiveBatchParams, ttl time.Duration) (waypost.ReceiveResult, error) {
 	if f.receiveBatchWithTTLFunc != nil {
 		return f.receiveBatchWithTTLFunc(ctx, params, ttl)
 	}
@@ -288,32 +288,32 @@ func (f *fakeMailboxService) ReceiveBatchWithLeaseTTL(ctx context.Context, param
 	return f.receiveBatchFunc(ctx, params)
 }
 
-func (f *fakeMailboxService) Wait(ctx context.Context, params mailbox.WaitParams) (mailbox.ListedDelivery, error) {
+func (f *fakeWaypostService) Wait(ctx context.Context, params waypost.WaitParams) (waypost.ListedDelivery, error) {
 	if f.waitFunc == nil {
 		f.t.Fatalf("unexpected Wait call: %+v", params)
 	}
 	return f.waitFunc(ctx, params)
 }
 
-func (f *fakeMailboxService) ReadMessages(ctx context.Context, messageIDs []string) ([]mailbox.ReadMessage, error) {
+func (f *fakeWaypostService) ReadMessages(ctx context.Context, messageIDs []string) ([]waypost.ReadMessage, error) {
 	if f.readMessagesFunc == nil {
 		f.t.Fatalf("unexpected ReadMessages call: %v", messageIDs)
 	}
 	return f.readMessagesFunc(ctx, messageIDs)
 }
 
-func (f *fakeMailboxService) ReadLatestDeliveries(ctx context.Context, addresses []string, state string, limit int) ([]mailbox.ReadDelivery, bool, error) {
+func (f *fakeWaypostService) ReadLatestDeliveries(ctx context.Context, addresses []string, state string, limit int) ([]waypost.ReadDelivery, bool, error) {
 	if f.readLatestFunc == nil {
 		f.t.Fatalf("unexpected ReadLatestDeliveries call: addresses=%v state=%q limit=%d", addresses, state, limit)
 	}
 	return f.readLatestFunc(ctx, addresses, state, limit)
 }
 
-func (f *fakeMailboxService) ReadDeliveries(ctx context.Context, deliveryIDs []string) ([]mailbox.ReadDelivery, error) {
+func (f *fakeWaypostService) ReadDeliveries(ctx context.Context, deliveryIDs []string) ([]waypost.ReadDelivery, error) {
 	if f.readDeliveriesFunc == nil {
-		deliveries := make([]mailbox.ReadDelivery, 0, len(deliveryIDs))
+		deliveries := make([]waypost.ReadDelivery, 0, len(deliveryIDs))
 		for _, deliveryID := range deliveryIDs {
-			deliveries = append(deliveries, mailbox.ReadDelivery{
+			deliveries = append(deliveries, waypost.ReadDelivery{
 				DeliveryID: deliveryID,
 				State:      "queued",
 			})
@@ -323,97 +323,97 @@ func (f *fakeMailboxService) ReadDeliveries(ctx context.Context, deliveryIDs []s
 	return f.readDeliveriesFunc(ctx, deliveryIDs)
 }
 
-func (f *fakeMailboxService) Ack(ctx context.Context, deliveryID, leaseToken string) (mailbox.DeliveryTransitionResult, error) {
+func (f *fakeWaypostService) Ack(ctx context.Context, deliveryID, leaseToken string) (waypost.DeliveryTransitionResult, error) {
 	if f.ackFunc == nil {
 		f.t.Fatalf("unexpected Ack call: delivery=%q lease=%q", deliveryID, leaseToken)
 	}
 	return f.ackFunc(ctx, deliveryID, leaseToken)
 }
 
-func (f *fakeMailboxService) Renew(ctx context.Context, deliveryID, leaseToken string, extendBy time.Duration) (mailbox.LeaseRenewResult, error) {
+func (f *fakeWaypostService) Renew(ctx context.Context, deliveryID, leaseToken string, extendBy time.Duration) (waypost.LeaseRenewResult, error) {
 	if f.renewFunc == nil {
 		f.t.Fatalf("unexpected Renew call: delivery=%q lease=%q extendBy=%s", deliveryID, leaseToken, extendBy)
 	}
 	return f.renewFunc(ctx, deliveryID, leaseToken, extendBy)
 }
 
-func (f *fakeMailboxService) Release(ctx context.Context, deliveryID, leaseToken string) (mailbox.DeliveryTransitionResult, error) {
+func (f *fakeWaypostService) Release(ctx context.Context, deliveryID, leaseToken string) (waypost.DeliveryTransitionResult, error) {
 	if f.releaseFunc == nil {
 		f.t.Fatalf("unexpected Release call: delivery=%q lease=%q", deliveryID, leaseToken)
 	}
 	return f.releaseFunc(ctx, deliveryID, leaseToken)
 }
 
-func (f *fakeMailboxService) Defer(ctx context.Context, deliveryID, leaseToken string, until time.Time) (mailbox.DeliveryTransitionResult, error) {
+func (f *fakeWaypostService) Defer(ctx context.Context, deliveryID, leaseToken string, until time.Time) (waypost.DeliveryTransitionResult, error) {
 	if f.deferFunc == nil {
 		f.t.Fatalf("unexpected Defer call: delivery=%q lease=%q until=%s", deliveryID, leaseToken, until)
 	}
 	return f.deferFunc(ctx, deliveryID, leaseToken, until)
 }
 
-func (f *fakeMailboxService) Undefer(ctx context.Context, deliveryID string) (mailbox.DeliveryTransitionResult, error) {
+func (f *fakeWaypostService) Undefer(ctx context.Context, deliveryID string) (waypost.DeliveryTransitionResult, error) {
 	if f.undeferFunc == nil {
 		f.t.Fatalf("unexpected Undefer call: delivery=%q", deliveryID)
 	}
 	return f.undeferFunc(ctx, deliveryID)
 }
 
-func (f *fakeMailboxService) Fail(ctx context.Context, deliveryID, leaseToken, reason string) (mailbox.DeliveryTransitionResult, error) {
+func (f *fakeWaypostService) Fail(ctx context.Context, deliveryID, leaseToken, reason string) (waypost.DeliveryTransitionResult, error) {
 	if f.failFunc == nil {
 		f.t.Fatalf("unexpected Fail call: delivery=%q lease=%q reason=%q", deliveryID, leaseToken, reason)
 	}
 	return f.failFunc(ctx, deliveryID, leaseToken, reason)
 }
 
-type fakeMailboxServiceFactory struct {
+type fakeWaypostServiceFactory struct {
 	service   any
 	openCount *int
 }
 
-func (f fakeMailboxServiceFactory) Open(context.Context) (any, func() error, error) {
+func (f fakeWaypostServiceFactory) Open(context.Context) (any, func() error, error) {
 	if f.openCount != nil {
 		(*f.openCount)++
 	}
 	return f.service, func() error { return nil }, nil
 }
 
-type failOpenMailboxServiceFactory struct {
+type failOpenWaypostServiceFactory struct {
 	t *testing.T
 }
 
-func (f failOpenMailboxServiceFactory) Open(context.Context) (any, func() error, error) {
-	f.t.Fatal("unexpected mailbox service open")
+func (f failOpenWaypostServiceFactory) Open(context.Context) (any, func() error, error) {
+	f.t.Fatal("unexpected waypost service open")
 	return nil, nil, nil
 }
 
-func TestDefaultMailboxServiceReusesRuntimeUntilServiceClose(t *testing.T) {
+func TestDefaultWaypostServiceReusesRuntimeUntilServiceClose(t *testing.T) {
 	service := newService(Options{
-		StateDir:              filepath.Join(t.TempDir(), "mailbox-state"),
+		StateDir:              filepath.Join(t.TempDir(), "waypost-state"),
 		CommandRunner:         &fakeRunner{t: t},
 		DisableWakeScheduler:  true,
 		DisableLeaseRenewLoop: true,
 	})
-	factory := service.mailboxServices.(*runtimeMailboxServiceFactory)
+	factory := service.waypostServices.(*runtimeWaypostServiceFactory)
 	closeCount := 0
-	factory.closeRuntime = func(runtime *mailbox.Runtime) error {
+	factory.closeRuntime = func(runtime *waypost.Runtime) error {
 		closeCount++
 		return runtime.Close()
 	}
 
-	first, err := withMailboxService[string, *mailbox.Operations](context.Background(), service.mailboxServices, func(ops *mailbox.Operations) (string, error) {
+	first, err := withWaypostService[string, *waypost.Operations](context.Background(), service.waypostServices, func(ops *waypost.Operations) (string, error) {
 		return fmt.Sprintf("%p", ops), nil
 	})
 	if err != nil {
 		t.Fatalf("first Open() error = %v", err)
 	}
-	second, err := withMailboxService[string, *mailbox.Operations](context.Background(), service.mailboxServices, func(ops *mailbox.Operations) (string, error) {
+	second, err := withWaypostService[string, *waypost.Operations](context.Background(), service.waypostServices, func(ops *waypost.Operations) (string, error) {
 		return fmt.Sprintf("%p", ops), nil
 	})
 	if err != nil {
 		t.Fatalf("second Open() error = %v", err)
 	}
 	if first != second {
-		t.Fatalf("mailbox service pointer changed: first=%s second=%s", first, second)
+		t.Fatalf("waypost service pointer changed: first=%s second=%s", first, second)
 	}
 	if closeCount != 0 {
 		t.Fatalf("runtime closes before Service.Close = %d, want 0", closeCount)
@@ -425,17 +425,17 @@ func TestDefaultMailboxServiceReusesRuntimeUntilServiceClose(t *testing.T) {
 	if closeCount != 1 {
 		t.Fatalf("runtime closes = %d, want 1", closeCount)
 	}
-	_, err = withMailboxService[string, *mailbox.Operations](context.Background(), service.mailboxServices, func(ops *mailbox.Operations) (string, error) {
+	_, err = withWaypostService[string, *waypost.Operations](context.Background(), service.waypostServices, func(ops *waypost.Operations) (string, error) {
 		return fmt.Sprintf("%p", ops), nil
 	})
-	if err == nil || !strings.Contains(err.Error(), "mailbox runtime is closed") {
+	if err == nil || !strings.Contains(err.Error(), "waypost runtime is closed") {
 		t.Fatalf("Open() after Service.Close error = %v, want closed runtime error", err)
 	}
 }
 
 func TestLegacyNewServerCanCloseService(t *testing.T) {
 	server := New(Options{
-		StateDir:              filepath.Join(t.TempDir(), "mailbox-state"),
+		StateDir:              filepath.Join(t.TempDir(), "waypost-state"),
 		CommandRunner:         &fakeRunner{t: t},
 		DisableWakeScheduler:  true,
 		DisableLeaseRenewLoop: true,
@@ -446,14 +446,14 @@ func TestLegacyNewServerCanCloseService(t *testing.T) {
 		t.Fatal("legacy server service was not registered")
 	}
 	service := value.(*Service)
-	factory := service.mailboxServices.(*runtimeMailboxServiceFactory)
+	factory := service.waypostServices.(*runtimeWaypostServiceFactory)
 	closeCount := 0
-	factory.closeRuntime = func(runtime *mailbox.Runtime) error {
+	factory.closeRuntime = func(runtime *waypost.Runtime) error {
 		closeCount++
 		return runtime.Close()
 	}
 
-	if _, err := withMailboxService[string, *mailbox.Operations](context.Background(), service.mailboxServices, func(ops *mailbox.Operations) (string, error) {
+	if _, err := withWaypostService[string, *waypost.Operations](context.Background(), service.waypostServices, func(ops *waypost.Operations) (string, error) {
 		return fmt.Sprintf("%p", ops), nil
 	}); err != nil {
 		t.Fatalf("Open() error = %v", err)
@@ -468,10 +468,10 @@ func TestLegacyNewServerCanCloseService(t *testing.T) {
 	if _, ok := legacyServerServices.Load(server); ok {
 		t.Fatal("legacy server service still registered after CloseServer")
 	}
-	_, err := withMailboxService[string, *mailbox.Operations](context.Background(), service.mailboxServices, func(ops *mailbox.Operations) (string, error) {
+	_, err := withWaypostService[string, *waypost.Operations](context.Background(), service.waypostServices, func(ops *waypost.Operations) (string, error) {
 		return fmt.Sprintf("%p", ops), nil
 	})
-	if err == nil || !strings.Contains(err.Error(), "mailbox runtime is closed") {
+	if err == nil || !strings.Contains(err.Error(), "waypost runtime is closed") {
 		t.Fatalf("Open() after CloseServer error = %v, want closed runtime error", err)
 	}
 }
@@ -551,7 +551,7 @@ func TestResolveWakeNotifyMessageUsesFixedWakeText(t *testing.T) {
 	if !strings.Contains(defaultNotifyMessage, "NOTICE:") {
 		t.Fatalf("defaultNotifyMessage = %q, want notification-only notice", defaultNotifyMessage)
 	}
-	if strings.Contains(defaultNotifyMessage, "check-agent-mail") || strings.Contains(defaultNotifyMessage, "requested action") {
+	if strings.Contains(defaultNotifyMessage, "check-agent-delivery") || strings.Contains(defaultNotifyMessage, "requested action") {
 		t.Fatalf("defaultNotifyMessage = %q, want no workflow action instruction", defaultNotifyMessage)
 	}
 
@@ -566,16 +566,16 @@ func TestResolveWakeNotifyMessageUsesFixedWakeText(t *testing.T) {
 	}
 }
 
-func TestMailboxSendNotifiesWorkerTarget(t *testing.T) {
-	mailboxService := &fakeMailboxService{t: t}
-	mailboxService.sendFunc = func(_ context.Context, params mailbox.SendParams) (mailbox.SendResult, error) {
+func TestWaypostSendNotifiesWorkerTarget(t *testing.T) {
+	waypostService := &fakeWaypostService{t: t}
+	waypostService.sendFunc = func(_ context.Context, params waypost.SendParams) (waypost.SendResult, error) {
 		if params.ToAddress != "agent-deck/target" || params.FromAddress != "agent-deck/self" || params.Subject != "delegate" {
 			t.Fatalf("send params = %+v", params)
 		}
 		if string(params.Body) != "body" {
 			t.Fatalf("send body = %q, want body", string(params.Body))
 		}
-		return mailbox.SendResult{DeliveryID: "dlv_1"}, nil
+		return waypost.SendResult{DeliveryID: "dlv_1"}, nil
 	}
 
 	commandRunner := &fakeRunner{t: t, handler: func(args []string, input string) (RunResult, error) {
@@ -597,7 +597,7 @@ func TestMailboxSendNotifiesWorkerTarget(t *testing.T) {
 	}}
 
 	service := newService(Options{
-		MailboxServiceFactory: fakeMailboxServiceFactory{service: mailboxService},
+		WaypostServiceFactory: fakeWaypostServiceFactory{service: waypostService},
 		CommandRunner:         commandRunner,
 		NotifyDelay:           -1,
 	})
@@ -605,7 +605,7 @@ func TestMailboxSendNotifiesWorkerTarget(t *testing.T) {
 	service.state.defaultSender = "agent-deck/self"
 	service.state.autoBindAttempted = true
 
-	output := callServiceTool(t, service, "mailbox_send", map[string]any{
+	output := callServiceTool(t, service, "waypost_send", map[string]any{
 		"to_address": "agent-deck/target",
 		"subject":    "delegate",
 		"body":       "body",
@@ -625,24 +625,24 @@ func TestMailboxSendNotifiesWorkerTarget(t *testing.T) {
 	}
 }
 
-func TestMailboxSendSkipsNotifyWhenDeliveryAlreadyClaimed(t *testing.T) {
-	mailboxService := &fakeMailboxService{t: t}
+func TestWaypostSendSkipsNotifyWhenDeliveryAlreadyClaimed(t *testing.T) {
+	waypostService := &fakeWaypostService{t: t}
 	openCount := 0
-	mailboxService.sendFunc = func(_ context.Context, params mailbox.SendParams) (mailbox.SendResult, error) {
-		return mailbox.SendResult{DeliveryID: "dlv_claimed"}, nil
+	waypostService.sendFunc = func(_ context.Context, params waypost.SendParams) (waypost.SendResult, error) {
+		return waypost.SendResult{DeliveryID: "dlv_claimed"}, nil
 	}
-	mailboxService.readDeliveriesFunc = func(_ context.Context, deliveryIDs []string) ([]mailbox.ReadDelivery, error) {
+	waypostService.readDeliveriesFunc = func(_ context.Context, deliveryIDs []string) ([]waypost.ReadDelivery, error) {
 		if !reflect.DeepEqual(deliveryIDs, []string{"dlv_claimed"}) {
 			t.Fatalf("ReadDeliveries ids = %v, want [dlv_claimed]", deliveryIDs)
 		}
-		return []mailbox.ReadDelivery{{
+		return []waypost.ReadDelivery{{
 			DeliveryID: "dlv_claimed",
 			State:      "leased",
 		}}, nil
 	}
 
 	service := newService(Options{
-		MailboxServiceFactory: fakeMailboxServiceFactory{service: mailboxService, openCount: &openCount},
+		WaypostServiceFactory: fakeWaypostServiceFactory{service: waypostService, openCount: &openCount},
 		CommandRunner: &fakeRunner{t: t, handler: func(args []string, input string) (RunResult, error) {
 			t.Fatalf("unexpected command call: %v", args)
 			return RunResult{}, nil
@@ -654,7 +654,7 @@ func TestMailboxSendSkipsNotifyWhenDeliveryAlreadyClaimed(t *testing.T) {
 	service.state.defaultSender = "agent-deck/self"
 	service.state.autoBindAttempted = true
 
-	output := callServiceTool(t, service, "mailbox_send", map[string]any{
+	output := callServiceTool(t, service, "waypost_send", map[string]any{
 		"to_address": "agent-deck/target",
 		"subject":    "delegate",
 		"body":       "body",
@@ -666,34 +666,34 @@ func TestMailboxSendSkipsNotifyWhenDeliveryAlreadyClaimed(t *testing.T) {
 	if got := output["notify_status"]; got != "skipped_already_claimed" {
 		t.Fatalf("notify_status = %v, want skipped_already_claimed", got)
 	}
-	if got := output["notify_scheme"]; got != "mailbox" {
-		t.Fatalf("notify_scheme = %v, want mailbox", got)
+	if got := output["notify_scheme"]; got != "waypost" {
+		t.Fatalf("notify_scheme = %v, want waypost", got)
 	}
 	if got := output["notify_error"]; got != nil {
 		t.Fatalf("notify_error = %v, want nil", got)
 	}
 	if openCount != 1 {
-		t.Fatalf("mailbox service opens = %d, want 1", openCount)
+		t.Fatalf("waypost service opens = %d, want 1", openCount)
 	}
 }
 
-func TestMailboxSendNotifyIgnoresRequestCancellationAfterSend(t *testing.T) {
+func TestWaypostSendNotifyIgnoresRequestCancellationAfterSend(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	mailboxService := &fakeMailboxService{t: t}
-	mailboxService.sendFunc = func(_ context.Context, params mailbox.SendParams) (mailbox.SendResult, error) {
+	waypostService := &fakeWaypostService{t: t}
+	waypostService.sendFunc = func(_ context.Context, params waypost.SendParams) (waypost.SendResult, error) {
 		cancel()
-		return mailbox.SendResult{DeliveryID: "dlv_cancelled"}, nil
+		return waypost.SendResult{DeliveryID: "dlv_cancelled"}, nil
 	}
-	mailboxService.readDeliveriesFunc = func(ctx context.Context, deliveryIDs []string) ([]mailbox.ReadDelivery, error) {
+	waypostService.readDeliveriesFunc = func(ctx context.Context, deliveryIDs []string) ([]waypost.ReadDelivery, error) {
 		if err := ctx.Err(); err != nil {
 			t.Fatalf("ReadDeliveries context error = %v, want nil", err)
 		}
 		if !reflect.DeepEqual(deliveryIDs, []string{"dlv_cancelled"}) {
 			t.Fatalf("ReadDeliveries ids = %v, want [dlv_cancelled]", deliveryIDs)
 		}
-		return []mailbox.ReadDelivery{{
+		return []waypost.ReadDelivery{{
 			DeliveryID: "dlv_cancelled",
 			State:      "queued",
 		}}, nil
@@ -712,7 +712,7 @@ func TestMailboxSendNotifyIgnoresRequestCancellationAfterSend(t *testing.T) {
 	}}
 
 	service := newService(Options{
-		MailboxServiceFactory: fakeMailboxServiceFactory{service: mailboxService},
+		WaypostServiceFactory: fakeWaypostServiceFactory{service: waypostService},
 		CommandRunner:         commandRunner,
 		NotifyDelay:           -1,
 	})
@@ -720,27 +720,27 @@ func TestMailboxSendNotifyIgnoresRequestCancellationAfterSend(t *testing.T) {
 	service.state.defaultSender = "agent-deck/self"
 	service.state.autoBindAttempted = true
 
-	output, err := service.sendMailboxMessage(ctx, mailboxSendInput{
+	output, err := service.sendWaypostMessage(ctx, waypostSendInput{
 		ToAddress: "agent-deck/target",
 		Subject:   "delegate",
 		Body:      "body",
 	})
 	if err != nil {
-		t.Fatalf("sendMailboxMessage error = %v", err)
+		t.Fatalf("sendWaypostMessage error = %v", err)
 	}
 	if got := output["notify_status"]; got != "sent" {
 		t.Fatalf("notify_status = %v, want sent", got)
 	}
 }
 
-func TestMailboxSendAllowsAgentDeckNotifyDisable(t *testing.T) {
-	mailboxService := &fakeMailboxService{t: t}
-	mailboxService.sendFunc = func(_ context.Context, params mailbox.SendParams) (mailbox.SendResult, error) {
-		return mailbox.SendResult{DeliveryID: "dlv_disabled"}, nil
+func TestWaypostSendAllowsAgentDeckNotifyDisable(t *testing.T) {
+	waypostService := &fakeWaypostService{t: t}
+	waypostService.sendFunc = func(_ context.Context, params waypost.SendParams) (waypost.SendResult, error) {
+		return waypost.SendResult{DeliveryID: "dlv_disabled"}, nil
 	}
 
 	service := newService(Options{
-		MailboxServiceFactory: fakeMailboxServiceFactory{service: mailboxService},
+		WaypostServiceFactory: fakeWaypostServiceFactory{service: waypostService},
 		CommandRunner: &fakeRunner{t: t, handler: func(args []string, input string) (RunResult, error) {
 			switch {
 			case strings.Join(args, "\x00") == strings.Join([]string{"agent-deck", "session", "show", "target", "--json"}, "\x00"):
@@ -755,7 +755,7 @@ func TestMailboxSendAllowsAgentDeckNotifyDisable(t *testing.T) {
 	service.state.defaultSender = "agent-deck/self"
 	service.state.autoBindAttempted = true
 
-	output := callServiceTool(t, service, "mailbox_send", map[string]any{
+	output := callServiceTool(t, service, "waypost_send", map[string]any{
 		"to_address":             "agent-deck/target",
 		"subject":                "delegate",
 		"body":                   "body",
@@ -776,24 +776,24 @@ func TestMailboxSendAllowsAgentDeckNotifyDisable(t *testing.T) {
 	}
 }
 
-func TestMailboxSendUsesExplicitFromAddressWithoutBoundState(t *testing.T) {
-	mailboxService := &fakeMailboxService{t: t}
-	mailboxService.sendFunc = func(_ context.Context, params mailbox.SendParams) (mailbox.SendResult, error) {
+func TestWaypostSendUsesExplicitFromAddressWithoutBoundState(t *testing.T) {
+	waypostService := &fakeWaypostService{t: t}
+	waypostService.sendFunc = func(_ context.Context, params waypost.SendParams) (waypost.SendResult, error) {
 		if params.FromAddress != "agent/sender" || params.ToAddress != "workflow/target" {
 			t.Fatalf("send params = %+v", params)
 		}
-		return mailbox.SendResult{DeliveryID: "dlv_explicit"}, nil
+		return waypost.SendResult{DeliveryID: "dlv_explicit"}, nil
 	}
 
 	service := newService(Options{
-		MailboxServiceFactory: fakeMailboxServiceFactory{service: mailboxService},
+		WaypostServiceFactory: fakeWaypostServiceFactory{service: waypostService},
 		CommandRunner: &fakeRunner{t: t, handler: func(args []string, input string) (RunResult, error) {
 			return RunResult{}, errors.New("auto-bind should not run for explicit sender")
 		}},
 		DisableWakeScheduler: true,
 	})
 
-	output := callServiceTool(t, service, "mailbox_send", map[string]any{
+	output := callServiceTool(t, service, "waypost_send", map[string]any{
 		"to_address":   "workflow/target",
 		"from_address": "agent/sender",
 		"subject":      "delegate",
@@ -807,17 +807,17 @@ func TestMailboxSendUsesExplicitFromAddressWithoutBoundState(t *testing.T) {
 	}
 }
 
-func TestMailboxSendGroupModeUsesGroupSendParams(t *testing.T) {
-	mailboxService := &fakeMailboxService{t: t}
-	mailboxService.sendFunc = func(_ context.Context, params mailbox.SendParams) (mailbox.SendResult, error) {
+func TestWaypostSendGroupModeUsesGroupSendParams(t *testing.T) {
+	waypostService := &fakeWaypostService{t: t}
+	waypostService.sendFunc = func(_ context.Context, params waypost.SendParams) (waypost.SendResult, error) {
 		if !params.Group {
 			t.Fatal("send group = false, want true")
 		}
 		if params.ToAddress != "group/review" || params.FromAddress != "agent/sender" || params.AsPerson != "alice" {
 			t.Fatalf("send params = %+v", params)
 		}
-		return mailbox.SendResult{
-			Mode:             mailbox.SendModeGroup,
+		return waypost.SendResult{
+			Mode:             waypost.SendModeGroup,
 			MessageID:        "msg_group",
 			GroupID:          "grp_1",
 			GroupAddress:     "group/review",
@@ -827,14 +827,14 @@ func TestMailboxSendGroupModeUsesGroupSendParams(t *testing.T) {
 	}
 
 	service := newService(Options{
-		MailboxServiceFactory: fakeMailboxServiceFactory{service: mailboxService},
+		WaypostServiceFactory: fakeWaypostServiceFactory{service: waypostService},
 		CommandRunner: &fakeRunner{t: t, handler: func(args []string, input string) (RunResult, error) {
 			return RunResult{}, errors.New("auto-bind should not run for explicit sender")
 		}},
 		DisableWakeScheduler: true,
 	})
 
-	output := callServiceTool(t, service, "mailbox_send", map[string]any{
+	output := callServiceTool(t, service, "waypost_send", map[string]any{
 		"to_address":   "group/review",
 		"from_address": "agent/sender",
 		"subject":      "group update",
@@ -843,8 +843,8 @@ func TestMailboxSendGroupModeUsesGroupSendParams(t *testing.T) {
 		"as_person":    " alice ",
 	})
 
-	if got := output["mode"]; got != mailbox.SendModeGroup {
-		t.Fatalf("mode = %v, want %q", got, mailbox.SendModeGroup)
+	if got := output["mode"]; got != waypost.SendModeGroup {
+		t.Fatalf("mode = %v, want %q", got, waypost.SendModeGroup)
 	}
 	if got := output["message_id"]; got != "msg_group" {
 		t.Fatalf("message_id = %v, want msg_group", got)
@@ -866,14 +866,14 @@ func TestMailboxSendGroupModeUsesGroupSendParams(t *testing.T) {
 	}
 }
 
-func TestMailboxSendGroupModeNotifiesSubscriber(t *testing.T) {
-	mailboxService := &fakeMailboxService{t: t}
-	mailboxService.sendFunc = func(_ context.Context, params mailbox.SendParams) (mailbox.SendResult, error) {
+func TestWaypostSendGroupModeNotifiesSubscriber(t *testing.T) {
+	waypostService := &fakeWaypostService{t: t}
+	waypostService.sendFunc = func(_ context.Context, params waypost.SendParams) (waypost.SendResult, error) {
 		if !params.Group {
 			t.Fatal("send group = false, want true")
 		}
-		return mailbox.SendResult{
-			Mode:                       mailbox.SendModeGroup,
+		return waypost.SendResult{
+			Mode:                       waypost.SendModeGroup,
 			MessageID:                  "msg_group",
 			GroupID:                    "grp_1",
 			GroupAddress:               "group/review",
@@ -882,7 +882,7 @@ func TestMailboxSendGroupModeNotifiesSubscriber(t *testing.T) {
 			MessageCreatedAt:           "2026-04-18T00:00:00Z",
 		}, nil
 	}
-	mailboxService.listGroupSubscribersFunc = func(_ context.Context, groupAddress string) ([]mailbox.GroupNotificationSubscriberRecord, error) {
+	waypostService.listGroupSubscribersFunc = func(_ context.Context, groupAddress string) ([]waypost.GroupNotificationSubscriberRecord, error) {
 		t.Fatalf("ListGroupNotificationSubscribers should not be called for group send notify: %q", groupAddress)
 		return nil, nil
 	}
@@ -905,12 +905,12 @@ func TestMailboxSendGroupModeNotifiesSubscriber(t *testing.T) {
 	}}
 
 	service := newService(Options{
-		MailboxServiceFactory: fakeMailboxServiceFactory{service: mailboxService},
+		WaypostServiceFactory: fakeWaypostServiceFactory{service: waypostService},
 		CommandRunner:         commandRunner,
 		DisableWakeScheduler:  true,
 	})
 
-	output := callServiceTool(t, service, "mailbox_send", map[string]any{
+	output := callServiceTool(t, service, "waypost_send", map[string]any{
 		"to_address":   "group/review",
 		"from_address": "agent-deck/expert",
 		"subject":      "expert post",
@@ -942,24 +942,24 @@ func TestMailboxSendGroupModeNotifiesSubscriber(t *testing.T) {
 	}
 }
 
-func TestMailboxSendGroupModeReportsNoSubscribersWhenSendQueuesNoNotifications(t *testing.T) {
-	mailboxService := &fakeMailboxService{t: t}
-	mailboxService.sendFunc = func(_ context.Context, params mailbox.SendParams) (mailbox.SendResult, error) {
-		return mailbox.SendResult{
-			Mode:             mailbox.SendModeGroup,
+func TestWaypostSendGroupModeReportsNoSubscribersWhenSendQueuesNoNotifications(t *testing.T) {
+	waypostService := &fakeWaypostService{t: t}
+	waypostService.sendFunc = func(_ context.Context, params waypost.SendParams) (waypost.SendResult, error) {
+		return waypost.SendResult{
+			Mode:             waypost.SendModeGroup,
 			MessageID:        "msg_group",
 			GroupID:          "grp_1",
 			GroupAddress:     "group/review",
 			MessageCreatedAt: "2026-04-18T00:00:00Z",
 		}, nil
 	}
-	mailboxService.listGroupSubscribersFunc = func(_ context.Context, groupAddress string) ([]mailbox.GroupNotificationSubscriberRecord, error) {
+	waypostService.listGroupSubscribersFunc = func(_ context.Context, groupAddress string) ([]waypost.GroupNotificationSubscriberRecord, error) {
 		t.Fatalf("ListGroupNotificationSubscribers should not be called for group send notify: %q", groupAddress)
 		return nil, nil
 	}
 
 	service := newService(Options{
-		MailboxServiceFactory: fakeMailboxServiceFactory{service: mailboxService},
+		WaypostServiceFactory: fakeWaypostServiceFactory{service: waypostService},
 		CommandRunner: &fakeRunner{t: t, handler: func(args []string, input string) (RunResult, error) {
 			t.Fatalf("unexpected command call: %v", args)
 			return RunResult{}, nil
@@ -967,7 +967,7 @@ func TestMailboxSendGroupModeReportsNoSubscribersWhenSendQueuesNoNotifications(t
 		DisableWakeScheduler: true,
 	})
 
-	output := callServiceTool(t, service, "mailbox_send", map[string]any{
+	output := callServiceTool(t, service, "waypost_send", map[string]any{
 		"to_address":   "group/review",
 		"from_address": "agent-deck/moderator",
 		"subject":      "moderator post",
@@ -982,27 +982,27 @@ func TestMailboxSendGroupModeReportsNoSubscribersWhenSendQueuesNoNotifications(t
 	}
 }
 
-func TestMailboxSendGroupModeReportsNoSubscribersForResolvedDefaultSender(t *testing.T) {
-	mailboxService := &fakeMailboxService{t: t}
-	mailboxService.sendFunc = func(_ context.Context, params mailbox.SendParams) (mailbox.SendResult, error) {
+func TestWaypostSendGroupModeReportsNoSubscribersForResolvedDefaultSender(t *testing.T) {
+	waypostService := &fakeWaypostService{t: t}
+	waypostService.sendFunc = func(_ context.Context, params waypost.SendParams) (waypost.SendResult, error) {
 		if params.FromAddress != "agent-deck/moderator" {
 			t.Fatalf("send from_address = %q, want resolved default sender", params.FromAddress)
 		}
-		return mailbox.SendResult{
-			Mode:             mailbox.SendModeGroup,
+		return waypost.SendResult{
+			Mode:             waypost.SendModeGroup,
 			MessageID:        "msg_group",
 			GroupID:          "grp_1",
 			GroupAddress:     "group/review",
 			MessageCreatedAt: "2026-04-18T00:00:00Z",
 		}, nil
 	}
-	mailboxService.listGroupSubscribersFunc = func(_ context.Context, groupAddress string) ([]mailbox.GroupNotificationSubscriberRecord, error) {
+	waypostService.listGroupSubscribersFunc = func(_ context.Context, groupAddress string) ([]waypost.GroupNotificationSubscriberRecord, error) {
 		t.Fatalf("ListGroupNotificationSubscribers should not be called for group send notify: %q", groupAddress)
 		return nil, nil
 	}
 
 	service := newService(Options{
-		MailboxServiceFactory: fakeMailboxServiceFactory{service: mailboxService},
+		WaypostServiceFactory: fakeWaypostServiceFactory{service: waypostService},
 		CommandRunner: &fakeRunner{t: t, handler: func(args []string, input string) (RunResult, error) {
 			t.Fatalf("unexpected command call: %v", args)
 			return RunResult{}, nil
@@ -1013,7 +1013,7 @@ func TestMailboxSendGroupModeReportsNoSubscribersForResolvedDefaultSender(t *tes
 	service.state.defaultSender = "agent-deck/moderator"
 	service.state.autoBindAttempted = true
 
-	output := callServiceTool(t, service, "mailbox_send", map[string]any{
+	output := callServiceTool(t, service, "waypost_send", map[string]any{
 		"to_address": "group/review",
 		"subject":    "moderator post",
 		"body":       "body",
@@ -1027,12 +1027,12 @@ func TestMailboxSendGroupModeReportsNoSubscribersForResolvedDefaultSender(t *tes
 	}
 }
 
-func TestMailboxSendGroupModeKeepsReceiptWhenSubscriberNotifyFails(t *testing.T) {
-	mailboxService := &fakeMailboxService{t: t}
+func TestWaypostSendGroupModeKeepsReceiptWhenSubscriberNotifyFails(t *testing.T) {
+	waypostService := &fakeWaypostService{t: t}
 	openCount := 0
-	mailboxService.sendFunc = func(_ context.Context, params mailbox.SendParams) (mailbox.SendResult, error) {
-		return mailbox.SendResult{
-			Mode:                       mailbox.SendModeGroup,
+	waypostService.sendFunc = func(_ context.Context, params waypost.SendParams) (waypost.SendResult, error) {
+		return waypost.SendResult{
+			Mode:                       waypost.SendModeGroup,
 			MessageID:                  "msg_group",
 			GroupID:                    "grp_1",
 			GroupAddress:               "group/review",
@@ -1040,7 +1040,7 @@ func TestMailboxSendGroupModeKeepsReceiptWhenSubscriberNotifyFails(t *testing.T)
 			MessageCreatedAt:           "2026-04-18T00:00:00Z",
 		}, nil
 	}
-	mailboxService.listGroupSubscribersFunc = func(_ context.Context, groupAddress string) ([]mailbox.GroupNotificationSubscriberRecord, error) {
+	waypostService.listGroupSubscribersFunc = func(_ context.Context, groupAddress string) ([]waypost.GroupNotificationSubscriberRecord, error) {
 		t.Fatalf("ListGroupNotificationSubscribers should not be called for group send notify: %q", groupAddress)
 		return nil, nil
 	}
@@ -1058,12 +1058,12 @@ func TestMailboxSendGroupModeKeepsReceiptWhenSubscriberNotifyFails(t *testing.T)
 	}}
 
 	service := newService(Options{
-		MailboxServiceFactory: fakeMailboxServiceFactory{service: mailboxService, openCount: &openCount},
+		WaypostServiceFactory: fakeWaypostServiceFactory{service: waypostService, openCount: &openCount},
 		CommandRunner:         commandRunner,
 		DisableWakeScheduler:  true,
 	})
 
-	output := callServiceTool(t, service, "mailbox_send", map[string]any{
+	output := callServiceTool(t, service, "waypost_send", map[string]any{
 		"to_address":   "group/review",
 		"from_address": "agent-deck/expert",
 		"subject":      "expert post",
@@ -1084,19 +1084,19 @@ func TestMailboxSendGroupModeKeepsReceiptWhenSubscriberNotifyFails(t *testing.T)
 		t.Fatalf("notify_error = %v, want notify failure detail", got)
 	}
 	if openCount != 1 {
-		t.Fatalf("mailbox service opens = %d, want 1", openCount)
+		t.Fatalf("waypost service opens = %d, want 1", openCount)
 	}
 }
 
-func TestMailboxForwardByMessageIDPreservesPayloadAndPrefixesSubject(t *testing.T) {
+func TestWaypostForwardByMessageIDPreservesPayloadAndPrefixesSubject(t *testing.T) {
 	sourceSenderAddress := "agent/source"
-	mailboxService := &fakeMailboxService{t: t}
+	waypostService := &fakeWaypostService{t: t}
 	openCount := 0
-	mailboxService.readMessagesFunc = func(_ context.Context, messageIDs []string) ([]mailbox.ReadMessage, error) {
+	waypostService.readMessagesFunc = func(_ context.Context, messageIDs []string) ([]waypost.ReadMessage, error) {
 		if diff := slices.Compare(messageIDs, []string{"msg_1"}); diff != 0 {
 			t.Fatalf("ReadMessages ids = %v, want [msg_1]", messageIDs)
 		}
-		return []mailbox.ReadMessage{{
+		return []waypost.ReadMessage{{
 			MessageID:     "msg_1",
 			SenderAddress: &sourceSenderAddress,
 			Subject:       "Original subject",
@@ -1105,7 +1105,7 @@ func TestMailboxForwardByMessageIDPreservesPayloadAndPrefixesSubject(t *testing.
 			Body:          "forward me",
 		}}, nil
 	}
-	mailboxService.sendFunc = func(_ context.Context, params mailbox.SendParams) (mailbox.SendResult, error) {
+	waypostService.sendFunc = func(_ context.Context, params waypost.SendParams) (waypost.SendResult, error) {
 		if params.ToAddress != "workflow/target" {
 			t.Fatalf("send to_address = %q, want workflow/target", params.ToAddress)
 		}
@@ -1130,18 +1130,18 @@ func TestMailboxForwardByMessageIDPreservesPayloadAndPrefixesSubject(t *testing.
 		if string(params.Body) != "forward me" {
 			t.Fatalf("send body = %q, want forward me", string(params.Body))
 		}
-		return mailbox.SendResult{DeliveryID: "dlv_forwarded"}, nil
+		return waypost.SendResult{DeliveryID: "dlv_forwarded"}, nil
 	}
 
 	service := newService(Options{
-		MailboxServiceFactory: fakeMailboxServiceFactory{service: mailboxService, openCount: &openCount},
+		WaypostServiceFactory: fakeWaypostServiceFactory{service: waypostService, openCount: &openCount},
 		CommandRunner: &fakeRunner{t: t, handler: func(args []string, input string) (RunResult, error) {
 			return RunResult{}, errors.New("auto-bind should not run for explicit sender")
 		}},
 		DisableWakeScheduler: true,
 	})
 
-	output := callServiceTool(t, service, "mailbox_forward", map[string]any{
+	output := callServiceTool(t, service, "waypost_forward", map[string]any{
 		"message_id":   "msg_1",
 		"to_address":   "workflow/target",
 		"from_address": "agent/sender",
@@ -1157,18 +1157,18 @@ func TestMailboxForwardByMessageIDPreservesPayloadAndPrefixesSubject(t *testing.
 		t.Fatalf("source_message_id = %v, want msg_1", got)
 	}
 	if openCount != 1 {
-		t.Fatalf("mailbox service opens = %d, want 1", openCount)
+		t.Fatalf("waypost service opens = %d, want 1", openCount)
 	}
 }
 
-func TestMailboxForwardByDeliveryIDAllowsSubjectOverride(t *testing.T) {
+func TestWaypostForwardByDeliveryIDAllowsSubjectOverride(t *testing.T) {
 	sourceSenderAddress := "agent/source"
-	mailboxService := &fakeMailboxService{t: t}
-	mailboxService.readDeliveriesFunc = func(_ context.Context, deliveryIDs []string) ([]mailbox.ReadDelivery, error) {
+	waypostService := &fakeWaypostService{t: t}
+	waypostService.readDeliveriesFunc = func(_ context.Context, deliveryIDs []string) ([]waypost.ReadDelivery, error) {
 		if diff := slices.Compare(deliveryIDs, []string{"dlv_1"}); diff != 0 {
 			t.Fatalf("ReadDeliveries ids = %v, want [dlv_1]", deliveryIDs)
 		}
-		return []mailbox.ReadDelivery{{
+		return []waypost.ReadDelivery{{
 			DeliveryID:    "dlv_1",
 			MessageID:     "msg_1",
 			SenderAddress: &sourceSenderAddress,
@@ -1178,7 +1178,7 @@ func TestMailboxForwardByDeliveryIDAllowsSubjectOverride(t *testing.T) {
 			Body:          "forward me",
 		}}, nil
 	}
-	mailboxService.sendFunc = func(_ context.Context, params mailbox.SendParams) (mailbox.SendResult, error) {
+	waypostService.sendFunc = func(_ context.Context, params waypost.SendParams) (waypost.SendResult, error) {
 		if params.Subject != "Custom forward subject" {
 			t.Fatalf("send subject = %q, want Custom forward subject", params.Subject)
 		}
@@ -1188,18 +1188,18 @@ func TestMailboxForwardByDeliveryIDAllowsSubjectOverride(t *testing.T) {
 		if params.ForwardedFromAddress != "agent/source" {
 			t.Fatalf("send forwarded_from_address = %q, want agent/source", params.ForwardedFromAddress)
 		}
-		return mailbox.SendResult{DeliveryID: "dlv_forwarded"}, nil
+		return waypost.SendResult{DeliveryID: "dlv_forwarded"}, nil
 	}
 
 	service := newService(Options{
-		MailboxServiceFactory: fakeMailboxServiceFactory{service: mailboxService},
+		WaypostServiceFactory: fakeWaypostServiceFactory{service: waypostService},
 		CommandRunner: &fakeRunner{t: t, handler: func(args []string, input string) (RunResult, error) {
 			return RunResult{}, errors.New("auto-bind should not run for explicit sender")
 		}},
 		DisableWakeScheduler: true,
 	})
 
-	output := callServiceTool(t, service, "mailbox_forward", map[string]any{
+	output := callServiceTool(t, service, "waypost_forward", map[string]any{
 		"delivery_id":  "dlv_1",
 		"to_address":   "workflow/target",
 		"from_address": "agent/sender",
@@ -1214,14 +1214,14 @@ func TestMailboxForwardByDeliveryIDAllowsSubjectOverride(t *testing.T) {
 	}
 }
 
-func TestMailboxForwardToGroupInboxPreservesGroupMode(t *testing.T) {
+func TestWaypostForwardToGroupInboxPreservesGroupMode(t *testing.T) {
 	sourceSenderAddress := "agent/source"
-	mailboxService := &fakeMailboxService{t: t}
-	mailboxService.readMessagesFunc = func(_ context.Context, messageIDs []string) ([]mailbox.ReadMessage, error) {
+	waypostService := &fakeWaypostService{t: t}
+	waypostService.readMessagesFunc = func(_ context.Context, messageIDs []string) ([]waypost.ReadMessage, error) {
 		if diff := slices.Compare(messageIDs, []string{"msg_1"}); diff != 0 {
 			t.Fatalf("ReadMessages ids = %v, want [msg_1]", messageIDs)
 		}
-		return []mailbox.ReadMessage{{
+		return []waypost.ReadMessage{{
 			MessageID:     "msg_1",
 			SenderAddress: &sourceSenderAddress,
 			Subject:       "Original subject",
@@ -1229,7 +1229,7 @@ func TestMailboxForwardToGroupInboxPreservesGroupMode(t *testing.T) {
 			Body:          "forward me",
 		}}, nil
 	}
-	mailboxService.sendFunc = func(_ context.Context, params mailbox.SendParams) (mailbox.SendResult, error) {
+	waypostService.sendFunc = func(_ context.Context, params waypost.SendParams) (waypost.SendResult, error) {
 		if !params.Group {
 			t.Fatal("send group = false, want true")
 		}
@@ -1242,8 +1242,8 @@ func TestMailboxForwardToGroupInboxPreservesGroupMode(t *testing.T) {
 		if params.ForwardedFromAddress != "agent/source" {
 			t.Fatalf("send forwarded_from_address = %q, want agent/source", params.ForwardedFromAddress)
 		}
-		return mailbox.SendResult{
-			Mode:             mailbox.SendModeGroup,
+		return waypost.SendResult{
+			Mode:             waypost.SendModeGroup,
 			MessageID:        "msg_forwarded",
 			GroupID:          "grp_1",
 			GroupAddress:     "group/review",
@@ -1253,14 +1253,14 @@ func TestMailboxForwardToGroupInboxPreservesGroupMode(t *testing.T) {
 	}
 
 	service := newService(Options{
-		MailboxServiceFactory: fakeMailboxServiceFactory{service: mailboxService},
+		WaypostServiceFactory: fakeWaypostServiceFactory{service: waypostService},
 		CommandRunner: &fakeRunner{t: t, handler: func(args []string, input string) (RunResult, error) {
 			return RunResult{}, errors.New("auto-bind should not run for explicit sender")
 		}},
 		DisableWakeScheduler: true,
 	})
 
-	output := callServiceTool(t, service, "mailbox_forward", map[string]any{
+	output := callServiceTool(t, service, "waypost_forward", map[string]any{
 		"message_id":   "msg_1",
 		"to_address":   "group/review",
 		"from_address": "agent/sender",
@@ -1270,8 +1270,8 @@ func TestMailboxForwardToGroupInboxPreservesGroupMode(t *testing.T) {
 	if got := output["status"]; got != "forwarded" {
 		t.Fatalf("status = %v, want forwarded", got)
 	}
-	if got := output["mode"]; got != mailbox.SendModeGroup {
-		t.Fatalf("mode = %v, want %q", got, mailbox.SendModeGroup)
+	if got := output["mode"]; got != waypost.SendModeGroup {
+		t.Fatalf("mode = %v, want %q", got, waypost.SendModeGroup)
 	}
 	if got := output["message_id"]; got != "msg_forwarded" {
 		t.Fatalf("message_id = %v, want msg_forwarded", got)
@@ -1287,9 +1287,9 @@ func TestMailboxForwardToGroupInboxPreservesGroupMode(t *testing.T) {
 	}
 }
 
-func TestMailboxForwardRequiresExactlyOneSourceID(t *testing.T) {
+func TestWaypostForwardRequiresExactlyOneSourceID(t *testing.T) {
 	service := newService(Options{
-		MailboxServiceFactory: fakeMailboxServiceFactory{service: &fakeMailboxService{t: t}},
+		WaypostServiceFactory: fakeWaypostServiceFactory{service: &fakeWaypostService{t: t}},
 		CommandRunner: &fakeRunner{t: t, handler: func(args []string, input string) (RunResult, error) {
 			t.Fatalf("unexpected command call: %v", args)
 			return RunResult{}, nil
@@ -1298,20 +1298,20 @@ func TestMailboxForwardRequiresExactlyOneSourceID(t *testing.T) {
 	})
 	service.state.autoBindAttempted = true
 
-	err := callServiceToolExpectError(t, service, "mailbox_forward", map[string]any{
+	err := callServiceToolExpectError(t, service, "waypost_forward", map[string]any{
 		"message_id":  "msg_1",
 		"delivery_id": "dlv_1",
 		"to_address":  "workflow/target",
 	})
 	if err == nil || !strings.Contains(err.Error(), "requires exactly one of message_id or delivery_id") {
-		t.Fatalf("mailbox_forward error = %v, want source id validation", err)
+		t.Fatalf("waypost_forward error = %v, want source id validation", err)
 	}
 }
 
-func TestMailboxSendUsesFixedWakeTextWhenDisableFlagUnset(t *testing.T) {
-	mailboxService := &fakeMailboxService{t: t}
-	mailboxService.sendFunc = func(_ context.Context, params mailbox.SendParams) (mailbox.SendResult, error) {
-		return mailbox.SendResult{DeliveryID: "dlv_custom"}, nil
+func TestWaypostSendUsesFixedWakeTextWhenDisableFlagUnset(t *testing.T) {
+	waypostService := &fakeWaypostService{t: t}
+	waypostService.sendFunc = func(_ context.Context, params waypost.SendParams) (waypost.SendResult, error) {
+		return waypost.SendResult{DeliveryID: "dlv_custom"}, nil
 	}
 
 	commandRunner := &fakeRunner{t: t, handler: func(args []string, input string) (RunResult, error) {
@@ -1333,14 +1333,14 @@ func TestMailboxSendUsesFixedWakeTextWhenDisableFlagUnset(t *testing.T) {
 	}}
 
 	service := newService(Options{
-		MailboxServiceFactory: fakeMailboxServiceFactory{service: mailboxService},
+		WaypostServiceFactory: fakeWaypostServiceFactory{service: waypostService},
 		CommandRunner:         commandRunner,
 	})
 	service.state.boundAddresses = []string{"agent-deck/self"}
 	service.state.defaultSender = "agent-deck/self"
 	service.state.autoBindAttempted = true
 
-	output := callServiceTool(t, service, "mailbox_send", map[string]any{
+	output := callServiceTool(t, service, "waypost_send", map[string]any{
 		"to_address":             "agent-deck/target",
 		"subject":                "delegate",
 		"body":                   "body",
@@ -1361,17 +1361,17 @@ func TestMailboxSendUsesFixedWakeTextWhenDisableFlagUnset(t *testing.T) {
 	}
 }
 
-func TestMailboxSendPreservesMailboxDefaultsWhenMetadataOmitted(t *testing.T) {
-	mailboxService := &fakeMailboxService{t: t}
-	mailboxService.sendFunc = func(_ context.Context, params mailbox.SendParams) (mailbox.SendResult, error) {
+func TestWaypostSendPreservesWaypostDefaultsWhenMetadataOmitted(t *testing.T) {
+	waypostService := &fakeWaypostService{t: t}
+	waypostService.sendFunc = func(_ context.Context, params waypost.SendParams) (waypost.SendResult, error) {
 		if params.ContentType != "" || params.SchemaVersion != "" {
 			t.Fatalf("send params unexpectedly set defaults: %+v", params)
 		}
-		return mailbox.SendResult{DeliveryID: "dlv_2"}, nil
+		return waypost.SendResult{DeliveryID: "dlv_2"}, nil
 	}
 
 	service := newService(Options{
-		MailboxServiceFactory: fakeMailboxServiceFactory{service: mailboxService},
+		WaypostServiceFactory: fakeWaypostServiceFactory{service: waypostService},
 		CommandRunner: &fakeRunner{t: t, handler: func(args []string, input string) (RunResult, error) {
 			t.Fatalf("unexpected command call: %v", args)
 			return RunResult{}, nil
@@ -1382,7 +1382,7 @@ func TestMailboxSendPreservesMailboxDefaultsWhenMetadataOmitted(t *testing.T) {
 	service.state.defaultSender = "agent-deck/self"
 	service.state.autoBindAttempted = true
 
-	output := callServiceTool(t, service, "mailbox_send", map[string]any{
+	output := callServiceTool(t, service, "waypost_send", map[string]any{
 		"to_address":   "agent-deck/self",
 		"subject":      "delegate",
 		"body":         "body",
@@ -1397,10 +1397,10 @@ func TestMailboxSendPreservesMailboxDefaultsWhenMetadataOmitted(t *testing.T) {
 	}
 }
 
-func TestMailboxSendReturnsReceiptWhenNotifyFails(t *testing.T) {
-	mailboxService := &fakeMailboxService{t: t}
-	mailboxService.sendFunc = func(_ context.Context, params mailbox.SendParams) (mailbox.SendResult, error) {
-		return mailbox.SendResult{DeliveryID: "dlv_3"}, nil
+func TestWaypostSendReturnsReceiptWhenNotifyFails(t *testing.T) {
+	waypostService := &fakeWaypostService{t: t}
+	waypostService.sendFunc = func(_ context.Context, params waypost.SendParams) (waypost.SendResult, error) {
+		return waypost.SendResult{DeliveryID: "dlv_3"}, nil
 	}
 	commandRunner := &fakeRunner{t: t, handler: func(args []string, input string) (RunResult, error) {
 		switch {
@@ -1415,14 +1415,14 @@ func TestMailboxSendReturnsReceiptWhenNotifyFails(t *testing.T) {
 	}}
 
 	service := newService(Options{
-		MailboxServiceFactory: fakeMailboxServiceFactory{service: mailboxService},
+		WaypostServiceFactory: fakeWaypostServiceFactory{service: waypostService},
 		CommandRunner:         commandRunner,
 	})
 	service.state.boundAddresses = []string{"agent-deck/self"}
 	service.state.defaultSender = "agent-deck/self"
 	service.state.autoBindAttempted = true
 
-	output := callServiceTool(t, service, "mailbox_send", map[string]any{
+	output := callServiceTool(t, service, "waypost_send", map[string]any{
 		"to_address": "agent-deck/target",
 		"subject":    "delegate",
 		"body":       "body",
@@ -1445,9 +1445,9 @@ func TestMailboxSendReturnsReceiptWhenNotifyFails(t *testing.T) {
 	}
 }
 
-func TestToolResultDoesNotOpenMailboxServiceForHint(t *testing.T) {
+func TestToolResultDoesNotOpenWaypostServiceForHint(t *testing.T) {
 	service := newService(Options{
-		MailboxServiceFactory: failOpenMailboxServiceFactory{t: t},
+		WaypostServiceFactory: failOpenWaypostServiceFactory{t: t},
 		CommandRunner: &fakeRunner{t: t, handler: func(args []string, input string) (RunResult, error) {
 			t.Fatalf("unexpected command call: %v", args)
 			return RunResult{}, nil
@@ -1458,15 +1458,15 @@ func TestToolResultDoesNotOpenMailboxServiceForHint(t *testing.T) {
 	service.state.defaultSender = "agent-deck/self"
 	service.state.autoBindAttempted = true
 
-	status := callServiceTool(t, service, "mailbox_status", nil)
+	status := callServiceTool(t, service, "waypost_status", nil)
 	if got := status["mail_hint"]; got != nil {
-		t.Fatalf("mailbox_status mail_hint = %v, want nil", got)
+		t.Fatalf("waypost_status mail_hint = %v, want nil", got)
 	}
 }
 
-func TestMailboxBindDoesNotOpenMailboxServiceForHint(t *testing.T) {
+func TestWaypostBindDoesNotOpenWaypostServiceForHint(t *testing.T) {
 	service := newService(Options{
-		MailboxServiceFactory: failOpenMailboxServiceFactory{t: t},
+		WaypostServiceFactory: failOpenWaypostServiceFactory{t: t},
 		CommandRunner: &fakeRunner{t: t, handler: func(args []string, input string) (RunResult, error) {
 			t.Fatalf("unexpected command call: %v", args)
 			return RunResult{}, nil
@@ -1475,17 +1475,17 @@ func TestMailboxBindDoesNotOpenMailboxServiceForHint(t *testing.T) {
 	})
 	service.state.autoBindAttempted = true
 
-	bind := callServiceTool(t, service, "mailbox_bind", map[string]any{
+	bind := callServiceTool(t, service, "waypost_bind", map[string]any{
 		"addresses": []string{"agent-deck/self"},
 	})
 	if got := bind["mail_hint"]; got != nil {
-		t.Fatalf("mailbox_bind mail_hint = %v, want nil", got)
+		t.Fatalf("waypost_bind mail_hint = %v, want nil", got)
 	}
 }
 
-func TestMailboxBindRejectsInvalidAddress(t *testing.T) {
+func TestWaypostBindRejectsInvalidAddress(t *testing.T) {
 	service := newService(Options{
-		MailboxServiceFactory: fakeMailboxServiceFactory{service: &fakeMailboxService{t: t}},
+		WaypostServiceFactory: fakeWaypostServiceFactory{service: &fakeWaypostService{t: t}},
 		CommandRunner: &fakeRunner{t: t, handler: func(args []string, input string) (RunResult, error) {
 			t.Fatalf("unexpected command call: %v", args)
 			return RunResult{}, nil
@@ -1493,20 +1493,20 @@ func TestMailboxBindRejectsInvalidAddress(t *testing.T) {
 	})
 	service.state.autoBindAttempted = true
 
-	err := callServiceToolExpectError(t, service, "mailbox_bind", map[string]any{
+	err := callServiceToolExpectError(t, service, "waypost_bind", map[string]any{
 		"addresses": []string{"agent-deck"},
 	})
 	if err == nil || !strings.Contains(err.Error(), `invalid address`) || !strings.Contains(err.Error(), `agent-deck`) {
-		t.Fatalf("mailbox_bind error = %v, want invalid address", err)
+		t.Fatalf("waypost_bind error = %v, want invalid address", err)
 	}
 	if got := service.state.boundAddresses; len(got) != 0 {
 		t.Fatalf("boundAddresses = %v, want unchanged empty state", got)
 	}
 }
 
-func TestMailboxBindAcceptsGenericAddressCharacters(t *testing.T) {
+func TestWaypostBindAcceptsGenericAddressCharacters(t *testing.T) {
 	service := newService(Options{
-		MailboxServiceFactory: fakeMailboxServiceFactory{service: &fakeMailboxService{t: t}},
+		WaypostServiceFactory: fakeWaypostServiceFactory{service: &fakeWaypostService{t: t}},
 		CommandRunner: &fakeRunner{t: t, handler: func(args []string, input string) (RunResult, error) {
 			t.Fatalf("unexpected command call: %v", args)
 			return RunResult{}, nil
@@ -1514,7 +1514,7 @@ func TestMailboxBindAcceptsGenericAddressCharacters(t *testing.T) {
 	})
 	service.state.autoBindAttempted = true
 
-	output := callServiceTool(t, service, "mailbox_bind", map[string]any{
+	output := callServiceTool(t, service, "waypost_bind", map[string]any{
 		"addresses": []string{"workflow/收件箱+tag@example.com"},
 	})
 	if got := output["bound_addresses"]; !reflect.DeepEqual(got, []any{"workflow/收件箱+tag@example.com"}) {
@@ -1522,9 +1522,9 @@ func TestMailboxBindAcceptsGenericAddressCharacters(t *testing.T) {
 	}
 }
 
-func TestMailboxBindExcludesGroupAddresses(t *testing.T) {
+func TestWaypostBindExcludesGroupAddresses(t *testing.T) {
 	service := newService(Options{
-		MailboxServiceFactory: fakeMailboxServiceFactory{service: &fakeMailboxService{t: t}},
+		WaypostServiceFactory: fakeWaypostServiceFactory{service: &fakeWaypostService{t: t}},
 		CommandRunner: &fakeRunner{t: t, handler: func(args []string, input string) (RunResult, error) {
 			t.Fatalf("unexpected command call: %v", args)
 			return RunResult{}, nil
@@ -1532,7 +1532,7 @@ func TestMailboxBindExcludesGroupAddresses(t *testing.T) {
 	})
 	service.state.autoBindAttempted = true
 
-	output := callServiceTool(t, service, "mailbox_bind", map[string]any{
+	output := callServiceTool(t, service, "waypost_bind", map[string]any{
 		"addresses": []string{"group/review", "agent-deck/self", "group/ops"},
 	})
 	if got := output["bound_addresses"]; !reflect.DeepEqual(got, []any{"agent-deck/self"}) {
@@ -1543,9 +1543,9 @@ func TestMailboxBindExcludesGroupAddresses(t *testing.T) {
 	}
 }
 
-func TestMailboxBindRejectsGroupDefaultSender(t *testing.T) {
+func TestWaypostBindRejectsGroupDefaultSender(t *testing.T) {
 	service := newService(Options{
-		MailboxServiceFactory: fakeMailboxServiceFactory{service: &fakeMailboxService{t: t}},
+		WaypostServiceFactory: fakeWaypostServiceFactory{service: &fakeWaypostService{t: t}},
 		CommandRunner: &fakeRunner{t: t, handler: func(args []string, input string) (RunResult, error) {
 			t.Fatalf("unexpected command call: %v", args)
 			return RunResult{}, nil
@@ -1553,18 +1553,18 @@ func TestMailboxBindRejectsGroupDefaultSender(t *testing.T) {
 	})
 	service.state.autoBindAttempted = true
 
-	err := callServiceToolExpectError(t, service, "mailbox_bind", map[string]any{
+	err := callServiceToolExpectError(t, service, "waypost_bind", map[string]any{
 		"addresses":      []string{"agent-deck/self"},
 		"default_sender": "group/review",
 	})
 	if err == nil || !strings.Contains(err.Error(), "default_sender cannot be a group address") {
-		t.Fatalf("mailbox_bind error = %v, want group default sender rejection", err)
+		t.Fatalf("waypost_bind error = %v, want group default sender rejection", err)
 	}
 }
 
-func TestMailboxSendRejectsInvalidOverrideSender(t *testing.T) {
+func TestWaypostSendRejectsInvalidOverrideSender(t *testing.T) {
 	service := newService(Options{
-		MailboxServiceFactory: fakeMailboxServiceFactory{service: &fakeMailboxService{t: t}},
+		WaypostServiceFactory: fakeWaypostServiceFactory{service: &fakeWaypostService{t: t}},
 		CommandRunner: &fakeRunner{t: t, handler: func(args []string, input string) (RunResult, error) {
 			t.Fatalf("unexpected command call: %v", args)
 			return RunResult{}, nil
@@ -1572,20 +1572,20 @@ func TestMailboxSendRejectsInvalidOverrideSender(t *testing.T) {
 	})
 	service.state.autoBindAttempted = true
 
-	err := callServiceToolExpectError(t, service, "mailbox_send", map[string]any{
+	err := callServiceToolExpectError(t, service, "waypost_send", map[string]any{
 		"to_address":   "agent-deck/target",
 		"from_address": "agent-deck",
 		"subject":      "delegate",
 		"body":         "body",
 	})
 	if err == nil || !strings.Contains(err.Error(), `invalid address`) || !strings.Contains(err.Error(), `agent-deck`) {
-		t.Fatalf("mailbox_send error = %v, want invalid address", err)
+		t.Fatalf("waypost_send error = %v, want invalid address", err)
 	}
 }
 
-func TestMailboxSendRejectsInvalidRecipientAddress(t *testing.T) {
+func TestWaypostSendRejectsInvalidRecipientAddress(t *testing.T) {
 	service := newService(Options{
-		MailboxServiceFactory: fakeMailboxServiceFactory{service: &fakeMailboxService{t: t}},
+		WaypostServiceFactory: fakeWaypostServiceFactory{service: &fakeWaypostService{t: t}},
 		CommandRunner: &fakeRunner{t: t, handler: func(args []string, input string) (RunResult, error) {
 			t.Fatalf("unexpected command call: %v", args)
 			return RunResult{}, nil
@@ -1593,19 +1593,19 @@ func TestMailboxSendRejectsInvalidRecipientAddress(t *testing.T) {
 	})
 	service.state.autoBindAttempted = true
 
-	err := callServiceToolExpectError(t, service, "mailbox_send", map[string]any{
+	err := callServiceToolExpectError(t, service, "waypost_send", map[string]any{
 		"to_address": "agent-deck",
 		"subject":    "delegate",
 		"body":       "body",
 	})
 	if err == nil || !strings.Contains(err.Error(), `invalid address`) || !strings.Contains(err.Error(), `agent-deck`) {
-		t.Fatalf("mailbox_send error = %v, want invalid recipient address", err)
+		t.Fatalf("waypost_send error = %v, want invalid recipient address", err)
 	}
 }
 
-func TestMailboxRecvRejectsInvalidExplicitAddress(t *testing.T) {
+func TestWaypostRecvRejectsInvalidExplicitAddress(t *testing.T) {
 	service := newService(Options{
-		MailboxServiceFactory: fakeMailboxServiceFactory{service: &fakeMailboxService{t: t}},
+		WaypostServiceFactory: fakeWaypostServiceFactory{service: &fakeWaypostService{t: t}},
 		CommandRunner: &fakeRunner{t: t, handler: func(args []string, input string) (RunResult, error) {
 			t.Fatalf("unexpected command call: %v", args)
 			return RunResult{}, nil
@@ -1613,17 +1613,17 @@ func TestMailboxRecvRejectsInvalidExplicitAddress(t *testing.T) {
 	})
 	service.state.autoBindAttempted = true
 
-	err := callServiceToolExpectError(t, service, "mailbox_recv", map[string]any{
+	err := callServiceToolExpectError(t, service, "waypost_recv", map[string]any{
 		"addresses": []string{"agent-deck"},
 	})
 	if err == nil || !strings.Contains(err.Error(), `invalid address`) || !strings.Contains(err.Error(), `agent-deck`) {
-		t.Fatalf("mailbox_recv error = %v, want invalid address", err)
+		t.Fatalf("waypost_recv error = %v, want invalid address", err)
 	}
 }
 
 func TestServiceServerReturnsStableInstance(t *testing.T) {
 	service := newService(Options{
-		MailboxServiceFactory: fakeMailboxServiceFactory{service: &fakeMailboxService{t: t}},
+		WaypostServiceFactory: fakeWaypostServiceFactory{service: &fakeWaypostService{t: t}},
 		CommandRunner: &fakeRunner{t: t, handler: func(args []string, input string) (RunResult, error) {
 			t.Fatalf("unexpected command call: %v", args)
 			return RunResult{}, nil
@@ -1637,14 +1637,14 @@ func TestServiceServerReturnsStableInstance(t *testing.T) {
 	}
 }
 
-func TestMailboxOverviewResourceCapabilitiesAndNotifications(t *testing.T) {
+func TestWaypostOverviewResourceCapabilitiesAndNotifications(t *testing.T) {
 	updateCh := make(chan struct{}, 1)
-	mailboxService := &fakeMailboxService{t: t}
-	mailboxService.listClaimableFunc = func(_ context.Context, addresses []string) ([]mailbox.ClaimableAddress, error) {
+	waypostService := &fakeWaypostService{t: t}
+	waypostService.listClaimableFunc = func(_ context.Context, addresses []string) ([]waypost.ClaimableAddress, error) {
 		if len(addresses) != 1 || addresses[0] != "agent-deck/self" {
 			t.Fatalf("claimable addresses = %v, want [agent-deck/self]", addresses)
 		}
-		return []mailbox.ClaimableAddress{{
+		return []waypost.ClaimableAddress{{
 			Address:          "agent-deck/self",
 			OldestEligibleAt: "2026-04-03T00:40:00Z",
 			ClaimableCount:   1,
@@ -1652,7 +1652,7 @@ func TestMailboxOverviewResourceCapabilitiesAndNotifications(t *testing.T) {
 	}
 
 	service := newService(Options{
-		MailboxServiceFactory: fakeMailboxServiceFactory{service: mailboxService},
+		WaypostServiceFactory: fakeWaypostServiceFactory{service: waypostService},
 		CommandRunner: &fakeRunner{t: t, handler: func(args []string, input string) (RunResult, error) {
 			t.Fatalf("unexpected command call: %v", args)
 			return RunResult{}, nil
@@ -1674,29 +1674,29 @@ func TestMailboxOverviewResourceCapabilitiesAndNotifications(t *testing.T) {
 		t.Fatal("resources.subscribe = false, want true")
 	}
 
-	if err := clientSession.Subscribe(context.Background(), &mcp.SubscribeParams{URI: mailboxOverviewURI}); err != nil {
+	if err := clientSession.Subscribe(context.Background(), &mcp.SubscribeParams{URI: waypostOverviewURI}); err != nil {
 		t.Fatalf("Subscribe() error = %v", err)
 	}
 
-	callServiceTool(t, service, "mailbox_bind", map[string]any{
+	callServiceTool(t, service, "waypost_bind", map[string]any{
 		"addresses": []string{"agent-deck/self"},
 	})
 
 	select {
 	case <-updateCh:
 	case <-time.After(time.Second):
-		t.Fatal("timed out waiting for mailbox overview update")
+		t.Fatal("timed out waiting for waypost overview update")
 	}
 
 	resources, err := clientSession.ListResources(context.Background(), nil)
 	if err != nil {
 		t.Fatalf("ListResources() error = %v", err)
 	}
-	if len(resources.Resources) != 1 || resources.Resources[0].URI != mailboxOverviewURI {
-		t.Fatalf("resources = %#v, want mailbox overview resource", resources.Resources)
+	if len(resources.Resources) != 1 || resources.Resources[0].URI != waypostOverviewURI {
+		t.Fatalf("resources = %#v, want waypost overview resource", resources.Resources)
 	}
 
-	read, err := clientSession.ReadResource(context.Background(), &mcp.ReadResourceParams{URI: mailboxOverviewURI})
+	read, err := clientSession.ReadResource(context.Background(), &mcp.ReadResourceParams{URI: waypostOverviewURI})
 	if err != nil {
 		t.Fatalf("ReadResource() error = %v", err)
 	}
@@ -1724,16 +1724,16 @@ func TestMailboxOverviewResourceCapabilitiesAndNotifications(t *testing.T) {
 
 func TestProcessWakeSchedulerUsesLocalHintThenAgentDeckWake(t *testing.T) {
 	current := time.Date(2026, 4, 3, 6, 0, 0, 0, time.UTC)
-	mailboxService := &fakeMailboxService{t: t}
-	mailboxService.listFunc = func(_ context.Context, params mailbox.ListParams) ([]mailbox.ListedDelivery, error) {
+	waypostService := &fakeWaypostService{t: t}
+	waypostService.listFunc = func(_ context.Context, params waypost.ListParams) ([]waypost.ListedDelivery, error) {
 		t.Fatalf("wake scheduler should not use List for claimable state: %+v", params)
 		return nil, nil
 	}
-	mailboxService.listClaimableFunc = func(_ context.Context, addresses []string) ([]mailbox.ClaimableAddress, error) {
+	waypostService.listClaimableFunc = func(_ context.Context, addresses []string) ([]waypost.ClaimableAddress, error) {
 		if len(addresses) != 2 {
 			t.Fatalf("claimable addresses = %v, want two bound addresses", addresses)
 		}
-		return []mailbox.ClaimableAddress{{
+		return []waypost.ClaimableAddress{{
 			Address:          "codex/self",
 			OldestEligibleAt: current.Add(-4 * time.Minute).Format(time.RFC3339Nano),
 			ClaimableCount:   1,
@@ -1756,7 +1756,7 @@ func TestProcessWakeSchedulerUsesLocalHintThenAgentDeckWake(t *testing.T) {
 	}}
 
 	service := newService(Options{
-		MailboxServiceFactory: fakeMailboxServiceFactory{service: mailboxService},
+		WaypostServiceFactory: fakeWaypostServiceFactory{service: waypostService},
 		CommandRunner:         commandRunner,
 		Now:                   func() time.Time { return current },
 		DisableWakeScheduler:  true,
@@ -1769,7 +1769,7 @@ func TestProcessWakeSchedulerUsesLocalHintThenAgentDeckWake(t *testing.T) {
 	server := service.Server()
 	clientSession, cleanup := connectTestClientSession(t, server, nil)
 	defer cleanup()
-	if err := clientSession.Subscribe(context.Background(), &mcp.SubscribeParams{URI: mailboxOverviewURI}); err != nil {
+	if err := clientSession.Subscribe(context.Background(), &mcp.SubscribeParams{URI: waypostOverviewURI}); err != nil {
 		t.Fatalf("Subscribe() error = %v", err)
 	}
 
@@ -1803,14 +1803,14 @@ func TestProcessWakeSchedulerUsesLocalHintThenAgentDeckWake(t *testing.T) {
 }
 
 func TestServiceCloseStopsWakeSchedulerLoop(t *testing.T) {
-	mailboxService := &fakeMailboxService{t: t}
+	waypostService := &fakeWaypostService{t: t}
 	entered := make(chan struct{})
 	canceled := make(chan struct{})
 	var closeEntered sync.Once
 	var closeCanceled sync.Once
 	var mu sync.Mutex
 	calls := 0
-	mailboxService.listClaimableFunc = func(ctx context.Context, addresses []string) ([]mailbox.ClaimableAddress, error) {
+	waypostService.listClaimableFunc = func(ctx context.Context, addresses []string) ([]waypost.ClaimableAddress, error) {
 		mu.Lock()
 		calls++
 		mu.Unlock()
@@ -1821,7 +1821,7 @@ func TestServiceCloseStopsWakeSchedulerLoop(t *testing.T) {
 	}
 
 	service := newService(Options{
-		MailboxServiceFactory: fakeMailboxServiceFactory{service: mailboxService},
+		WaypostServiceFactory: fakeWaypostServiceFactory{service: waypostService},
 		CommandRunner: &fakeRunner{t: t, handler: func(args []string, input string) (RunResult, error) {
 			t.Fatalf("unexpected command call: %v", args)
 			return RunResult{}, nil
@@ -1864,7 +1864,7 @@ func TestServiceCloseCancelsWakeSchedulerAutoBind(t *testing.T) {
 	}}
 
 	service := newService(Options{
-		MailboxServiceFactory: fakeMailboxServiceFactory{service: &fakeMailboxService{t: t}},
+		WaypostServiceFactory: fakeWaypostServiceFactory{service: &fakeWaypostService{t: t}},
 		CommandRunner:         commandRunner,
 		WakePollInterval:      time.Hour,
 	})
@@ -1878,16 +1878,16 @@ func TestServiceCloseCancelsWakeSchedulerAutoBind(t *testing.T) {
 
 func TestProcessWakeSchedulerIgnoresDisconnectedOverviewSubscriber(t *testing.T) {
 	current := time.Date(2026, 4, 3, 6, 0, 0, 0, time.UTC)
-	mailboxService := &fakeMailboxService{t: t}
-	mailboxService.listFunc = func(_ context.Context, params mailbox.ListParams) ([]mailbox.ListedDelivery, error) {
+	waypostService := &fakeWaypostService{t: t}
+	waypostService.listFunc = func(_ context.Context, params waypost.ListParams) ([]waypost.ListedDelivery, error) {
 		t.Fatalf("wake scheduler should not use List for claimable state: %+v", params)
 		return nil, nil
 	}
-	mailboxService.listClaimableFunc = func(_ context.Context, addresses []string) ([]mailbox.ClaimableAddress, error) {
+	waypostService.listClaimableFunc = func(_ context.Context, addresses []string) ([]waypost.ClaimableAddress, error) {
 		if len(addresses) != 2 {
 			t.Fatalf("claimable addresses = %v, want two bound addresses", addresses)
 		}
-		return []mailbox.ClaimableAddress{{
+		return []waypost.ClaimableAddress{{
 			Address:          "codex/self",
 			OldestEligibleAt: current.Add(-4 * time.Minute).Format(time.RFC3339Nano),
 			ClaimableCount:   1,
@@ -1907,7 +1907,7 @@ func TestProcessWakeSchedulerIgnoresDisconnectedOverviewSubscriber(t *testing.T)
 	}}
 
 	service := newService(Options{
-		MailboxServiceFactory: fakeMailboxServiceFactory{service: mailboxService},
+		WaypostServiceFactory: fakeWaypostServiceFactory{service: waypostService},
 		CommandRunner:         commandRunner,
 		Now:                   func() time.Time { return current },
 		DisableWakeScheduler:  true,
@@ -1920,7 +1920,7 @@ func TestProcessWakeSchedulerIgnoresDisconnectedOverviewSubscriber(t *testing.T)
 
 	server := service.Server()
 	clientSession, cleanup := connectTestClientSession(t, server, nil)
-	if err := clientSession.Subscribe(context.Background(), &mcp.SubscribeParams{URI: mailboxOverviewURI}); err != nil {
+	if err := clientSession.Subscribe(context.Background(), &mcp.SubscribeParams{URI: waypostOverviewURI}); err != nil {
 		t.Fatalf("Subscribe() error = %v", err)
 	}
 	cleanup()
@@ -1945,16 +1945,16 @@ func TestProcessWakeSchedulerIgnoresDisconnectedOverviewSubscriber(t *testing.T)
 
 func TestProcessWakeSchedulerExhaustsWakeableAgentDeckTargets(t *testing.T) {
 	current := time.Date(2026, 4, 3, 6, 0, 0, 0, time.UTC)
-	mailboxService := &fakeMailboxService{t: t}
-	mailboxService.listFunc = func(_ context.Context, params mailbox.ListParams) ([]mailbox.ListedDelivery, error) {
+	waypostService := &fakeWaypostService{t: t}
+	waypostService.listFunc = func(_ context.Context, params waypost.ListParams) ([]waypost.ListedDelivery, error) {
 		t.Fatalf("wake scheduler should not use List for claimable state: %+v", params)
 		return nil, nil
 	}
-	mailboxService.listClaimableFunc = func(_ context.Context, addresses []string) ([]mailbox.ClaimableAddress, error) {
+	waypostService.listClaimableFunc = func(_ context.Context, addresses []string) ([]waypost.ClaimableAddress, error) {
 		if len(addresses) != 3 {
 			t.Fatalf("claimable addresses = %v, want three bound addresses", addresses)
 		}
-		return []mailbox.ClaimableAddress{{
+		return []waypost.ClaimableAddress{{
 			Address:          "codex/self",
 			OldestEligibleAt: current.Add(-4 * time.Minute).Format(time.RFC3339Nano),
 			ClaimableCount:   1,
@@ -1978,7 +1978,7 @@ func TestProcessWakeSchedulerExhaustsWakeableAgentDeckTargets(t *testing.T) {
 	}}
 
 	service := newService(Options{
-		MailboxServiceFactory: fakeMailboxServiceFactory{service: mailboxService},
+		WaypostServiceFactory: fakeWaypostServiceFactory{service: waypostService},
 		CommandRunner:         commandRunner,
 		Now:                   func() time.Time { return current },
 		DisableWakeScheduler:  true,
@@ -2010,11 +2010,11 @@ func TestProcessWakeSchedulerExhaustsWakeableAgentDeckTargets(t *testing.T) {
 	}
 }
 
-func TestProcessWakeSchedulerFallsThroughWhenMailboxOverviewUpdateFails(t *testing.T) {
+func TestProcessWakeSchedulerFallsThroughWhenWaypostOverviewUpdateFails(t *testing.T) {
 	current := time.Date(2026, 4, 3, 6, 0, 0, 0, time.UTC)
-	mailboxService := &fakeMailboxService{t: t}
-	mailboxService.listClaimableFunc = func(_ context.Context, addresses []string) ([]mailbox.ClaimableAddress, error) {
-		return []mailbox.ClaimableAddress{{
+	waypostService := &fakeWaypostService{t: t}
+	waypostService.listClaimableFunc = func(_ context.Context, addresses []string) ([]waypost.ClaimableAddress, error) {
+		return []waypost.ClaimableAddress{{
 			Address:          "codex/self",
 			OldestEligibleAt: current.Add(-4 * time.Minute).Format(time.RFC3339Nano),
 			ClaimableCount:   1,
@@ -2034,7 +2034,7 @@ func TestProcessWakeSchedulerFallsThroughWhenMailboxOverviewUpdateFails(t *testi
 	}}
 
 	service := newService(Options{
-		MailboxServiceFactory: fakeMailboxServiceFactory{service: mailboxService},
+		WaypostServiceFactory: fakeWaypostServiceFactory{service: waypostService},
 		CommandRunner:         commandRunner,
 		Now:                   func() time.Time { return current },
 		DisableWakeScheduler:  true,
@@ -2044,7 +2044,7 @@ func TestProcessWakeSchedulerFallsThroughWhenMailboxOverviewUpdateFails(t *testi
 	service.state.autoBindAttempted = true
 	service.state.detectedAgentDeckSession = "worker"
 	service.state.detectedToolSessions = toolSessionIDs{"codex": "self"}
-	service.mailboxOverviewEmitter = func(context.Context) notificationOutcome {
+	service.waypostOverviewEmitter = func(context.Context) notificationOutcome {
 		return notificationOutcome{
 			Status: "failed",
 			Scheme: string(WakeHintMCPResourceUpdated),
@@ -2055,7 +2055,7 @@ func TestProcessWakeSchedulerFallsThroughWhenMailboxOverviewUpdateFails(t *testi
 	server := service.Server()
 	clientSession, cleanup := connectTestClientSession(t, server, nil)
 	defer cleanup()
-	if err := clientSession.Subscribe(context.Background(), &mcp.SubscribeParams{URI: mailboxOverviewURI}); err != nil {
+	if err := clientSession.Subscribe(context.Background(), &mcp.SubscribeParams{URI: waypostOverviewURI}); err != nil {
 		t.Fatalf("Subscribe() error = %v", err)
 	}
 
@@ -2090,7 +2090,7 @@ func TestAgentDeckResolveSessionSingleInputRemainsCompatible(t *testing.T) {
 		}
 	}}
 	service := newService(Options{
-		MailboxServiceFactory: fakeMailboxServiceFactory{service: &fakeMailboxService{t: t}},
+		WaypostServiceFactory: fakeWaypostServiceFactory{service: &fakeWaypostService{t: t}},
 		CommandRunner:         commandRunner,
 	})
 	service.state.autoBindAttempted = true
@@ -2132,7 +2132,7 @@ func TestAgentDeckResolveSessionBatchReturnsOrderedIndependentResults(t *testing
 		}
 	}}
 	service := newService(Options{
-		MailboxServiceFactory: fakeMailboxServiceFactory{service: &fakeMailboxService{t: t}},
+		WaypostServiceFactory: fakeWaypostServiceFactory{service: &fakeWaypostService{t: t}},
 		CommandRunner:         commandRunner,
 	})
 	service.state.autoBindAttempted = true
@@ -2189,7 +2189,7 @@ func TestAgentDeckResolveSessionBatchReturnsOrderedIndependentResults(t *testing
 
 func TestAgentDeckResolveSessionValidatesSingleOrBatchInput(t *testing.T) {
 	service := newService(Options{
-		MailboxServiceFactory: fakeMailboxServiceFactory{service: &fakeMailboxService{t: t}},
+		WaypostServiceFactory: fakeWaypostServiceFactory{service: &fakeWaypostService{t: t}},
 		CommandRunner: &fakeRunner{t: t, handler: func(args []string, input string) (RunResult, error) {
 			t.Fatalf("unexpected command args: %v", args)
 			return RunResult{}, nil
@@ -2228,7 +2228,7 @@ func TestAgentDeckRequireSessionReturnsActiveTargetWithoutStart(t *testing.T) {
 	}}
 
 	service := newService(Options{
-		MailboxServiceFactory: fakeMailboxServiceFactory{service: &fakeMailboxService{t: t}},
+		WaypostServiceFactory: fakeWaypostServiceFactory{service: &fakeWaypostService{t: t}},
 		CommandRunner:         commandRunner,
 	})
 	service.state.autoBindAttempted = true
@@ -2271,7 +2271,7 @@ func TestAgentDeckRequireSessionStartsInactiveTarget(t *testing.T) {
 	}}
 
 	service := newService(Options{
-		MailboxServiceFactory: fakeMailboxServiceFactory{service: &fakeMailboxService{t: t}},
+		WaypostServiceFactory: fakeWaypostServiceFactory{service: &fakeWaypostService{t: t}},
 		CommandRunner:         commandRunner,
 	})
 	service.state.autoBindAttempted = true
@@ -2317,7 +2317,7 @@ func TestAgentDeckRequireSessionBatchReturnsOrderedIndependentResults(t *testing
 		}
 	}}
 	service := newService(Options{
-		MailboxServiceFactory: fakeMailboxServiceFactory{service: &fakeMailboxService{t: t}},
+		WaypostServiceFactory: fakeWaypostServiceFactory{service: &fakeWaypostService{t: t}},
 		CommandRunner:         commandRunner,
 	})
 	service.state.autoBindAttempted = true
@@ -2379,7 +2379,7 @@ func TestAgentDeckRequireSessionBatchReturnsOrderedIndependentResults(t *testing
 
 func TestAgentDeckRequireSessionBatchValidatesInput(t *testing.T) {
 	service := newService(Options{
-		MailboxServiceFactory: fakeMailboxServiceFactory{service: &fakeMailboxService{t: t}},
+		WaypostServiceFactory: fakeWaypostServiceFactory{service: &fakeWaypostService{t: t}},
 		CommandRunner: &fakeRunner{t: t, handler: func(args []string, input string) (RunResult, error) {
 			t.Fatalf("unexpected command args: %v", args)
 			return RunResult{}, nil
@@ -2406,7 +2406,7 @@ func TestAgentDeckRequireSessionBatchValidatesInput(t *testing.T) {
 
 func TestAgentDeckRequireSessionRejectsStartupInstruction(t *testing.T) {
 	service := newService(Options{
-		MailboxServiceFactory: fakeMailboxServiceFactory{service: &fakeMailboxService{t: t}},
+		WaypostServiceFactory: fakeWaypostServiceFactory{service: &fakeWaypostService{t: t}},
 		CommandRunner: &fakeRunner{t: t, handler: func(args []string, input string) (RunResult, error) {
 			t.Fatalf("unexpected command args: %v", args)
 			return RunResult{}, nil
@@ -2426,7 +2426,7 @@ func TestAgentDeckRequireSessionRejectsStartupInstruction(t *testing.T) {
 
 func TestAgentDeckRequireSessionRequiresExplicitWorkdir(t *testing.T) {
 	service := newService(Options{
-		MailboxServiceFactory: fakeMailboxServiceFactory{service: &fakeMailboxService{t: t}},
+		WaypostServiceFactory: fakeWaypostServiceFactory{service: &fakeWaypostService{t: t}},
 		CommandRunner: &fakeRunner{t: t, handler: func(args []string, input string) (RunResult, error) {
 			t.Fatalf("unexpected command args: %v", args)
 			return RunResult{}, nil
@@ -2444,7 +2444,7 @@ func TestAgentDeckRequireSessionRequiresExplicitWorkdir(t *testing.T) {
 
 func TestAgentDeckRequireSessionValidatesTargetBeforeWorkdir(t *testing.T) {
 	service := newService(Options{
-		MailboxServiceFactory: fakeMailboxServiceFactory{service: &fakeMailboxService{t: t}},
+		WaypostServiceFactory: fakeWaypostServiceFactory{service: &fakeWaypostService{t: t}},
 		CommandRunner: &fakeRunner{t: t, handler: func(args []string, input string) (RunResult, error) {
 			t.Fatalf("unexpected command args: %v", args)
 			return RunResult{}, nil
@@ -2472,7 +2472,7 @@ func TestAgentDeckRequireSessionRejectsMissingTarget(t *testing.T) {
 	}}
 
 	service := newService(Options{
-		MailboxServiceFactory: fakeMailboxServiceFactory{service: &fakeMailboxService{t: t}},
+		WaypostServiceFactory: fakeWaypostServiceFactory{service: &fakeWaypostService{t: t}},
 		CommandRunner:         commandRunner,
 	})
 	service.state.autoBindAttempted = true
@@ -2534,7 +2534,7 @@ func TestAgentDeckRequireSessionRejectsExistingSessionWithoutPath(t *testing.T) 
 	}}
 
 	service := newService(Options{
-		MailboxServiceFactory: fakeMailboxServiceFactory{service: &fakeMailboxService{t: t}},
+		WaypostServiceFactory: fakeWaypostServiceFactory{service: &fakeWaypostService{t: t}},
 		CommandRunner:         commandRunner,
 	})
 	service.state.autoBindAttempted = true
@@ -2550,7 +2550,7 @@ func TestAgentDeckRequireSessionRejectsExistingSessionWithoutPath(t *testing.T) 
 
 func TestAgentDeckRequireSessionRejectsExtraFields(t *testing.T) {
 	service := newService(Options{
-		MailboxServiceFactory: fakeMailboxServiceFactory{service: &fakeMailboxService{t: t}},
+		WaypostServiceFactory: fakeWaypostServiceFactory{service: &fakeWaypostService{t: t}},
 		CommandRunner: &fakeRunner{t: t, handler: func(args []string, input string) (RunResult, error) {
 			t.Fatalf("unexpected command args: %v", args)
 			return RunResult{}, nil
@@ -2588,7 +2588,7 @@ func TestAgentDeckCreateSessionCreatesTargetWithoutDefaultStartupInstruction(t *
 	}}
 
 	service := newService(Options{
-		MailboxServiceFactory: fakeMailboxServiceFactory{service: &fakeMailboxService{t: t}},
+		WaypostServiceFactory: fakeWaypostServiceFactory{service: &fakeWaypostService{t: t}},
 		CommandRunner:         commandRunner,
 	})
 	service.state.autoBindAttempted = true
@@ -2632,7 +2632,7 @@ func TestAgentDeckCreateSessionMovesRootGroupParentChildBackToRoot(t *testing.T)
 	}}
 
 	service := newService(Options{
-		MailboxServiceFactory: fakeMailboxServiceFactory{service: &fakeMailboxService{t: t}},
+		WaypostServiceFactory: fakeWaypostServiceFactory{service: &fakeWaypostService{t: t}},
 		CommandRunner:         commandRunner,
 	})
 	service.state.autoBindAttempted = true
@@ -2664,7 +2664,7 @@ func TestAgentDeckCreateSessionRejectsExistingTarget(t *testing.T) {
 	}}
 
 	service := newService(Options{
-		MailboxServiceFactory: fakeMailboxServiceFactory{service: &fakeMailboxService{t: t}},
+		WaypostServiceFactory: fakeWaypostServiceFactory{service: &fakeWaypostService{t: t}},
 		CommandRunner:         commandRunner,
 	})
 	service.state.autoBindAttempted = true
@@ -2703,7 +2703,7 @@ func TestAgentDeckCreateSessionRejectsExistingTargetWithMismatchedWorkdir(t *tes
 	}}
 
 	service := newService(Options{
-		MailboxServiceFactory: fakeMailboxServiceFactory{service: &fakeMailboxService{t: t}},
+		WaypostServiceFactory: fakeWaypostServiceFactory{service: &fakeWaypostService{t: t}},
 		CommandRunner:         commandRunner,
 	})
 	service.state.autoBindAttempted = true
@@ -2734,7 +2734,7 @@ func TestAgentDeckCreateSessionAllowsDetachedCreateWithoutGroup(t *testing.T) {
 	}}
 
 	service := newService(Options{
-		MailboxServiceFactory: fakeMailboxServiceFactory{service: &fakeMailboxService{t: t}},
+		WaypostServiceFactory: fakeWaypostServiceFactory{service: &fakeWaypostService{t: t}},
 		CommandRunner:         commandRunner,
 	})
 	service.state.autoBindAttempted = true
@@ -2777,7 +2777,7 @@ func TestAgentDeckCreateSessionDerivesChildGroupFromChildParentSession(t *testin
 	}}
 
 	service := newService(Options{
-		MailboxServiceFactory: fakeMailboxServiceFactory{service: &fakeMailboxService{t: t}},
+		WaypostServiceFactory: fakeWaypostServiceFactory{service: &fakeWaypostService{t: t}},
 		CommandRunner:         commandRunner,
 	})
 	service.state.autoBindAttempted = true
@@ -2817,7 +2817,7 @@ func TestAgentDeckCreateSessionDerivesTopLevelGroupFromChildParentWithoutGroup(t
 	}}
 
 	service := newService(Options{
-		MailboxServiceFactory: fakeMailboxServiceFactory{service: &fakeMailboxService{t: t}},
+		WaypostServiceFactory: fakeWaypostServiceFactory{service: &fakeWaypostService{t: t}},
 		CommandRunner:         commandRunner,
 	})
 	service.state.autoBindAttempted = true
@@ -2855,7 +2855,7 @@ func TestAgentDeckCreateSessionDropsChildParentLinkForExplicitGroupPath(t *testi
 	}}
 
 	service := newService(Options{
-		MailboxServiceFactory: fakeMailboxServiceFactory{service: &fakeMailboxService{t: t}},
+		WaypostServiceFactory: fakeWaypostServiceFactory{service: &fakeWaypostService{t: t}},
 		CommandRunner:         commandRunner,
 	})
 	service.state.autoBindAttempted = true
@@ -2896,7 +2896,7 @@ func TestAgentDeckCreateSessionDerivesGroupFromGroupParentSession(t *testing.T) 
 	}}
 
 	service := newService(Options{
-		MailboxServiceFactory: fakeMailboxServiceFactory{service: &fakeMailboxService{t: t}},
+		WaypostServiceFactory: fakeWaypostServiceFactory{service: &fakeWaypostService{t: t}},
 		CommandRunner:         commandRunner,
 	})
 	service.state.autoBindAttempted = true
@@ -2920,7 +2920,7 @@ func TestAgentDeckCreateSessionDoesNotCreateGroupWhenCreateValidationFails(t *te
 	}}
 
 	service := newService(Options{
-		MailboxServiceFactory: fakeMailboxServiceFactory{service: &fakeMailboxService{t: t}},
+		WaypostServiceFactory: fakeWaypostServiceFactory{service: &fakeWaypostService{t: t}},
 		CommandRunner:         commandRunner,
 	})
 	service.state.autoBindAttempted = true
@@ -2964,7 +2964,7 @@ func TestAgentDeckRequireSessionAcceptsSymlinkedEquivalentWorkdir(t *testing.T) 
 	}}
 
 	service := newService(Options{
-		MailboxServiceFactory: fakeMailboxServiceFactory{service: &fakeMailboxService{t: t}},
+		WaypostServiceFactory: fakeWaypostServiceFactory{service: &fakeWaypostService{t: t}},
 		CommandRunner:         commandRunner,
 	})
 	service.state.autoBindAttempted = true
@@ -3000,7 +3000,7 @@ func TestAgentDeckCreateSessionCreatesTargetWithGroupPathAndNoParentLink(t *test
 	}}
 
 	service := newService(Options{
-		MailboxServiceFactory: fakeMailboxServiceFactory{service: &fakeMailboxService{t: t}},
+		WaypostServiceFactory: fakeWaypostServiceFactory{service: &fakeWaypostService{t: t}},
 		CommandRunner:         commandRunner,
 	})
 	service.state.autoBindAttempted = true
@@ -3024,10 +3024,10 @@ func TestAgentDeckCreateSessionCreatesTargetWithGroupPathAndNoParentLink(t *test
 	}
 }
 
-func TestMailboxServiceUsesConfiguredStateDir(t *testing.T) {
+func TestWaypostServiceUsesConfiguredStateDir(t *testing.T) {
 	t.Parallel()
 
-	stateDir := filepath.Join(t.TempDir(), "mailbox-state")
+	stateDir := filepath.Join(t.TempDir(), "waypost-state")
 	service := newService(Options{
 		StateDir: stateDir,
 		CommandRunner: &fakeRunner{t: t, handler: func(args []string, input string) (RunResult, error) {
@@ -3039,7 +3039,7 @@ func TestMailboxServiceUsesConfiguredStateDir(t *testing.T) {
 	service.state.defaultSender = "agent-deck/self"
 	service.state.autoBindAttempted = true
 
-	output := callServiceTool(t, service, "mailbox_send", map[string]any{
+	output := callServiceTool(t, service, "waypost_send", map[string]any{
 		"to_address": "agent-deck/self",
 		"subject":    "delegate",
 		"body":       "body",
@@ -3048,13 +3048,13 @@ func TestMailboxServiceUsesConfiguredStateDir(t *testing.T) {
 		t.Fatalf("delivery_id = %v, want non-empty", got)
 	}
 
-	runtime, err := mailbox.OpenRuntime(context.Background(), stateDir)
+	runtime, err := waypost.OpenRuntime(context.Background(), stateDir)
 	if err != nil {
 		t.Fatalf("OpenRuntime() error = %v", err)
 	}
 	defer runtime.Close()
 
-	deliveries, err := runtime.Store().List(context.Background(), mailbox.ListParams{
+	deliveries, err := runtime.Store().List(context.Background(), waypost.ListParams{
 		Address: "agent-deck/self",
 		State:   "queued",
 	})
@@ -3069,10 +3069,10 @@ func TestMailboxServiceUsesConfiguredStateDir(t *testing.T) {
 	}
 }
 
-func TestMailboxLifecycleToolsUseDirectMailboxService(t *testing.T) {
+func TestWaypostLifecycleToolsUseDirectWaypostService(t *testing.T) {
 	t.Parallel()
 
-	stateDir := filepath.Join(t.TempDir(), "mailbox-state")
+	stateDir := filepath.Join(t.TempDir(), "waypost-state")
 	service := newService(Options{
 		StateDir: stateDir,
 		CommandRunner: &fakeRunner{t: t, handler: func(args []string, input string) (RunResult, error) {
@@ -3084,7 +3084,7 @@ func TestMailboxLifecycleToolsUseDirectMailboxService(t *testing.T) {
 	service.state.defaultSender = "agent-deck/self"
 	service.state.autoBindAttempted = true
 
-	send := callServiceTool(t, service, "mailbox_send", map[string]any{
+	send := callServiceTool(t, service, "waypost_send", map[string]any{
 		"to_address": "agent-deck/self",
 		"subject":    "delegate",
 		"body":       "body",
@@ -3094,7 +3094,7 @@ func TestMailboxLifecycleToolsUseDirectMailboxService(t *testing.T) {
 		t.Fatal("delivery_id = empty, want non-empty")
 	}
 
-	wait := callServiceTool(t, service, "mailbox_wait", map[string]any{
+	wait := callServiceTool(t, service, "waypost_wait", map[string]any{
 		"addresses": []string{"agent-deck/self"},
 	})
 	if got := wait["status"]; got != "message_available" {
@@ -3108,7 +3108,7 @@ func TestMailboxLifecycleToolsUseDirectMailboxService(t *testing.T) {
 		t.Fatalf("wait delivery unexpectedly contains body: %v", waitDelivery)
 	}
 
-	recv := callServiceTool(t, service, "mailbox_recv", map[string]any{
+	recv := callServiceTool(t, service, "waypost_recv", map[string]any{
 		"addresses": []string{"agent-deck/self"},
 	})
 	if got := recv["status"]; got != "received" {
@@ -3130,15 +3130,15 @@ func TestMailboxLifecycleToolsUseDirectMailboxService(t *testing.T) {
 	if claimDetail["claim_source"] != "mcp" {
 		t.Fatalf("claim_source = %v, want mcp", claimDetail["claim_source"])
 	}
-	if claimDetail["claim_tool"] != "mailbox_recv" {
-		t.Fatalf("claim_tool = %v, want mailbox_recv", claimDetail["claim_tool"])
+	if claimDetail["claim_tool"] != "waypost_recv" {
+		t.Fatalf("claim_tool = %v, want waypost_recv", claimDetail["claim_tool"])
 	}
 	addresses, ok := claimDetail["claim_bound_addresses"].([]any)
 	if !ok || len(addresses) != 1 || addresses[0] != "agent-deck/self" {
 		t.Fatalf("claim_bound_addresses = %#v, want [agent-deck/self]", claimDetail["claim_bound_addresses"])
 	}
 
-	ack := callServiceTool(t, service, "mailbox_ack", map[string]any{
+	ack := callServiceTool(t, service, "waypost_ack", map[string]any{
 		"delivery_id": deliveryID,
 		"lease_token": message["lease_token"],
 	})
@@ -3146,7 +3146,7 @@ func TestMailboxLifecycleToolsUseDirectMailboxService(t *testing.T) {
 		t.Fatalf("ack status = %v, want acked", got)
 	}
 
-	list := callServiceTool(t, service, "mailbox_list", map[string]any{
+	list := callServiceTool(t, service, "waypost_list", map[string]any{
 		"address": "agent-deck/self",
 		"state":   "acked",
 	})
@@ -3162,7 +3162,7 @@ func TestMailboxLifecycleToolsUseDirectMailboxService(t *testing.T) {
 		t.Fatalf("listed state = %v, want acked", listed["state"])
 	}
 
-	read := callServiceTool(t, service, "mailbox_read", map[string]any{
+	read := callServiceTool(t, service, "waypost_read", map[string]any{
 		"addresses": []string{"agent-deck/self"},
 		"latest":    true,
 		"state":     "acked",
@@ -3184,10 +3184,10 @@ func TestMailboxLifecycleToolsUseDirectMailboxService(t *testing.T) {
 	}
 }
 
-func TestMailboxRecvDoesNotWaitForLaterMessage(t *testing.T) {
+func TestWaypostRecvDoesNotWaitForLaterMessage(t *testing.T) {
 	t.Parallel()
 
-	stateDir := filepath.Join(t.TempDir(), "mailbox-state")
+	stateDir := filepath.Join(t.TempDir(), "waypost-state")
 	service := newService(Options{
 		StateDir: stateDir,
 		CommandRunner: &fakeRunner{t: t, handler: func(args []string, input string) (RunResult, error) {
@@ -3201,7 +3201,7 @@ func TestMailboxRecvDoesNotWaitForLaterMessage(t *testing.T) {
 	service.state.defaultSender = "agent-deck/self"
 	service.state.autoBindAttempted = true
 
-	recv := callServiceTool(t, service, "mailbox_recv", map[string]any{
+	recv := callServiceTool(t, service, "waypost_recv", map[string]any{
 		"addresses": []string{"agent-deck/self"},
 	})
 	if got := recv["status"]; got != "no_message" {
@@ -3211,14 +3211,14 @@ func TestMailboxRecvDoesNotWaitForLaterMessage(t *testing.T) {
 		t.Fatal("empty recv tracked active lease")
 	}
 
-	send := callServiceTool(t, service, "mailbox_send", map[string]any{
+	send := callServiceTool(t, service, "waypost_send", map[string]any{
 		"to_address": "agent-deck/self",
 		"subject":    "nonblocking recv",
 		"body":       "body",
 	})
 	deliveryID := send["delivery_id"].(string)
 
-	wait := callServiceTool(t, service, "mailbox_wait", map[string]any{
+	wait := callServiceTool(t, service, "waypost_wait", map[string]any{
 		"addresses": []string{"agent-deck/self"},
 	})
 	if got := wait["status"]; got != "message_available" {
@@ -3230,10 +3230,10 @@ func TestMailboxRecvDoesNotWaitForLaterMessage(t *testing.T) {
 	}
 }
 
-func TestMailboxRecvReportsActiveLeaseImmediately(t *testing.T) {
+func TestWaypostRecvReportsActiveLeaseImmediately(t *testing.T) {
 	t.Parallel()
 
-	stateDir := filepath.Join(t.TempDir(), "mailbox-state")
+	stateDir := filepath.Join(t.TempDir(), "waypost-state")
 	service := newService(Options{
 		StateDir: stateDir,
 		CommandRunner: &fakeRunner{t: t, handler: func(args []string, input string) (RunResult, error) {
@@ -3247,20 +3247,20 @@ func TestMailboxRecvReportsActiveLeaseImmediately(t *testing.T) {
 	service.state.defaultSender = "agent-deck/self"
 	service.state.autoBindAttempted = true
 
-	send := callServiceTool(t, service, "mailbox_send", map[string]any{
+	send := callServiceTool(t, service, "waypost_send", map[string]any{
 		"to_address": "agent-deck/self",
 		"subject":    "active lease",
 		"body":       "body",
 	})
 	deliveryID := send["delivery_id"].(string)
-	firstRecv := callServiceTool(t, service, "mailbox_recv", map[string]any{
+	firstRecv := callServiceTool(t, service, "waypost_recv", map[string]any{
 		"addresses": []string{"agent-deck/self"},
 	})
 	firstMessage := firstRecv["delivery"].(map[string]any)["messages"].([]any)[0].(map[string]any)
 	leaseToken := firstMessage["lease_token"].(string)
 
 	startedAt := time.Now()
-	secondRecv := callServiceTool(t, service, "mailbox_recv", map[string]any{
+	secondRecv := callServiceTool(t, service, "waypost_recv", map[string]any{
 		"addresses": []string{"agent-deck/self"},
 	})
 	if elapsed := time.Since(startedAt); elapsed > 500*time.Millisecond {
@@ -3286,7 +3286,7 @@ func TestMailboxRecvReportsActiveLeaseImmediately(t *testing.T) {
 		t.Fatalf("recv hint unexpectedly included body")
 	}
 
-	history := callServiceTool(t, service, "mailbox_claim_history", map[string]any{
+	history := callServiceTool(t, service, "waypost_claim_history", map[string]any{
 		"delivery_id":         deliveryID,
 		"include_lease_token": true,
 	})
@@ -3303,10 +3303,10 @@ func TestMailboxRecvReportsActiveLeaseImmediately(t *testing.T) {
 	}
 }
 
-func TestMailboxRecvKnownDeliveryIDsSuppressActiveLeaseReport(t *testing.T) {
+func TestWaypostRecvKnownDeliveryIDsSuppressActiveLeaseReport(t *testing.T) {
 	t.Parallel()
 
-	stateDir := filepath.Join(t.TempDir(), "mailbox-state")
+	stateDir := filepath.Join(t.TempDir(), "waypost-state")
 	service := newService(Options{
 		StateDir: stateDir,
 		CommandRunner: &fakeRunner{t: t, handler: func(args []string, input string) (RunResult, error) {
@@ -3320,17 +3320,17 @@ func TestMailboxRecvKnownDeliveryIDsSuppressActiveLeaseReport(t *testing.T) {
 	service.state.defaultSender = "agent-deck/self"
 	service.state.autoBindAttempted = true
 
-	send := callServiceTool(t, service, "mailbox_send", map[string]any{
+	send := callServiceTool(t, service, "waypost_send", map[string]any{
 		"to_address": "agent-deck/self",
 		"subject":    "known active lease",
 		"body":       "body",
 	})
 	deliveryID := send["delivery_id"].(string)
-	callServiceTool(t, service, "mailbox_recv", map[string]any{
+	callServiceTool(t, service, "waypost_recv", map[string]any{
 		"addresses": []string{"agent-deck/self"},
 	})
 
-	secondRecv := callServiceTool(t, service, "mailbox_recv", map[string]any{
+	secondRecv := callServiceTool(t, service, "waypost_recv", map[string]any{
 		"addresses":          []string{"agent-deck/self"},
 		"known_delivery_ids": []string{deliveryID},
 	})
@@ -3342,19 +3342,19 @@ func TestMailboxRecvKnownDeliveryIDsSuppressActiveLeaseReport(t *testing.T) {
 	}
 }
 
-func TestMailboxRecvClaimsImmediateMessageWithParentContext(t *testing.T) {
+func TestWaypostRecvClaimsImmediateMessageWithParentContext(t *testing.T) {
 	t.Parallel()
 
-	mailboxService := &fakeMailboxService{t: t}
-	mailboxService.receiveBatchWithTTLFunc = func(ctx context.Context, params mailbox.ReceiveBatchParams, ttl time.Duration) (mailbox.ReceiveResult, error) {
+	waypostService := &fakeWaypostService{t: t}
+	waypostService.receiveBatchWithTTLFunc = func(ctx context.Context, params waypost.ReceiveBatchParams, ttl time.Duration) (waypost.ReceiveResult, error) {
 		if _, hasDeadline := ctx.Deadline(); hasDeadline {
 			t.Fatal("ReceiveBatchWithLeaseTTL got timeout context, want parent call context")
 		}
 		if ttl <= 0 {
 			t.Fatalf("ReceiveBatchWithLeaseTTL ttl = %s, want positive", ttl)
 		}
-		return mailbox.ReceiveResult{
-			Messages: []mailbox.ReceivedMessage{{
+		return waypost.ReceiveResult{
+			Messages: []waypost.ReceivedMessage{{
 				DeliveryID:       "dlv_parent_ctx",
 				RecipientAddress: "agent-deck/self",
 				LeaseToken:       "lease_parent_ctx",
@@ -3365,7 +3365,7 @@ func TestMailboxRecvClaimsImmediateMessageWithParentContext(t *testing.T) {
 	}
 
 	service := newService(Options{
-		MailboxServiceFactory: fakeMailboxServiceFactory{service: mailboxService},
+		WaypostServiceFactory: fakeWaypostServiceFactory{service: waypostService},
 		CommandRunner: &fakeRunner{t: t, handler: func(args []string, input string) (RunResult, error) {
 			t.Fatalf("unexpected command call: %v", args)
 			return RunResult{}, nil
@@ -3376,7 +3376,7 @@ func TestMailboxRecvClaimsImmediateMessageWithParentContext(t *testing.T) {
 	service.state.defaultSender = "agent-deck/self"
 	service.state.autoBindAttempted = true
 
-	output := callServiceTool(t, service, "mailbox_recv", map[string]any{
+	output := callServiceTool(t, service, "waypost_recv", map[string]any{
 		"addresses": []string{"agent-deck/self"},
 	})
 	if got := output["status"]; got != "received" {
@@ -3387,21 +3387,21 @@ func TestMailboxRecvClaimsImmediateMessageWithParentContext(t *testing.T) {
 	}
 }
 
-func TestMailboxRecvReturnsNoMessage(t *testing.T) {
+func TestWaypostRecvReturnsNoMessage(t *testing.T) {
 	t.Parallel()
 
 	callCount := 0
-	mailboxService := &fakeMailboxService{t: t}
-	mailboxService.receiveBatchFunc = func(_ context.Context, params mailbox.ReceiveBatchParams) (mailbox.ReceiveResult, error) {
+	waypostService := &fakeWaypostService{t: t}
+	waypostService.receiveBatchFunc = func(_ context.Context, params waypost.ReceiveBatchParams) (waypost.ReceiveResult, error) {
 		callCount++
 		if !reflect.DeepEqual(params.Addresses, []string{"agent-deck/self"}) {
 			t.Fatalf("ReceiveBatch addresses = %v, want [agent-deck/self]", params.Addresses)
 		}
-		return mailbox.ReceiveResult{}, mailbox.ErrNoMessage
+		return waypost.ReceiveResult{}, waypost.ErrNoMessage
 	}
 
 	service := newService(Options{
-		MailboxServiceFactory: fakeMailboxServiceFactory{service: mailboxService},
+		WaypostServiceFactory: fakeWaypostServiceFactory{service: waypostService},
 		CommandRunner: &fakeRunner{t: t, handler: func(args []string, input string) (RunResult, error) {
 			t.Fatalf("unexpected command call: %v", args)
 			return RunResult{}, nil
@@ -3411,7 +3411,7 @@ func TestMailboxRecvReturnsNoMessage(t *testing.T) {
 	service.state.defaultSender = "agent-deck/self"
 	service.state.autoBindAttempted = true
 
-	output := callServiceTool(t, service, "mailbox_recv", map[string]any{
+	output := callServiceTool(t, service, "waypost_recv", map[string]any{
 		"addresses": []string{"agent-deck/self"},
 	})
 	if got := output["status"]; got != "no_message" {
@@ -3425,16 +3425,16 @@ func TestMailboxRecvReturnsNoMessage(t *testing.T) {
 	}
 }
 
-func TestMailboxRecvReturnsImmediately(t *testing.T) {
+func TestWaypostRecvReturnsImmediately(t *testing.T) {
 	t.Parallel()
 
-	mailboxService := &fakeMailboxService{t: t}
-	mailboxService.receiveBatchFunc = func(_ context.Context, params mailbox.ReceiveBatchParams) (mailbox.ReceiveResult, error) {
-		return mailbox.ReceiveResult{}, mailbox.ErrNoMessage
+	waypostService := &fakeWaypostService{t: t}
+	waypostService.receiveBatchFunc = func(_ context.Context, params waypost.ReceiveBatchParams) (waypost.ReceiveResult, error) {
+		return waypost.ReceiveResult{}, waypost.ErrNoMessage
 	}
 
 	service := newService(Options{
-		MailboxServiceFactory: fakeMailboxServiceFactory{service: mailboxService},
+		WaypostServiceFactory: fakeWaypostServiceFactory{service: waypostService},
 		CommandRunner: &fakeRunner{t: t, handler: func(args []string, input string) (RunResult, error) {
 			t.Fatalf("unexpected command call: %v", args)
 			return RunResult{}, nil
@@ -3445,7 +3445,7 @@ func TestMailboxRecvReturnsImmediately(t *testing.T) {
 	service.state.autoBindAttempted = true
 
 	startedAt := time.Now()
-	output := callServiceTool(t, service, "mailbox_recv", map[string]any{
+	output := callServiceTool(t, service, "waypost_recv", map[string]any{
 		"addresses": []string{"agent-deck/self"},
 	})
 	if got := output["status"]; got != "no_message" {
@@ -3456,18 +3456,18 @@ func TestMailboxRecvReturnsImmediately(t *testing.T) {
 	}
 }
 
-func TestMailboxRecvWithoutTimeoutRemainsImmediate(t *testing.T) {
+func TestWaypostRecvWithoutTimeoutRemainsImmediate(t *testing.T) {
 	t.Parallel()
 
 	callCount := 0
-	mailboxService := &fakeMailboxService{t: t}
-	mailboxService.receiveBatchFunc = func(_ context.Context, params mailbox.ReceiveBatchParams) (mailbox.ReceiveResult, error) {
+	waypostService := &fakeWaypostService{t: t}
+	waypostService.receiveBatchFunc = func(_ context.Context, params waypost.ReceiveBatchParams) (waypost.ReceiveResult, error) {
 		callCount++
-		return mailbox.ReceiveResult{}, mailbox.ErrNoMessage
+		return waypost.ReceiveResult{}, waypost.ErrNoMessage
 	}
 
 	service := newService(Options{
-		MailboxServiceFactory: fakeMailboxServiceFactory{service: mailboxService},
+		WaypostServiceFactory: fakeWaypostServiceFactory{service: waypostService},
 		CommandRunner: &fakeRunner{t: t, handler: func(args []string, input string) (RunResult, error) {
 			t.Fatalf("unexpected command call: %v", args)
 			return RunResult{}, nil
@@ -3477,7 +3477,7 @@ func TestMailboxRecvWithoutTimeoutRemainsImmediate(t *testing.T) {
 	service.state.defaultSender = "agent-deck/self"
 	service.state.autoBindAttempted = true
 
-	output := callServiceTool(t, service, "mailbox_recv", map[string]any{
+	output := callServiceTool(t, service, "waypost_recv", map[string]any{
 		"addresses": []string{"agent-deck/self"},
 	})
 	if got := output["status"]; got != "no_message" {
@@ -3488,10 +3488,10 @@ func TestMailboxRecvWithoutTimeoutRemainsImmediate(t *testing.T) {
 	}
 }
 
-func TestMailboxGroupMCPRuntimeFlow(t *testing.T) {
+func TestWaypostGroupMCPRuntimeFlow(t *testing.T) {
 	t.Parallel()
 
-	stateDir := filepath.Join(t.TempDir(), "mailbox-state")
+	stateDir := filepath.Join(t.TempDir(), "waypost-state")
 	service := newService(Options{
 		StateDir: stateDir,
 		CommandRunner: &fakeRunner{t: t, handler: func(args []string, input string) (RunResult, error) {
@@ -3505,7 +3505,7 @@ func TestMailboxGroupMCPRuntimeFlow(t *testing.T) {
 	service.state.defaultSender = "agent/sender"
 	service.state.autoBindAttempted = true
 
-	created := callServiceTool(t, service, "mailbox_group_create", map[string]any{
+	created := callServiceTool(t, service, "waypost_group_create", map[string]any{
 		"group_address": "group/review",
 	})
 	group := created["group"].(map[string]any)
@@ -3513,29 +3513,29 @@ func TestMailboxGroupMCPRuntimeFlow(t *testing.T) {
 		t.Fatalf("created group address = %v, want group/review", group["address"])
 	}
 
-	callServiceTool(t, service, "mailbox_group_add_member", map[string]any{
+	callServiceTool(t, service, "waypost_group_add_member", map[string]any{
 		"group_address": "group/review",
 		"person":        "alice",
 	})
-	callServiceTool(t, service, "mailbox_group_add_member", map[string]any{
+	callServiceTool(t, service, "waypost_group_add_member", map[string]any{
 		"group_address": "group/review",
 		"person":        "bob",
 	})
 
-	send := callServiceTool(t, service, "mailbox_send", map[string]any{
+	send := callServiceTool(t, service, "waypost_send", map[string]any{
 		"to_address": "group/review",
 		"subject":    "group update",
 		"body":       "group body",
 		"group":      true,
 	})
-	if got := send["mode"]; got != mailbox.SendModeGroup {
+	if got := send["mode"]; got != waypost.SendModeGroup {
 		t.Fatalf("send mode = %v, want group", got)
 	}
 	if got := send["delivery_id"]; got != nil {
 		t.Fatalf("group send delivery_id = %v, want nil", got)
 	}
 
-	wait := callServiceTool(t, service, "mailbox_wait", map[string]any{
+	wait := callServiceTool(t, service, "waypost_wait", map[string]any{
 		"addresses": []string{"group/review"},
 		"as_person": "alice",
 	})
@@ -3550,7 +3550,7 @@ func TestMailboxGroupMCPRuntimeFlow(t *testing.T) {
 		t.Fatalf("group wait exposed delivery_id: %v", waitMessage)
 	}
 
-	recv := callServiceTool(t, service, "mailbox_recv", map[string]any{
+	recv := callServiceTool(t, service, "waypost_recv", map[string]any{
 		"addresses": []string{"group/review"},
 		"as_person": "alice",
 	})
@@ -3568,7 +3568,7 @@ func TestMailboxGroupMCPRuntimeFlow(t *testing.T) {
 		t.Fatal("group recv tracked active lease")
 	}
 
-	list := callServiceTool(t, service, "mailbox_list", map[string]any{
+	list := callServiceTool(t, service, "waypost_list", map[string]any{
 		"address":   "group/review",
 		"as_person": "alice",
 	})
@@ -3581,25 +3581,25 @@ func TestMailboxGroupMCPRuntimeFlow(t *testing.T) {
 		t.Fatalf("listed read = %v, want true after recv", listed["read"])
 	}
 
-	members := callServiceTool(t, service, "mailbox_group_members", map[string]any{
+	members := callServiceTool(t, service, "waypost_group_members", map[string]any{
 		"group_address": "group/review",
 	})
 	if got := len(members["memberships"].([]any)); got != 2 {
 		t.Fatalf("group members = %d, want 2", got)
 	}
 
-	inspect := callServiceTool(t, service, "mailbox_address_inspect", map[string]any{
+	inspect := callServiceTool(t, service, "waypost_address_inspect", map[string]any{
 		"address": "group/review",
 	})
-	if got := inspect["inspection"].(map[string]any)["kind"]; got != mailbox.AddressKindGroup {
+	if got := inspect["inspection"].(map[string]any)["kind"]; got != waypost.AddressKindGroup {
 		t.Fatalf("inspect kind = %v, want group", got)
 	}
 }
 
-func TestMailboxGroupSendRuntimeKeepsMessageWhenSubscriberNotifyFails(t *testing.T) {
+func TestWaypostGroupSendRuntimeKeepsMessageWhenSubscriberNotifyFails(t *testing.T) {
 	t.Parallel()
 
-	stateDir := filepath.Join(t.TempDir(), "mailbox-state")
+	stateDir := filepath.Join(t.TempDir(), "waypost-state")
 	service := newService(Options{
 		StateDir: stateDir,
 		CommandRunner: &fakeRunner{t: t, handler: func(args []string, input string) (RunResult, error) {
@@ -3618,24 +3618,24 @@ func TestMailboxGroupSendRuntimeKeepsMessageWhenSubscriberNotifyFails(t *testing
 	})
 	service.state.autoBindAttempted = true
 
-	callServiceTool(t, service, "mailbox_group_create", map[string]any{
+	callServiceTool(t, service, "waypost_group_create", map[string]any{
 		"group_address": "group/review",
 	})
-	callServiceTool(t, service, "mailbox_group_add_member", map[string]any{
+	callServiceTool(t, service, "waypost_group_add_member", map[string]any{
 		"group_address": "group/review",
 		"person":        "alice",
 	})
-	callServiceTool(t, service, "mailbox_group_add_member", map[string]any{
+	callServiceTool(t, service, "waypost_group_add_member", map[string]any{
 		"group_address": "group/review",
 		"person":        "moderator",
 	})
-	callServiceTool(t, service, "mailbox_group_add_subscriber", map[string]any{
+	callServiceTool(t, service, "waypost_group_add_subscriber", map[string]any{
 		"group_address":  "group/review",
 		"notify_address": "agent-deck/moderator",
 		"person":         "moderator",
 	})
 
-	send := callServiceTool(t, service, "mailbox_send", map[string]any{
+	send := callServiceTool(t, service, "waypost_send", map[string]any{
 		"to_address":   "group/review",
 		"from_address": "agent-deck/expert",
 		"subject":      "expert post",
@@ -3649,11 +3649,11 @@ func TestMailboxGroupSendRuntimeKeepsMessageWhenSubscriberNotifyFails(t *testing
 		t.Fatalf("notify_status = %v, want failed", got)
 	}
 
-	controlRecv := callServiceTool(t, service, "mailbox_recv", map[string]any{
+	controlRecv := callServiceTool(t, service, "waypost_recv", map[string]any{
 		"addresses": []string{"agent-deck/moderator"},
 	})
 	control := controlRecv["delivery"].(map[string]any)["messages"].([]any)[0].(map[string]any)
-	if control["subject"] != "Group mailbox update: group/review" {
+	if control["subject"] != "Group waypost update: group/review" {
 		t.Fatalf("control subject = %v, want group update", control["subject"])
 	}
 	controlBody := control["body"].(string)
@@ -3668,7 +3668,7 @@ func TestMailboxGroupSendRuntimeKeepsMessageWhenSubscriberNotifyFails(t *testing
 		}
 	}
 
-	recv := callServiceTool(t, service, "mailbox_recv", map[string]any{
+	recv := callServiceTool(t, service, "waypost_recv", map[string]any{
 		"addresses": []string{"group/review"},
 		"as_person": "alice",
 	})
@@ -3681,12 +3681,12 @@ func TestMailboxGroupSendRuntimeKeepsMessageWhenSubscriberNotifyFails(t *testing
 	}
 }
 
-func TestMailboxRecvExposesForwardedFromAddressInCompactPayload(t *testing.T) {
+func TestWaypostRecvExposesForwardedFromAddressInCompactPayload(t *testing.T) {
 	forwardedFromAddress := "agent/source"
-	mailboxService := &fakeMailboxService{t: t}
-	mailboxService.receiveBatchWithTTLFunc = func(_ context.Context, params mailbox.ReceiveBatchParams, ttl time.Duration) (mailbox.ReceiveResult, error) {
-		return mailbox.ReceiveResult{
-			Messages: []mailbox.ReceivedMessage{{
+	waypostService := &fakeWaypostService{t: t}
+	waypostService.receiveBatchWithTTLFunc = func(_ context.Context, params waypost.ReceiveBatchParams, ttl time.Duration) (waypost.ReceiveResult, error) {
+		return waypost.ReceiveResult{
+			Messages: []waypost.ReceivedMessage{{
 				DeliveryID:           "dlv_forwarded",
 				MessageID:            "msg_forwarded",
 				ForwardedFromAddress: &forwardedFromAddress,
@@ -3700,7 +3700,7 @@ func TestMailboxRecvExposesForwardedFromAddressInCompactPayload(t *testing.T) {
 	}
 
 	service := newService(Options{
-		MailboxServiceFactory: fakeMailboxServiceFactory{service: mailboxService},
+		WaypostServiceFactory: fakeWaypostServiceFactory{service: waypostService},
 		CommandRunner: &fakeRunner{t: t, handler: func(args []string, input string) (RunResult, error) {
 			t.Fatalf("unexpected command call: %v", args)
 			return RunResult{}, nil
@@ -3711,7 +3711,7 @@ func TestMailboxRecvExposesForwardedFromAddressInCompactPayload(t *testing.T) {
 	service.state.defaultSender = "agent-deck/self"
 	service.state.autoBindAttempted = true
 
-	recv := callServiceTool(t, service, "mailbox_recv", map[string]any{
+	recv := callServiceTool(t, service, "waypost_recv", map[string]any{
 		"addresses": []string{"agent-deck/self"},
 	})
 	delivery := recv["delivery"].(map[string]any)
@@ -3722,11 +3722,11 @@ func TestMailboxRecvExposesForwardedFromAddressInCompactPayload(t *testing.T) {
 	assertMCPMapOmitsForwardedMessageID(t, message)
 }
 
-func TestMailboxWaitExposesForwardedFromAddressInCompactPayload(t *testing.T) {
+func TestWaypostWaitExposesForwardedFromAddressInCompactPayload(t *testing.T) {
 	forwardedFromAddress := "agent/source"
-	mailboxService := &fakeMailboxService{t: t}
-	mailboxService.waitFunc = func(_ context.Context, params mailbox.WaitParams) (mailbox.ListedDelivery, error) {
-		return mailbox.ListedDelivery{
+	waypostService := &fakeWaypostService{t: t}
+	waypostService.waitFunc = func(_ context.Context, params waypost.WaitParams) (waypost.ListedDelivery, error) {
+		return waypost.ListedDelivery{
 			DeliveryID:           "dlv_forwarded",
 			MessageID:            "msg_forwarded",
 			ForwardedFromAddress: &forwardedFromAddress,
@@ -3737,7 +3737,7 @@ func TestMailboxWaitExposesForwardedFromAddressInCompactPayload(t *testing.T) {
 	}
 
 	service := newService(Options{
-		MailboxServiceFactory: fakeMailboxServiceFactory{service: mailboxService},
+		WaypostServiceFactory: fakeWaypostServiceFactory{service: waypostService},
 		CommandRunner: &fakeRunner{t: t, handler: func(args []string, input string) (RunResult, error) {
 			t.Fatalf("unexpected command call: %v", args)
 			return RunResult{}, nil
@@ -3748,7 +3748,7 @@ func TestMailboxWaitExposesForwardedFromAddressInCompactPayload(t *testing.T) {
 	service.state.defaultSender = "agent-deck/self"
 	service.state.autoBindAttempted = true
 
-	wait := callServiceTool(t, service, "mailbox_wait", map[string]any{
+	wait := callServiceTool(t, service, "waypost_wait", map[string]any{
 		"addresses": []string{"agent-deck/self"},
 	})
 	delivery := wait["delivery"].(map[string]any)
@@ -3758,17 +3758,17 @@ func TestMailboxWaitExposesForwardedFromAddressInCompactPayload(t *testing.T) {
 	assertMCPMapOmitsForwardedMessageID(t, delivery)
 }
 
-func TestMailboxListAsPersonExposesForwardedFromAddress(t *testing.T) {
+func TestWaypostListAsPersonExposesForwardedFromAddress(t *testing.T) {
 	forwardedFromAddress := "agent/source"
-	mailboxService := &fakeMailboxService{t: t}
-	mailboxService.listGroupMessagesFunc = func(_ context.Context, params mailbox.GroupListParams) ([]mailbox.GroupListedMessage, error) {
+	waypostService := &fakeWaypostService{t: t}
+	waypostService.listGroupMessagesFunc = func(_ context.Context, params waypost.GroupListParams) ([]waypost.GroupListedMessage, error) {
 		if params.Address != "group/review" {
 			t.Fatalf("ListGroupMessages address = %q, want group/review", params.Address)
 		}
 		if params.Person != "alice" {
 			t.Fatalf("ListGroupMessages person = %q, want alice", params.Person)
 		}
-		return []mailbox.GroupListedMessage{{
+		return []waypost.GroupListedMessage{{
 			MessageID:            "msg_forwarded",
 			ForwardedFromAddress: &forwardedFromAddress,
 			GroupID:              "grp_1",
@@ -3784,7 +3784,7 @@ func TestMailboxListAsPersonExposesForwardedFromAddress(t *testing.T) {
 	}
 
 	service := newService(Options{
-		MailboxServiceFactory: fakeMailboxServiceFactory{service: mailboxService},
+		WaypostServiceFactory: fakeWaypostServiceFactory{service: waypostService},
 		CommandRunner: &fakeRunner{t: t, handler: func(args []string, input string) (RunResult, error) {
 			t.Fatalf("unexpected command call: %v", args)
 			return RunResult{}, nil
@@ -3793,7 +3793,7 @@ func TestMailboxListAsPersonExposesForwardedFromAddress(t *testing.T) {
 	})
 	service.state.autoBindAttempted = true
 
-	list := callServiceTool(t, service, "mailbox_list", map[string]any{
+	list := callServiceTool(t, service, "waypost_list", map[string]any{
 		"address":   "group/review",
 		"as_person": "alice",
 	})
@@ -3808,13 +3808,13 @@ func TestMailboxListAsPersonExposesForwardedFromAddress(t *testing.T) {
 	assertMCPMapOmitsForwardedMessageID(t, delivery)
 }
 
-func TestMailboxWaitAsPersonUsesGroupWaitWithoutDeliveryLease(t *testing.T) {
-	mailboxService := &fakeMailboxService{t: t}
-	mailboxService.waitGroupMessageFunc = func(_ context.Context, params mailbox.GroupWaitParams) (mailbox.GroupListedMessage, error) {
+func TestWaypostWaitAsPersonUsesGroupWaitWithoutDeliveryLease(t *testing.T) {
+	waypostService := &fakeWaypostService{t: t}
+	waypostService.waitGroupMessageFunc = func(_ context.Context, params waypost.GroupWaitParams) (waypost.GroupListedMessage, error) {
 		if params.Address != "group/review" || params.Person != "alice" || params.Timeout != 25*time.Millisecond {
 			t.Fatalf("WaitGroupMessage params = %+v", params)
 		}
-		return mailbox.GroupListedMessage{
+		return waypost.GroupListedMessage{
 			MessageID:        "msg_group",
 			GroupID:          "grp_1",
 			GroupAddress:     "group/review",
@@ -3829,7 +3829,7 @@ func TestMailboxWaitAsPersonUsesGroupWaitWithoutDeliveryLease(t *testing.T) {
 	}
 
 	service := newService(Options{
-		MailboxServiceFactory: fakeMailboxServiceFactory{service: mailboxService},
+		WaypostServiceFactory: fakeWaypostServiceFactory{service: waypostService},
 		CommandRunner: &fakeRunner{t: t, handler: func(args []string, input string) (RunResult, error) {
 			t.Fatalf("unexpected command call: %v", args)
 			return RunResult{}, nil
@@ -3838,7 +3838,7 @@ func TestMailboxWaitAsPersonUsesGroupWaitWithoutDeliveryLease(t *testing.T) {
 	})
 	service.state.autoBindAttempted = true
 
-	wait := callServiceTool(t, service, "mailbox_wait", map[string]any{
+	wait := callServiceTool(t, service, "waypost_wait", map[string]any{
 		"addresses": []string{"group/review"},
 		"as_person": "alice",
 		"timeout":   "25ms",
@@ -3858,13 +3858,13 @@ func TestMailboxWaitAsPersonUsesGroupWaitWithoutDeliveryLease(t *testing.T) {
 	}
 }
 
-func TestMailboxRecvAsPersonUsesGroupRecvWithoutTrackingLease(t *testing.T) {
-	mailboxService := &fakeMailboxService{t: t}
-	mailboxService.receiveGroupMessageFunc = func(_ context.Context, params mailbox.GroupReceiveParams) (mailbox.GroupReceivedMessage, error) {
+func TestWaypostRecvAsPersonUsesGroupRecvWithoutTrackingLease(t *testing.T) {
+	waypostService := &fakeWaypostService{t: t}
+	waypostService.receiveGroupMessageFunc = func(_ context.Context, params waypost.GroupReceiveParams) (waypost.GroupReceivedMessage, error) {
 		if params.Address != "group/review" || params.Person != "alice" {
 			t.Fatalf("ReceiveGroupMessage params = %+v", params)
 		}
-		return mailbox.GroupReceivedMessage{
+		return waypost.GroupReceivedMessage{
 			MessageID:        "msg_group",
 			GroupID:          "grp_1",
 			GroupAddress:     "group/review",
@@ -3880,7 +3880,7 @@ func TestMailboxRecvAsPersonUsesGroupRecvWithoutTrackingLease(t *testing.T) {
 	}
 
 	service := newService(Options{
-		MailboxServiceFactory: fakeMailboxServiceFactory{service: mailboxService},
+		WaypostServiceFactory: fakeWaypostServiceFactory{service: waypostService},
 		CommandRunner: &fakeRunner{t: t, handler: func(args []string, input string) (RunResult, error) {
 			t.Fatalf("unexpected command call: %v", args)
 			return RunResult{}, nil
@@ -3890,7 +3890,7 @@ func TestMailboxRecvAsPersonUsesGroupRecvWithoutTrackingLease(t *testing.T) {
 	})
 	service.state.autoBindAttempted = true
 
-	recv := callServiceTool(t, service, "mailbox_recv", map[string]any{
+	recv := callServiceTool(t, service, "waypost_recv", map[string]any{
 		"addresses": []string{"group/review"},
 		"as_person": "alice",
 	})
@@ -3912,16 +3912,16 @@ func TestMailboxRecvAsPersonUsesGroupRecvWithoutTrackingLease(t *testing.T) {
 	}
 }
 
-func TestMailboxRecvAsPersonUsesImmediateGroupReceive(t *testing.T) {
-	mailboxService := &fakeMailboxService{t: t}
+func TestWaypostRecvAsPersonUsesImmediateGroupReceive(t *testing.T) {
+	waypostService := &fakeWaypostService{t: t}
 	waitCalled := false
 	recvCalled := false
-	mailboxService.waitGroupMessageFunc = func(ctx context.Context, params mailbox.GroupWaitParams) (mailbox.GroupListedMessage, error) {
+	waypostService.waitGroupMessageFunc = func(ctx context.Context, params waypost.GroupWaitParams) (waypost.GroupListedMessage, error) {
 		waitCalled = true
 		t.Fatalf("WaitGroupMessage called by non-blocking recv: %+v", params)
-		return mailbox.GroupListedMessage{}, nil
+		return waypost.GroupListedMessage{}, nil
 	}
-	mailboxService.receiveGroupMessageFunc = func(ctx context.Context, params mailbox.GroupReceiveParams) (mailbox.GroupReceivedMessage, error) {
+	waypostService.receiveGroupMessageFunc = func(ctx context.Context, params waypost.GroupReceiveParams) (waypost.GroupReceivedMessage, error) {
 		recvCalled = true
 		if _, hasDeadline := ctx.Deadline(); hasDeadline {
 			t.Fatal("ReceiveGroupMessage got timeout context, want parent context")
@@ -3929,7 +3929,7 @@ func TestMailboxRecvAsPersonUsesImmediateGroupReceive(t *testing.T) {
 		if params.Address != "group/review" || params.Person != "alice" {
 			t.Fatalf("ReceiveGroupMessage params = %+v", params)
 		}
-		return mailbox.GroupReceivedMessage{
+		return waypost.GroupReceivedMessage{
 			MessageID:        "msg_group",
 			GroupID:          "grp_1",
 			GroupAddress:     "group/review",
@@ -3945,7 +3945,7 @@ func TestMailboxRecvAsPersonUsesImmediateGroupReceive(t *testing.T) {
 	}
 
 	service := newService(Options{
-		MailboxServiceFactory: fakeMailboxServiceFactory{service: mailboxService},
+		WaypostServiceFactory: fakeWaypostServiceFactory{service: waypostService},
 		CommandRunner: &fakeRunner{t: t, handler: func(args []string, input string) (RunResult, error) {
 			t.Fatalf("unexpected command call: %v", args)
 			return RunResult{}, nil
@@ -3955,7 +3955,7 @@ func TestMailboxRecvAsPersonUsesImmediateGroupReceive(t *testing.T) {
 	})
 	service.state.autoBindAttempted = true
 
-	recv := callServiceTool(t, service, "mailbox_recv", map[string]any{
+	recv := callServiceTool(t, service, "waypost_recv", map[string]any{
 		"addresses": []string{"group/review"},
 		"as_person": "alice",
 	})
@@ -3977,9 +3977,9 @@ func TestMailboxRecvAsPersonUsesImmediateGroupReceive(t *testing.T) {
 	}
 }
 
-func TestMailboxGroupReadRequiresSingleGroupAddress(t *testing.T) {
+func TestWaypostGroupReadRequiresSingleGroupAddress(t *testing.T) {
 	service := newService(Options{
-		MailboxServiceFactory: fakeMailboxServiceFactory{service: &fakeMailboxService{t: t}},
+		WaypostServiceFactory: fakeWaypostServiceFactory{service: &fakeWaypostService{t: t}},
 		CommandRunner: &fakeRunner{t: t, handler: func(args []string, input string) (RunResult, error) {
 			t.Fatalf("unexpected command call: %v", args)
 			return RunResult{}, nil
@@ -3988,36 +3988,36 @@ func TestMailboxGroupReadRequiresSingleGroupAddress(t *testing.T) {
 	})
 	service.state.autoBindAttempted = true
 
-	err := callServiceToolExpectError(t, service, "mailbox_recv", map[string]any{
+	err := callServiceToolExpectError(t, service, "waypost_recv", map[string]any{
 		"addresses": []string{"group/one", "group/two"},
 		"as_person": "alice",
 	})
 	if err == nil || !strings.Contains(err.Error(), "requires exactly one group address") {
-		t.Fatalf("mailbox_recv error = %v, want single group address validation", err)
+		t.Fatalf("waypost_recv error = %v, want single group address validation", err)
 	}
 
-	err = callServiceToolExpectError(t, service, "mailbox_wait", map[string]any{
+	err = callServiceToolExpectError(t, service, "waypost_wait", map[string]any{
 		"addresses": []string{"agent/alice"},
 		"as_person": "alice",
 	})
 	if err == nil || !strings.Contains(err.Error(), "requires a group address") {
-		t.Fatalf("mailbox_wait error = %v, want group address validation", err)
+		t.Fatalf("waypost_wait error = %v, want group address validation", err)
 	}
 }
 
-func TestMailboxGroupControlToolsUseMailboxService(t *testing.T) {
-	mailboxService := &fakeMailboxService{t: t}
-	mailboxService.createGroupFunc = func(_ context.Context, groupAddress string) (mailbox.GroupRecord, error) {
+func TestWaypostGroupControlToolsUseWaypostService(t *testing.T) {
+	waypostService := &fakeWaypostService{t: t}
+	waypostService.createGroupFunc = func(_ context.Context, groupAddress string) (waypost.GroupRecord, error) {
 		if groupAddress != "group/review" {
 			t.Fatalf("CreateGroup address = %q, want group/review", groupAddress)
 		}
-		return mailbox.GroupRecord{GroupID: "grp_1", Address: groupAddress, CreatedAt: "2026-04-18T00:00:00Z"}, nil
+		return waypost.GroupRecord{GroupID: "grp_1", Address: groupAddress, CreatedAt: "2026-04-18T00:00:00Z"}, nil
 	}
-	mailboxService.addGroupMemberFunc = func(_ context.Context, groupAddress, person string) (mailbox.GroupMembershipRecord, error) {
+	waypostService.addGroupMemberFunc = func(_ context.Context, groupAddress, person string) (waypost.GroupMembershipRecord, error) {
 		if groupAddress != "group/review" || person != "alice" {
 			t.Fatalf("AddGroupMember args = group=%q person=%q", groupAddress, person)
 		}
-		return mailbox.GroupMembershipRecord{
+		return waypost.GroupMembershipRecord{
 			MembershipID: "gm_1",
 			GroupID:      "grp_1",
 			GroupAddress: groupAddress,
@@ -4027,11 +4027,11 @@ func TestMailboxGroupControlToolsUseMailboxService(t *testing.T) {
 			Active:       true,
 		}, nil
 	}
-	mailboxService.listGroupMembersFunc = func(_ context.Context, groupAddress string) ([]mailbox.GroupMembershipRecord, error) {
+	waypostService.listGroupMembersFunc = func(_ context.Context, groupAddress string) ([]waypost.GroupMembershipRecord, error) {
 		if groupAddress != "group/review" {
 			t.Fatalf("ListGroupMembers address = %q, want group/review", groupAddress)
 		}
-		return []mailbox.GroupMembershipRecord{{
+		return []waypost.GroupMembershipRecord{{
 			MembershipID: "gm_1",
 			GroupID:      "grp_1",
 			GroupAddress: groupAddress,
@@ -4041,12 +4041,12 @@ func TestMailboxGroupControlToolsUseMailboxService(t *testing.T) {
 			Active:       true,
 		}}, nil
 	}
-	mailboxService.removeGroupMemberFunc = func(_ context.Context, groupAddress, person string) (mailbox.GroupMembershipRecord, error) {
+	waypostService.removeGroupMemberFunc = func(_ context.Context, groupAddress, person string) (waypost.GroupMembershipRecord, error) {
 		if groupAddress != "group/review" || person != "alice" {
 			t.Fatalf("RemoveGroupMember args = group=%q person=%q", groupAddress, person)
 		}
 		leftAt := "2026-04-18T00:02:00Z"
-		return mailbox.GroupMembershipRecord{
+		return waypost.GroupMembershipRecord{
 			MembershipID: "gm_1",
 			GroupID:      "grp_1",
 			GroupAddress: groupAddress,
@@ -4057,11 +4057,11 @@ func TestMailboxGroupControlToolsUseMailboxService(t *testing.T) {
 			Active:       false,
 		}, nil
 	}
-	mailboxService.addGroupSubscriberFunc = func(_ context.Context, groupAddress, notifyAddress, person string) (mailbox.GroupNotificationSubscriberRecord, error) {
+	waypostService.addGroupSubscriberFunc = func(_ context.Context, groupAddress, notifyAddress, person string) (waypost.GroupNotificationSubscriberRecord, error) {
 		if groupAddress != "group/review" || notifyAddress != "agent-deck/moderator" || person != "moderator" {
 			t.Fatalf("AddGroupNotificationSubscriber args = group=%q notify=%q person=%q", groupAddress, notifyAddress, person)
 		}
-		return mailbox.GroupNotificationSubscriberRecord{
+		return waypost.GroupNotificationSubscriberRecord{
 			SubscriberID:  "gns_1",
 			GroupID:       "grp_1",
 			GroupAddress:  groupAddress,
@@ -4071,11 +4071,11 @@ func TestMailboxGroupControlToolsUseMailboxService(t *testing.T) {
 			Active:        true,
 		}, nil
 	}
-	mailboxService.listGroupSubscribersFunc = func(_ context.Context, groupAddress string) ([]mailbox.GroupNotificationSubscriberRecord, error) {
+	waypostService.listGroupSubscribersFunc = func(_ context.Context, groupAddress string) ([]waypost.GroupNotificationSubscriberRecord, error) {
 		if groupAddress != "group/review" {
 			t.Fatalf("ListGroupNotificationSubscribers address = %q, want group/review", groupAddress)
 		}
-		return []mailbox.GroupNotificationSubscriberRecord{{
+		return []waypost.GroupNotificationSubscriberRecord{{
 			SubscriberID:  "gns_1",
 			GroupID:       "grp_1",
 			GroupAddress:  groupAddress,
@@ -4085,12 +4085,12 @@ func TestMailboxGroupControlToolsUseMailboxService(t *testing.T) {
 			Active:        true,
 		}}, nil
 	}
-	mailboxService.removeGroupSubscriberFunc = func(_ context.Context, groupAddress, notifyAddress string) (mailbox.GroupNotificationSubscriberRecord, error) {
+	waypostService.removeGroupSubscriberFunc = func(_ context.Context, groupAddress, notifyAddress string) (waypost.GroupNotificationSubscriberRecord, error) {
 		if groupAddress != "group/review" || notifyAddress != "agent-deck/moderator" {
 			t.Fatalf("RemoveGroupNotificationSubscriber args = group=%q notify=%q", groupAddress, notifyAddress)
 		}
 		removedAt := "2026-04-18T00:02:30Z"
-		return mailbox.GroupNotificationSubscriberRecord{
+		return waypost.GroupNotificationSubscriberRecord{
 			SubscriberID:  "gns_1",
 			GroupID:       "grp_1",
 			GroupAddress:  groupAddress,
@@ -4101,16 +4101,16 @@ func TestMailboxGroupControlToolsUseMailboxService(t *testing.T) {
 			Active:        false,
 		}, nil
 	}
-	mailboxService.inspectAddressFunc = func(_ context.Context, address string) (mailbox.AddressInspection, error) {
+	waypostService.inspectAddressFunc = func(_ context.Context, address string) (waypost.AddressInspection, error) {
 		if address != "group/review" {
 			t.Fatalf("InspectAddress address = %q, want group/review", address)
 		}
 		groupID := "grp_1"
-		return mailbox.AddressInspection{Address: address, Kind: mailbox.AddressKindGroup, GroupID: &groupID}, nil
+		return waypost.AddressInspection{Address: address, Kind: waypost.AddressKindGroup, GroupID: &groupID}, nil
 	}
 
 	service := newService(Options{
-		MailboxServiceFactory: fakeMailboxServiceFactory{service: mailboxService},
+		WaypostServiceFactory: fakeWaypostServiceFactory{service: waypostService},
 		CommandRunner: &fakeRunner{t: t, handler: func(args []string, input string) (RunResult, error) {
 			t.Fatalf("unexpected command call: %v", args)
 			return RunResult{}, nil
@@ -4119,7 +4119,7 @@ func TestMailboxGroupControlToolsUseMailboxService(t *testing.T) {
 	})
 	service.state.autoBindAttempted = true
 
-	created := callServiceTool(t, service, "mailbox_group_create", map[string]any{
+	created := callServiceTool(t, service, "waypost_group_create", map[string]any{
 		"group_address": "group/review",
 	})
 	if got := created["status"]; got != "created" {
@@ -4129,7 +4129,7 @@ func TestMailboxGroupControlToolsUseMailboxService(t *testing.T) {
 		t.Fatalf("created group_id = %v, want grp_1", got)
 	}
 
-	added := callServiceTool(t, service, "mailbox_group_add_member", map[string]any{
+	added := callServiceTool(t, service, "waypost_group_add_member", map[string]any{
 		"group_address": "group/review",
 		"person":        "alice",
 	})
@@ -4140,7 +4140,7 @@ func TestMailboxGroupControlToolsUseMailboxService(t *testing.T) {
 		t.Fatalf("added person = %v, want alice", got)
 	}
 
-	members := callServiceTool(t, service, "mailbox_group_members", map[string]any{
+	members := callServiceTool(t, service, "waypost_group_members", map[string]any{
 		"group_address": "group/review",
 	})
 	memberships := members["memberships"].([]any)
@@ -4148,7 +4148,7 @@ func TestMailboxGroupControlToolsUseMailboxService(t *testing.T) {
 		t.Fatalf("memberships = %d, want 1", len(memberships))
 	}
 
-	removed := callServiceTool(t, service, "mailbox_group_remove_member", map[string]any{
+	removed := callServiceTool(t, service, "waypost_group_remove_member", map[string]any{
 		"group_address": "group/review",
 		"person":        "alice",
 	})
@@ -4159,7 +4159,7 @@ func TestMailboxGroupControlToolsUseMailboxService(t *testing.T) {
 		t.Fatalf("removed active = %v, want false", got)
 	}
 
-	addedSubscriber := callServiceTool(t, service, "mailbox_group_add_subscriber", map[string]any{
+	addedSubscriber := callServiceTool(t, service, "waypost_group_add_subscriber", map[string]any{
 		"group_address":  "group/review",
 		"notify_address": "agent-deck/moderator",
 		"person":         "moderator",
@@ -4171,7 +4171,7 @@ func TestMailboxGroupControlToolsUseMailboxService(t *testing.T) {
 		t.Fatalf("subscriber notify_address = %v, want agent-deck/moderator", got)
 	}
 
-	subscribers := callServiceTool(t, service, "mailbox_group_subscribers", map[string]any{
+	subscribers := callServiceTool(t, service, "waypost_group_subscribers", map[string]any{
 		"group_address": "group/review",
 	})
 	subscriptions := subscribers["subscribers"].([]any)
@@ -4179,7 +4179,7 @@ func TestMailboxGroupControlToolsUseMailboxService(t *testing.T) {
 		t.Fatalf("subscribers = %d, want 1", len(subscriptions))
 	}
 
-	removedSubscriber := callServiceTool(t, service, "mailbox_group_remove_subscriber", map[string]any{
+	removedSubscriber := callServiceTool(t, service, "waypost_group_remove_subscriber", map[string]any{
 		"group_address":  "group/review",
 		"notify_address": "agent-deck/moderator",
 	})
@@ -4190,11 +4190,11 @@ func TestMailboxGroupControlToolsUseMailboxService(t *testing.T) {
 		t.Fatalf("removed subscriber active = %v, want false", got)
 	}
 
-	inspected := callServiceTool(t, service, "mailbox_address_inspect", map[string]any{
+	inspected := callServiceTool(t, service, "waypost_address_inspect", map[string]any{
 		"address": "group/review",
 	})
 	inspection := inspected["inspection"].(map[string]any)
-	if got := inspection["kind"]; got != mailbox.AddressKindGroup {
+	if got := inspection["kind"]; got != waypost.AddressKindGroup {
 		t.Fatalf("kind = %v, want group", got)
 	}
 	if got := inspection["group_id"]; got != "grp_1" {
@@ -4202,20 +4202,20 @@ func TestMailboxGroupControlToolsUseMailboxService(t *testing.T) {
 	}
 }
 
-func TestMailboxRecvStartsLeaseRenewLoopWithShortTTL(t *testing.T) {
+func TestWaypostRecvStartsLeaseRenewLoopWithShortTTL(t *testing.T) {
 	current := time.Date(2026, 4, 3, 6, 0, 0, 0, time.UTC)
 	renewed := make(chan struct{}, 1)
 
-	mailboxService := &fakeMailboxService{t: t}
-	mailboxService.receiveBatchWithTTLFunc = func(_ context.Context, params mailbox.ReceiveBatchParams, ttl time.Duration) (mailbox.ReceiveResult, error) {
+	waypostService := &fakeWaypostService{t: t}
+	waypostService.receiveBatchWithTTLFunc = func(_ context.Context, params waypost.ReceiveBatchParams, ttl time.Duration) (waypost.ReceiveResult, error) {
 		if ttl != defaultMCPLeaseTTL {
 			t.Fatalf("recv lease ttl = %s, want %s", ttl, defaultMCPLeaseTTL)
 		}
 		if params.Max != 1 || len(params.Addresses) != 1 || params.Addresses[0] != "agent-deck/self" {
 			t.Fatalf("recv params = %+v, want one bound address", params)
 		}
-		return mailbox.ReceiveResult{
-			Messages: []mailbox.ReceivedMessage{{
+		return waypost.ReceiveResult{
+			Messages: []waypost.ReceivedMessage{{
 				DeliveryID:       "dlv_lease",
 				LeaseToken:       "lease_1",
 				LeaseExpiresAt:   current.Add(defaultMCPLeaseTTL).Format(time.RFC3339Nano),
@@ -4225,7 +4225,7 @@ func TestMailboxRecvStartsLeaseRenewLoopWithShortTTL(t *testing.T) {
 			}},
 		}, nil
 	}
-	mailboxService.renewFunc = func(_ context.Context, deliveryID, leaseToken string, extendBy time.Duration) (mailbox.LeaseRenewResult, error) {
+	waypostService.renewFunc = func(_ context.Context, deliveryID, leaseToken string, extendBy time.Duration) (waypost.LeaseRenewResult, error) {
 		if deliveryID != "dlv_lease" || leaseToken != "lease_1" {
 			t.Fatalf("renew args = delivery=%q lease=%q", deliveryID, leaseToken)
 		}
@@ -4236,7 +4236,7 @@ func TestMailboxRecvStartsLeaseRenewLoopWithShortTTL(t *testing.T) {
 		case renewed <- struct{}{}:
 		default:
 		}
-		return mailbox.LeaseRenewResult{
+		return waypost.LeaseRenewResult{
 			DeliveryID:     deliveryID,
 			LeaseToken:     leaseToken,
 			LeaseExpiresAt: time.Now().UTC().Add(defaultMCPLeaseTTL).Format(time.RFC3339Nano),
@@ -4244,7 +4244,7 @@ func TestMailboxRecvStartsLeaseRenewLoopWithShortTTL(t *testing.T) {
 	}
 
 	service := newService(Options{
-		MailboxServiceFactory: fakeMailboxServiceFactory{service: mailboxService},
+		WaypostServiceFactory: fakeWaypostServiceFactory{service: waypostService},
 		CommandRunner: &fakeRunner{t: t, handler: func(args []string, input string) (RunResult, error) {
 			t.Fatalf("unexpected command call: %v", args)
 			return RunResult{}, nil
@@ -4256,7 +4256,7 @@ func TestMailboxRecvStartsLeaseRenewLoopWithShortTTL(t *testing.T) {
 	service.state.defaultSender = "agent-deck/self"
 	service.state.autoBindAttempted = true
 
-	callServiceTool(t, service, "mailbox_recv", map[string]any{
+	callServiceTool(t, service, "waypost_recv", map[string]any{
 		"addresses": []string{"agent-deck/self"},
 	})
 
@@ -4269,25 +4269,25 @@ func TestMailboxRecvStartsLeaseRenewLoopWithShortTTL(t *testing.T) {
 
 func TestServiceCloseStopsLeaseRenewLoop(t *testing.T) {
 	current := time.Date(2026, 4, 3, 6, 10, 0, 0, time.UTC)
-	mailboxService := &fakeMailboxService{t: t}
+	waypostService := &fakeWaypostService{t: t}
 	entered := make(chan struct{})
 	canceled := make(chan struct{})
 	var closeEntered sync.Once
 	var closeCanceled sync.Once
 	var mu sync.Mutex
 	calls := 0
-	mailboxService.renewFunc = func(ctx context.Context, deliveryID, leaseToken string, extendBy time.Duration) (mailbox.LeaseRenewResult, error) {
+	waypostService.renewFunc = func(ctx context.Context, deliveryID, leaseToken string, extendBy time.Duration) (waypost.LeaseRenewResult, error) {
 		mu.Lock()
 		calls++
 		mu.Unlock()
 		closeEntered.Do(func() { close(entered) })
 		<-ctx.Done()
 		closeCanceled.Do(func() { close(canceled) })
-		return mailbox.LeaseRenewResult{}, ctx.Err()
+		return waypost.LeaseRenewResult{}, ctx.Err()
 	}
 
 	service := newService(Options{
-		MailboxServiceFactory: fakeMailboxServiceFactory{service: mailboxService},
+		WaypostServiceFactory: fakeWaypostServiceFactory{service: waypostService},
 		CommandRunner: &fakeRunner{t: t, handler: func(args []string, input string) (RunResult, error) {
 			t.Fatalf("unexpected command call: %v", args)
 			return RunResult{}, nil
@@ -4295,8 +4295,8 @@ func TestServiceCloseStopsLeaseRenewLoop(t *testing.T) {
 		Now:                func() time.Time { return current },
 		LeaseRenewInterval: time.Nanosecond,
 	})
-	service.activeLeases.trackReceive(mailbox.ReceiveResult{
-		Messages: []mailbox.ReceivedMessage{{
+	service.activeLeases.trackReceive(waypost.ReceiveResult{
+		Messages: []waypost.ReceivedMessage{{
 			DeliveryID:       "dlv_close",
 			LeaseToken:       "lease_close",
 			LeaseExpiresAt:   current.Add(defaultMCPLeaseTTL).Format(time.RFC3339Nano),
@@ -4323,10 +4323,10 @@ func TestProcessLeaseRenewalsRetriesTransientFailureWithinLeaseWindow(t *testing
 	renewCalls := 0
 	ackCalled := false
 
-	mailboxService := &fakeMailboxService{t: t}
-	mailboxService.receiveBatchWithTTLFunc = func(_ context.Context, params mailbox.ReceiveBatchParams, ttl time.Duration) (mailbox.ReceiveResult, error) {
-		return mailbox.ReceiveResult{
-			Messages: []mailbox.ReceivedMessage{{
+	waypostService := &fakeWaypostService{t: t}
+	waypostService.receiveBatchWithTTLFunc = func(_ context.Context, params waypost.ReceiveBatchParams, ttl time.Duration) (waypost.ReceiveResult, error) {
+		return waypost.ReceiveResult{
+			Messages: []waypost.ReceivedMessage{{
 				DeliveryID:       "dlv_retry",
 				LeaseToken:       "lease_retry",
 				LeaseExpiresAt:   current.Add(defaultMCPLeaseTTL).Format(time.RFC3339Nano),
@@ -4336,24 +4336,24 @@ func TestProcessLeaseRenewalsRetriesTransientFailureWithinLeaseWindow(t *testing
 			}},
 		}, nil
 	}
-	mailboxService.renewFunc = func(_ context.Context, deliveryID, leaseToken string, extendBy time.Duration) (mailbox.LeaseRenewResult, error) {
+	waypostService.renewFunc = func(_ context.Context, deliveryID, leaseToken string, extendBy time.Duration) (waypost.LeaseRenewResult, error) {
 		renewCalls++
 		if renewCalls == 1 {
-			return mailbox.LeaseRenewResult{}, context.DeadlineExceeded
+			return waypost.LeaseRenewResult{}, context.DeadlineExceeded
 		}
-		return mailbox.LeaseRenewResult{
+		return waypost.LeaseRenewResult{
 			DeliveryID:     deliveryID,
 			LeaseToken:     leaseToken,
 			LeaseExpiresAt: current.Add(defaultMCPLeaseTTL).Format(time.RFC3339Nano),
 		}, nil
 	}
-	mailboxService.ackFunc = func(_ context.Context, deliveryID, leaseToken string) (mailbox.DeliveryTransitionResult, error) {
+	waypostService.ackFunc = func(_ context.Context, deliveryID, leaseToken string) (waypost.DeliveryTransitionResult, error) {
 		ackCalled = true
-		return mailbox.DeliveryTransitionResult{DeliveryID: deliveryID, State: "acked"}, nil
+		return waypost.DeliveryTransitionResult{DeliveryID: deliveryID, State: "acked"}, nil
 	}
 
 	service := newService(Options{
-		MailboxServiceFactory: fakeMailboxServiceFactory{service: mailboxService},
+		WaypostServiceFactory: fakeWaypostServiceFactory{service: waypostService},
 		CommandRunner: &fakeRunner{t: t, handler: func(args []string, input string) (RunResult, error) {
 			t.Fatalf("unexpected command call: %v", args)
 			return RunResult{}, nil
@@ -4365,7 +4365,7 @@ func TestProcessLeaseRenewalsRetriesTransientFailureWithinLeaseWindow(t *testing
 	service.state.defaultSender = "agent-deck/self"
 	service.state.autoBindAttempted = true
 
-	callServiceTool(t, service, "mailbox_recv", map[string]any{
+	callServiceTool(t, service, "waypost_recv", map[string]any{
 		"addresses": []string{"agent-deck/self"},
 	})
 
@@ -4379,12 +4379,12 @@ func TestProcessLeaseRenewalsRetriesTransientFailureWithinLeaseWindow(t *testing
 		t.Fatalf("lastRenewalError() = %v, want nil after successful retry", failure)
 	}
 
-	output := callServiceTool(t, service, "mailbox_ack", map[string]any{
+	output := callServiceTool(t, service, "waypost_ack", map[string]any{
 		"delivery_id": "dlv_retry",
 		"lease_token": "lease_retry",
 	})
 	if got := output["status"]; got != "acked" {
-		t.Fatalf("mailbox_ack status = %v, want acked", got)
+		t.Fatalf("waypost_ack status = %v, want acked", got)
 	}
 	if !ackCalled {
 		t.Fatal("Ack was not forwarded after transient renew retry")
@@ -4393,10 +4393,10 @@ func TestProcessLeaseRenewalsRetriesTransientFailureWithinLeaseWindow(t *testing
 
 func TestProcessLeaseRenewalsAllowsTerminalMutationBeforeExpiryAfterTransientFailure(t *testing.T) {
 	current := time.Date(2026, 4, 3, 6, 30, 0, 0, time.UTC)
-	mailboxService := &fakeMailboxService{t: t}
-	mailboxService.receiveBatchWithTTLFunc = func(_ context.Context, params mailbox.ReceiveBatchParams, ttl time.Duration) (mailbox.ReceiveResult, error) {
-		return mailbox.ReceiveResult{
-			Messages: []mailbox.ReceivedMessage{{
+	waypostService := &fakeWaypostService{t: t}
+	waypostService.receiveBatchWithTTLFunc = func(_ context.Context, params waypost.ReceiveBatchParams, ttl time.Duration) (waypost.ReceiveResult, error) {
+		return waypost.ReceiveResult{
+			Messages: []waypost.ReceivedMessage{{
 				DeliveryID:       "dlv_failure",
 				LeaseToken:       "lease_failure",
 				LeaseExpiresAt:   current.Add(defaultMCPLeaseTTL).Format(time.RFC3339Nano),
@@ -4406,17 +4406,17 @@ func TestProcessLeaseRenewalsAllowsTerminalMutationBeforeExpiryAfterTransientFai
 			}},
 		}, nil
 	}
-	mailboxService.renewFunc = func(_ context.Context, deliveryID, leaseToken string, extendBy time.Duration) (mailbox.LeaseRenewResult, error) {
-		return mailbox.LeaseRenewResult{}, context.DeadlineExceeded
+	waypostService.renewFunc = func(_ context.Context, deliveryID, leaseToken string, extendBy time.Duration) (waypost.LeaseRenewResult, error) {
+		return waypost.LeaseRenewResult{}, context.DeadlineExceeded
 	}
 	ackCalled := false
-	mailboxService.ackFunc = func(_ context.Context, deliveryID, leaseToken string) (mailbox.DeliveryTransitionResult, error) {
+	waypostService.ackFunc = func(_ context.Context, deliveryID, leaseToken string) (waypost.DeliveryTransitionResult, error) {
 		ackCalled = true
-		return mailbox.DeliveryTransitionResult{DeliveryID: deliveryID, State: "acked"}, nil
+		return waypost.DeliveryTransitionResult{DeliveryID: deliveryID, State: "acked"}, nil
 	}
 
 	service := newService(Options{
-		MailboxServiceFactory: fakeMailboxServiceFactory{service: mailboxService},
+		WaypostServiceFactory: fakeWaypostServiceFactory{service: waypostService},
 		CommandRunner: &fakeRunner{t: t, handler: func(args []string, input string) (RunResult, error) {
 			t.Fatalf("unexpected command call: %v", args)
 			return RunResult{}, nil
@@ -4428,7 +4428,7 @@ func TestProcessLeaseRenewalsAllowsTerminalMutationBeforeExpiryAfterTransientFai
 	service.state.defaultSender = "agent-deck/self"
 	service.state.autoBindAttempted = true
 
-	callServiceTool(t, service, "mailbox_recv", map[string]any{
+	callServiceTool(t, service, "waypost_recv", map[string]any{
 		"addresses": []string{"agent-deck/self"},
 	})
 
@@ -4440,12 +4440,12 @@ func TestProcessLeaseRenewalsAllowsTerminalMutationBeforeExpiryAfterTransientFai
 		t.Fatal("active lease tracking removed after transient renewal failure")
 	}
 
-	output := callServiceTool(t, service, "mailbox_ack", map[string]any{
+	output := callServiceTool(t, service, "waypost_ack", map[string]any{
 		"delivery_id": "dlv_failure",
 		"lease_token": "lease_failure",
 	})
 	if got := output["status"]; got != "acked" {
-		t.Fatalf("mailbox_ack status = %v, want acked", got)
+		t.Fatalf("waypost_ack status = %v, want acked", got)
 	}
 	if !ackCalled {
 		t.Fatal("Ack was not forwarded before lease expiry")
@@ -4455,10 +4455,10 @@ func TestProcessLeaseRenewalsAllowsTerminalMutationBeforeExpiryAfterTransientFai
 func TestProcessLeaseRenewalsAllowsTerminalMutationAfterExpiryFollowingTransientFailure(t *testing.T) {
 	current := time.Date(2026, 4, 3, 6, 45, 0, 0, time.UTC)
 
-	mailboxService := &fakeMailboxService{t: t}
-	mailboxService.receiveBatchWithTTLFunc = func(_ context.Context, params mailbox.ReceiveBatchParams, ttl time.Duration) (mailbox.ReceiveResult, error) {
-		return mailbox.ReceiveResult{
-			Messages: []mailbox.ReceivedMessage{{
+	waypostService := &fakeWaypostService{t: t}
+	waypostService.receiveBatchWithTTLFunc = func(_ context.Context, params waypost.ReceiveBatchParams, ttl time.Duration) (waypost.ReceiveResult, error) {
+		return waypost.ReceiveResult{
+			Messages: []waypost.ReceivedMessage{{
 				DeliveryID:       "dlv_expired_failure",
 				LeaseToken:       "lease_expired_failure",
 				LeaseExpiresAt:   current.Add(defaultMCPLeaseTTL).Format(time.RFC3339Nano),
@@ -4468,17 +4468,17 @@ func TestProcessLeaseRenewalsAllowsTerminalMutationAfterExpiryFollowingTransient
 			}},
 		}, nil
 	}
-	mailboxService.renewFunc = func(_ context.Context, deliveryID, leaseToken string, extendBy time.Duration) (mailbox.LeaseRenewResult, error) {
-		return mailbox.LeaseRenewResult{}, context.DeadlineExceeded
+	waypostService.renewFunc = func(_ context.Context, deliveryID, leaseToken string, extendBy time.Duration) (waypost.LeaseRenewResult, error) {
+		return waypost.LeaseRenewResult{}, context.DeadlineExceeded
 	}
 	ackCalled := false
-	mailboxService.ackFunc = func(_ context.Context, deliveryID, leaseToken string) (mailbox.DeliveryTransitionResult, error) {
+	waypostService.ackFunc = func(_ context.Context, deliveryID, leaseToken string) (waypost.DeliveryTransitionResult, error) {
 		ackCalled = true
-		return mailbox.DeliveryTransitionResult{DeliveryID: deliveryID, State: "acked"}, nil
+		return waypost.DeliveryTransitionResult{DeliveryID: deliveryID, State: "acked"}, nil
 	}
 
 	service := newService(Options{
-		MailboxServiceFactory: fakeMailboxServiceFactory{service: mailboxService},
+		WaypostServiceFactory: fakeWaypostServiceFactory{service: waypostService},
 		CommandRunner: &fakeRunner{t: t, handler: func(args []string, input string) (RunResult, error) {
 			t.Fatalf("unexpected command call: %v", args)
 			return RunResult{}, nil
@@ -4490,7 +4490,7 @@ func TestProcessLeaseRenewalsAllowsTerminalMutationAfterExpiryFollowingTransient
 	service.state.defaultSender = "agent-deck/self"
 	service.state.autoBindAttempted = true
 
-	callServiceTool(t, service, "mailbox_recv", map[string]any{
+	callServiceTool(t, service, "waypost_recv", map[string]any{
 		"addresses": []string{"agent-deck/self"},
 	})
 
@@ -4500,12 +4500,12 @@ func TestProcessLeaseRenewalsAllowsTerminalMutationAfterExpiryFollowingTransient
 	}
 
 	current = current.Add(defaultMCPLeaseTTL + time.Second)
-	output := callServiceTool(t, service, "mailbox_ack", map[string]any{
+	output := callServiceTool(t, service, "waypost_ack", map[string]any{
 		"delivery_id": "dlv_expired_failure",
 		"lease_token": "lease_expired_failure",
 	})
 	if got := output["status"]; got != "acked" {
-		t.Fatalf("mailbox_ack status = %v, want acked", got)
+		t.Fatalf("waypost_ack status = %v, want acked", got)
 	}
 	if !ackCalled {
 		t.Fatal("Ack was not forwarded after transient renew failure and local expiry")
@@ -4518,9 +4518,9 @@ func TestRenewalFailureDefinitiveUsesLeaseSentinels(t *testing.T) {
 		err  error
 		want bool
 	}{
-		{name: "sentinel not found", err: fmt.Errorf("delivery not found text changed: %w", mailbox.ErrLeaseNotFound), want: true},
-		{name: "sentinel not leased", err: fmt.Errorf("delivery in wrong state: %w", mailbox.ErrLeaseNotLeased), want: true},
-		{name: "sentinel changed", err: fmt.Errorf("renew conflict: %w", mailbox.ErrLeaseRenewChanged), want: true},
+		{name: "sentinel not found", err: fmt.Errorf("delivery not found text changed: %w", waypost.ErrLeaseNotFound), want: true},
+		{name: "sentinel not leased", err: fmt.Errorf("delivery in wrong state: %w", waypost.ErrLeaseNotLeased), want: true},
+		{name: "sentinel changed", err: fmt.Errorf("renew conflict: %w", waypost.ErrLeaseRenewChanged), want: true},
 		{name: "legacy text not found", err: errors.New(`delivery "dlv_1" not found`), want: false},
 		{name: "legacy text want leased", err: errors.New(`delivery "dlv_1" is in state "acked", want leased`), want: false},
 		{name: "legacy text changed", err: errors.New(`delivery "dlv_1" changed while renewing`), want: false},
@@ -4535,11 +4535,11 @@ func TestRenewalFailureDefinitiveUsesLeaseSentinels(t *testing.T) {
 	}
 }
 
-func TestMailboxAckStopsTrackingActiveLease(t *testing.T) {
-	mailboxService := &fakeMailboxService{t: t}
-	mailboxService.receiveBatchWithTTLFunc = func(_ context.Context, params mailbox.ReceiveBatchParams, ttl time.Duration) (mailbox.ReceiveResult, error) {
-		return mailbox.ReceiveResult{
-			Messages: []mailbox.ReceivedMessage{{
+func TestWaypostAckStopsTrackingActiveLease(t *testing.T) {
+	waypostService := &fakeWaypostService{t: t}
+	waypostService.receiveBatchWithTTLFunc = func(_ context.Context, params waypost.ReceiveBatchParams, ttl time.Duration) (waypost.ReceiveResult, error) {
+		return waypost.ReceiveResult{
+			Messages: []waypost.ReceivedMessage{{
 				DeliveryID:       "dlv_acked",
 				LeaseToken:       "lease_acked",
 				LeaseExpiresAt:   time.Now().UTC().Add(defaultMCPLeaseTTL).Format(time.RFC3339Nano),
@@ -4549,15 +4549,15 @@ func TestMailboxAckStopsTrackingActiveLease(t *testing.T) {
 			}},
 		}, nil
 	}
-	mailboxService.ackFunc = func(_ context.Context, deliveryID, leaseToken string) (mailbox.DeliveryTransitionResult, error) {
+	waypostService.ackFunc = func(_ context.Context, deliveryID, leaseToken string) (waypost.DeliveryTransitionResult, error) {
 		if deliveryID != "dlv_acked" || leaseToken != "lease_acked" {
 			t.Fatalf("ack args = delivery=%q lease=%q", deliveryID, leaseToken)
 		}
-		return mailbox.DeliveryTransitionResult{DeliveryID: deliveryID, State: "acked"}, nil
+		return waypost.DeliveryTransitionResult{DeliveryID: deliveryID, State: "acked"}, nil
 	}
 
 	service := newService(Options{
-		MailboxServiceFactory: fakeMailboxServiceFactory{service: mailboxService},
+		WaypostServiceFactory: fakeWaypostServiceFactory{service: waypostService},
 		CommandRunner: &fakeRunner{t: t, handler: func(args []string, input string) (RunResult, error) {
 			t.Fatalf("unexpected command call: %v", args)
 			return RunResult{}, nil
@@ -4568,13 +4568,13 @@ func TestMailboxAckStopsTrackingActiveLease(t *testing.T) {
 	service.state.defaultSender = "agent-deck/self"
 	service.state.autoBindAttempted = true
 
-	recv := callServiceTool(t, service, "mailbox_recv", map[string]any{
+	recv := callServiceTool(t, service, "waypost_recv", map[string]any{
 		"addresses": []string{"agent-deck/self"},
 	})
 	delivery := recv["delivery"].(map[string]any)
 	message := delivery["messages"].([]any)[0].(map[string]any)
 
-	callServiceTool(t, service, "mailbox_ack", map[string]any{
+	callServiceTool(t, service, "waypost_ack", map[string]any{
 		"delivery_id": "dlv_acked",
 		"lease_token": message["lease_token"],
 	})
@@ -4587,10 +4587,10 @@ func TestMailboxAckStopsTrackingActiveLease(t *testing.T) {
 	}
 }
 
-func TestMailboxReleaseDeferAndFailUseDirectMailboxService(t *testing.T) {
+func TestWaypostReleaseDeferAndFailUseDirectWaypostService(t *testing.T) {
 	t.Parallel()
 
-	stateDir := filepath.Join(t.TempDir(), "mailbox-state")
+	stateDir := filepath.Join(t.TempDir(), "waypost-state")
 	service := newService(Options{
 		StateDir: stateDir,
 		CommandRunner: &fakeRunner{t: t, handler: func(args []string, input string) (RunResult, error) {
@@ -4602,17 +4602,17 @@ func TestMailboxReleaseDeferAndFailUseDirectMailboxService(t *testing.T) {
 	service.state.defaultSender = "agent-deck/self"
 	service.state.autoBindAttempted = true
 
-	firstSend := callServiceTool(t, service, "mailbox_send", map[string]any{
+	firstSend := callServiceTool(t, service, "waypost_send", map[string]any{
 		"to_address": "agent-deck/self",
 		"subject":    "release-defer",
 		"body":       "body",
 	})
-	firstRecv := callServiceTool(t, service, "mailbox_recv", map[string]any{
+	firstRecv := callServiceTool(t, service, "waypost_recv", map[string]any{
 		"addresses": []string{"agent-deck/self"},
 	})
 	firstMessage := firstRecv["delivery"].(map[string]any)["messages"].([]any)[0].(map[string]any)
 
-	release := callServiceTool(t, service, "mailbox_release", map[string]any{
+	release := callServiceTool(t, service, "waypost_release", map[string]any{
 		"delivery_id": firstSend["delivery_id"],
 		"lease_token": firstMessage["lease_token"],
 	})
@@ -4620,12 +4620,12 @@ func TestMailboxReleaseDeferAndFailUseDirectMailboxService(t *testing.T) {
 		t.Fatalf("release status = %v, want released", got)
 	}
 
-	secondRecv := callServiceTool(t, service, "mailbox_recv", map[string]any{
+	secondRecv := callServiceTool(t, service, "waypost_recv", map[string]any{
 		"addresses": []string{"agent-deck/self"},
 	})
 	secondMessage := secondRecv["delivery"].(map[string]any)["messages"].([]any)[0].(map[string]any)
 	until := time.Now().UTC().Add(10 * time.Minute).Format(time.RFC3339Nano)
-	deferResult := callServiceTool(t, service, "mailbox_defer", map[string]any{
+	deferResult := callServiceTool(t, service, "waypost_defer", map[string]any{
 		"delivery_id": firstSend["delivery_id"],
 		"lease_token": secondMessage["lease_token"],
 		"until":       until,
@@ -4634,7 +4634,7 @@ func TestMailboxReleaseDeferAndFailUseDirectMailboxService(t *testing.T) {
 		t.Fatalf("defer status = %v, want deferred", got)
 	}
 
-	wait := callServiceTool(t, service, "mailbox_wait", map[string]any{
+	wait := callServiceTool(t, service, "waypost_wait", map[string]any{
 		"addresses": []string{"agent-deck/self"},
 		"timeout":   "10ms",
 	})
@@ -4642,14 +4642,14 @@ func TestMailboxReleaseDeferAndFailUseDirectMailboxService(t *testing.T) {
 		t.Fatalf("wait status after defer = %v, want no_message", got)
 	}
 
-	undeferResult := callServiceTool(t, service, "mailbox_undefer", map[string]any{
+	undeferResult := callServiceTool(t, service, "waypost_undefer", map[string]any{
 		"delivery_id": firstSend["delivery_id"],
 	})
 	if got := undeferResult["status"]; got != "undeferred" {
 		t.Fatalf("undefer status = %v, want undeferred", got)
 	}
 
-	undeferWait := callServiceTool(t, service, "mailbox_wait", map[string]any{
+	undeferWait := callServiceTool(t, service, "waypost_wait", map[string]any{
 		"addresses": []string{"agent-deck/self"},
 	})
 	if got := undeferWait["status"]; got != "message_available" {
@@ -4660,25 +4660,25 @@ func TestMailboxReleaseDeferAndFailUseDirectMailboxService(t *testing.T) {
 		t.Fatalf("wait delivery after undefer = %v, want %v", got, firstSend["delivery_id"])
 	}
 
-	undeferRecv := callServiceTool(t, service, "mailbox_recv", map[string]any{
+	undeferRecv := callServiceTool(t, service, "waypost_recv", map[string]any{
 		"addresses": []string{"agent-deck/self"},
 	})
 	undeferMessage := undeferRecv["delivery"].(map[string]any)["messages"].([]any)[0].(map[string]any)
-	callServiceTool(t, service, "mailbox_ack", map[string]any{
+	callServiceTool(t, service, "waypost_ack", map[string]any{
 		"delivery_id": firstSend["delivery_id"],
 		"lease_token": undeferMessage["lease_token"],
 	})
 
-	secondSend := callServiceTool(t, service, "mailbox_send", map[string]any{
+	secondSend := callServiceTool(t, service, "waypost_send", map[string]any{
 		"to_address": "agent-deck/self",
 		"subject":    "fail",
 		"body":       "body-2",
 	})
-	failRecv := callServiceTool(t, service, "mailbox_recv", map[string]any{
+	failRecv := callServiceTool(t, service, "waypost_recv", map[string]any{
 		"addresses": []string{"agent-deck/self"},
 	})
 	failMessage := failRecv["delivery"].(map[string]any)["messages"].([]any)[0].(map[string]any)
-	failResult := callServiceTool(t, service, "mailbox_fail", map[string]any{
+	failResult := callServiceTool(t, service, "waypost_fail", map[string]any{
 		"delivery_id": secondSend["delivery_id"],
 		"lease_token": failMessage["lease_token"],
 		"reason":      "boom",
@@ -4691,45 +4691,45 @@ func TestMailboxReleaseDeferAndFailUseDirectMailboxService(t *testing.T) {
 	}
 }
 
-func TestWriteToolRequiresMailboxStatusFirst(t *testing.T) {
+func TestWriteToolRequiresWaypostStatusFirst(t *testing.T) {
 	service := newService(Options{
-		MailboxServiceFactory: fakeMailboxServiceFactory{service: &fakeMailboxService{t: t}},
+		WaypostServiceFactory: fakeWaypostServiceFactory{service: &fakeWaypostService{t: t}},
 		CommandRunner:         &fakeRunner{t: t},
 		DisableWakeScheduler:  true,
 		DisableLeaseRenewLoop: true,
 	})
 
-	err := callServiceToolExpectErrorWithoutStatusBootstrap(t, service, "mailbox_send", map[string]any{
+	err := callServiceToolExpectErrorWithoutStatusBootstrap(t, service, "waypost_send", map[string]any{
 		"from_address": "codex/source",
 		"to_address":   "codex/target",
 		"subject":      "hello",
 		"body":         "body",
 	})
-	if err == nil || !strings.Contains(err.Error(), "mailbox_status") {
-		t.Fatalf("mailbox_send error = %v, want mailbox_status gate", err)
+	if err == nil || !strings.Contains(err.Error(), "waypost_status") {
+		t.Fatalf("waypost_send error = %v, want waypost_status gate", err)
 	}
 }
 
-func TestReadToolRequiresMailboxStatusFirst(t *testing.T) {
+func TestReadToolRequiresWaypostStatusFirst(t *testing.T) {
 	service := newService(Options{
-		MailboxServiceFactory: fakeMailboxServiceFactory{service: &fakeMailboxService{t: t}},
+		WaypostServiceFactory: fakeWaypostServiceFactory{service: &fakeWaypostService{t: t}},
 		CommandRunner:         &fakeRunner{t: t},
 		DisableWakeScheduler:  true,
 		DisableLeaseRenewLoop: true,
 	})
 
-	err := callServiceToolExpectErrorWithoutStatusBootstrap(t, service, "mailbox_wait", map[string]any{
+	err := callServiceToolExpectErrorWithoutStatusBootstrap(t, service, "waypost_wait", map[string]any{
 		"addresses": []string{"codex/source"},
 		"timeout":   "0s",
 	})
-	if err == nil || !strings.Contains(err.Error(), "mailbox_status") {
-		t.Fatalf("mailbox_wait error = %v, want mailbox_status gate", err)
+	if err == nil || !strings.Contains(err.Error(), "waypost_status") {
+		t.Fatalf("waypost_wait error = %v, want waypost_status gate", err)
 	}
 }
 
-func TestAllNonStatusToolsRequireMailboxStatus(t *testing.T) {
+func TestAllNonStatusToolsRequireWaypostStatus(t *testing.T) {
 	service := newService(Options{
-		MailboxServiceFactory: fakeMailboxServiceFactory{service: &fakeMailboxService{t: t}},
+		WaypostServiceFactory: fakeWaypostServiceFactory{service: &fakeWaypostService{t: t}},
 		CommandRunner:         &fakeRunner{t: t},
 		DisableWakeScheduler:  true,
 		DisableLeaseRenewLoop: true,
@@ -4758,27 +4758,27 @@ func TestAllNonStatusToolsRequireMailboxStatus(t *testing.T) {
 	registered := map[string]bool{}
 	for _, tool := range tools.Tools {
 		registered[tool.Name] = true
-		if tool.Name == "mailbox_status" || tool.Name == "mailbox_debug" {
+		if tool.Name == "waypost_status" || tool.Name == "waypost_debug" {
 			continue
 		}
-		if !requiresMailboxStatusToolName(tool.Name) {
-			t.Fatalf("tool %q is registered but missing from requiresMailboxStatusToolName", tool.Name)
+		if !requiresWaypostStatusToolName(tool.Name) {
+			t.Fatalf("tool %q is registered but missing from requiresWaypostStatusToolName", tool.Name)
 		}
 	}
-	for _, name := range requiresMailboxStatusToolNames() {
+	for _, name := range requiresWaypostStatusToolNames() {
 		if !registered[name] {
-			t.Fatalf("requiresMailboxStatusToolName contains unregistered tool %q", name)
+			t.Fatalf("requiresWaypostStatusToolName contains unregistered tool %q", name)
 		}
 	}
-	if !registered["mailbox_status"] {
-		t.Fatalf("mailbox_status is not registered")
+	if !registered["waypost_status"] {
+		t.Fatalf("waypost_status is not registered")
 	}
-	if !registered["mailbox_debug"] {
-		t.Fatalf("mailbox_debug is not registered")
+	if !registered["waypost_debug"] {
+		t.Fatalf("waypost_debug is not registered")
 	}
 }
 
-func TestMailboxDebugWorksBeforeStatusAndDoesNotAutoBind(t *testing.T) {
+func TestWaypostDebugWorksBeforeStatusAndDoesNotAutoBind(t *testing.T) {
 	t.Setenv("CODEX_THREAD_ID", "")
 	t.Setenv("CLAUDE_CODE_SESSION_ID", "aaaaaaaaaaaaaaaa")
 	t.Setenv("GEMINI_SESSION_ID", "not-a-session")
@@ -4788,18 +4788,18 @@ func TestMailboxDebugWorksBeforeStatusAndDoesNotAutoBind(t *testing.T) {
 
 	runner := &fakeRunner{t: t}
 	runner.handler = func(args []string, _ string) (RunResult, error) {
-		t.Fatalf("mailbox_debug should not run auto-bind probe command: %v", args)
+		t.Fatalf("waypost_debug should not run auto-bind probe command: %v", args)
 		return RunResult{}, nil
 	}
 
 	service := newService(Options{
-		MailboxServiceFactory: fakeMailboxServiceFactory{service: &fakeMailboxService{t: t}},
+		WaypostServiceFactory: fakeWaypostServiceFactory{service: &fakeWaypostService{t: t}},
 		CommandRunner:         runner,
 		DisableWakeScheduler:  true,
 		DisableLeaseRenewLoop: true,
 	})
 
-	debug := callServiceToolWithoutStatusBootstrap(t, service, "mailbox_debug", nil)
+	debug := callServiceToolWithoutStatusBootstrap(t, service, "waypost_debug", nil)
 	if got := debug["status"]; got != "debug" {
 		t.Fatalf("status = %v, want debug", got)
 	}
@@ -4898,7 +4898,7 @@ func TestToolSessionDescriptorsDriveOutputFields(t *testing.T) {
 	}
 }
 
-func TestMailboxStatusReportsAutoBindInvalidJSONWarningAndUnlocksManualBind(t *testing.T) {
+func TestWaypostStatusReportsAutoBindInvalidJSONWarningAndUnlocksManualBind(t *testing.T) {
 	isolateAutoBindEnv(t)
 
 	runner := &fakeRunner{t: t}
@@ -4915,13 +4915,13 @@ func TestMailboxStatusReportsAutoBindInvalidJSONWarningAndUnlocksManualBind(t *t
 	}
 
 	service := newService(Options{
-		MailboxServiceFactory: fakeMailboxServiceFactory{service: &fakeMailboxService{t: t}},
+		WaypostServiceFactory: fakeWaypostServiceFactory{service: &fakeWaypostService{t: t}},
 		CommandRunner:         runner,
 		DisableWakeScheduler:  true,
 		DisableLeaseRenewLoop: true,
 	})
 
-	status := callServiceTool(t, service, "mailbox_status", nil)
+	status := callServiceTool(t, service, "waypost_status", nil)
 	warnings, ok := status["warnings"].([]any)
 	if !ok {
 		t.Fatalf("warnings = %#v, want warning list", status["warnings"])
@@ -4936,16 +4936,16 @@ func TestMailboxStatusReportsAutoBindInvalidJSONWarningAndUnlocksManualBind(t *t
 		t.Fatalf("warnings = %#v, want invalid JSON warning", warnings)
 	}
 
-	bind := callServiceTool(t, service, "mailbox_bind", map[string]any{
+	bind := callServiceTool(t, service, "waypost_bind", map[string]any{
 		"addresses": []string{"codex/manual"},
 	})
 	if got := bind["default_sender"]; got != "codex/manual" {
-		t.Fatalf("mailbox_bind default_sender = %v, want codex/manual", got)
+		t.Fatalf("waypost_bind default_sender = %v, want codex/manual", got)
 	}
 	assertNoToolSessionWarning(t, bind)
 }
 
-func TestMailboxStatusReportsCodexProbeWarningAndUnlocksManualBind(t *testing.T) {
+func TestWaypostStatusReportsCodexProbeWarningAndUnlocksManualBind(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("Windows skips Unix ps/lsof Codex session probing")
 	}
@@ -4967,14 +4967,14 @@ func TestMailboxStatusReportsCodexProbeWarningAndUnlocksManualBind(t *testing.T)
 	}
 
 	service := newService(Options{
-		MailboxServiceFactory: fakeMailboxServiceFactory{service: &fakeMailboxService{t: t}},
+		WaypostServiceFactory: fakeWaypostServiceFactory{service: &fakeWaypostService{t: t}},
 		CommandRunner:         runner,
 		DisableWakeScheduler:  true,
 		DisableLeaseRenewLoop: true,
 	})
 	service.sessions.parentPID = func() int { return 4242 }
 
-	status := callServiceTool(t, service, "mailbox_status", nil)
+	status := callServiceTool(t, service, "waypost_status", nil)
 	warnings, ok := status["warnings"].([]any)
 	if !ok {
 		t.Fatalf("warnings = %#v, want warning list", status["warnings"])
@@ -4989,16 +4989,16 @@ func TestMailboxStatusReportsCodexProbeWarningAndUnlocksManualBind(t *testing.T)
 		t.Fatalf("warnings = %#v, calls = %#v, want codex probe warning", warnings, runner.Calls())
 	}
 
-	bind := callServiceTool(t, service, "mailbox_bind", map[string]any{
+	bind := callServiceTool(t, service, "waypost_bind", map[string]any{
 		"addresses": []string{"codex/manual"},
 	})
 	if got := bind["default_sender"]; got != "codex/manual" {
-		t.Fatalf("mailbox_bind default_sender = %v, want codex/manual", got)
+		t.Fatalf("waypost_bind default_sender = %v, want codex/manual", got)
 	}
 	assertNoToolSessionWarning(t, bind)
 }
 
-func TestMailboxStatusKeepsCodexProbeWarningWhenAgentDeckProbeDoesNotComplete(t *testing.T) {
+func TestWaypostStatusKeepsCodexProbeWarningWhenAgentDeckProbeDoesNotComplete(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("Windows skips Unix ps/lsof Codex session probing")
 	}
@@ -5020,14 +5020,14 @@ func TestMailboxStatusKeepsCodexProbeWarningWhenAgentDeckProbeDoesNotComplete(t 
 	}
 
 	service := newService(Options{
-		MailboxServiceFactory: fakeMailboxServiceFactory{service: &fakeMailboxService{t: t}},
+		WaypostServiceFactory: fakeWaypostServiceFactory{service: &fakeWaypostService{t: t}},
 		CommandRunner:         runner,
 		DisableWakeScheduler:  true,
 		DisableLeaseRenewLoop: true,
 	})
 	service.sessions.parentPID = func() int { return 4242 }
 
-	status := callServiceTool(t, service, "mailbox_status", nil)
+	status := callServiceTool(t, service, "waypost_status", nil)
 	warnings, ok := status["warnings"].([]any)
 	if !ok {
 		t.Fatalf("warnings = %#v, want warning list", status["warnings"])
@@ -5040,7 +5040,7 @@ func TestMailboxStatusKeepsCodexProbeWarningWhenAgentDeckProbeDoesNotComplete(t 
 	t.Fatalf("warnings = %#v, calls = %#v, want codex probe warning", warnings, runner.Calls())
 }
 
-func TestMailboxStatusRetriesAutoBindAfterEmptyAttempt(t *testing.T) {
+func TestWaypostStatusRetriesAutoBindAfterEmptyAttempt(t *testing.T) {
 	isolateAutoBindEnv(t)
 
 	runner := &fakeRunner{t: t}
@@ -5057,19 +5057,19 @@ func TestMailboxStatusRetriesAutoBindAfterEmptyAttempt(t *testing.T) {
 	}
 
 	service := newService(Options{
-		MailboxServiceFactory: fakeMailboxServiceFactory{service: &fakeMailboxService{t: t}},
+		WaypostServiceFactory: fakeWaypostServiceFactory{service: &fakeWaypostService{t: t}},
 		CommandRunner:         runner,
 		DisableWakeScheduler:  true,
 		DisableLeaseRenewLoop: true,
 	})
 
-	first := callServiceTool(t, service, "mailbox_status", nil)
+	first := callServiceTool(t, service, "waypost_status", nil)
 	if got := first["bound_addresses"]; got != nil && !reflect.DeepEqual(got, []any{}) {
 		t.Fatalf("first bound_addresses = %#v, want empty", got)
 	}
 
 	t.Setenv("CLAUDE_CODE_SESSION_ID", "aaaaaaaaaaaaaaaa")
-	second := callServiceTool(t, service, "mailbox_status", nil)
+	second := callServiceTool(t, service, "waypost_status", nil)
 	if got := second["bound_addresses"]; !reflect.DeepEqual(got, []any{"claude/aaaaaaaaaaaaaaaa"}) {
 		t.Fatalf("second bound_addresses = %#v, want claude auto-bind", got)
 	}
@@ -5079,7 +5079,7 @@ func TestMailboxStatusRetriesAutoBindAfterEmptyAttempt(t *testing.T) {
 	assertNoToolSessionWarning(t, second)
 }
 
-func TestMailboxStatusDoesNotWarnForCodexProbeMiss(t *testing.T) {
+func TestWaypostStatusDoesNotWarnForCodexProbeMiss(t *testing.T) {
 	isolateAutoBindEnv(t)
 
 	runner := &fakeRunner{t: t}
@@ -5096,14 +5096,14 @@ func TestMailboxStatusDoesNotWarnForCodexProbeMiss(t *testing.T) {
 	}
 
 	service := newService(Options{
-		MailboxServiceFactory: fakeMailboxServiceFactory{service: &fakeMailboxService{t: t}},
+		WaypostServiceFactory: fakeWaypostServiceFactory{service: &fakeWaypostService{t: t}},
 		CommandRunner:         runner,
 		DisableWakeScheduler:  true,
 		DisableLeaseRenewLoop: true,
 	})
 	service.sessions.parentPID = func() int { return 4242 }
 
-	status := callServiceTool(t, service, "mailbox_status", nil)
+	status := callServiceTool(t, service, "waypost_status", nil)
 	warnings, ok := status["warnings"].([]any)
 	if !ok {
 		t.Fatalf("warnings = %#v, want warning list", status["warnings"])
@@ -5115,7 +5115,7 @@ func TestMailboxStatusDoesNotWarnForCodexProbeMiss(t *testing.T) {
 	}
 }
 
-func TestMailboxStatusSkipsCodexProcessProbeOnWindows(t *testing.T) {
+func TestWaypostStatusSkipsCodexProcessProbeOnWindows(t *testing.T) {
 	if runtime.GOOS != "windows" {
 		t.Skip("Windows-specific Codex process probe behavior")
 	}
@@ -5136,14 +5136,14 @@ func TestMailboxStatusSkipsCodexProcessProbeOnWindows(t *testing.T) {
 	}
 
 	service := newService(Options{
-		MailboxServiceFactory: fakeMailboxServiceFactory{service: &fakeMailboxService{t: t}},
+		WaypostServiceFactory: fakeWaypostServiceFactory{service: &fakeWaypostService{t: t}},
 		CommandRunner:         runner,
 		DisableWakeScheduler:  true,
 		DisableLeaseRenewLoop: true,
 	})
 	service.sessions.parentPID = func() int { return 4242 }
 
-	status := callServiceTool(t, service, "mailbox_status", nil)
+	status := callServiceTool(t, service, "waypost_status", nil)
 	warnings, ok := status["warnings"].([]any)
 	if !ok {
 		t.Fatalf("warnings = %#v, want warning list", status["warnings"])
@@ -5155,7 +5155,7 @@ func TestMailboxStatusSkipsCodexProcessProbeOnWindows(t *testing.T) {
 	}
 }
 
-func TestMailboxStatusReportsAgentDeckShowInvalidJSONWarning(t *testing.T) {
+func TestWaypostStatusReportsAgentDeckShowInvalidJSONWarning(t *testing.T) {
 	isolateAutoBindEnv(t)
 	t.Setenv("AGENTDECK_INSTANCE_ID", "deck-session-1")
 
@@ -5173,13 +5173,13 @@ func TestMailboxStatusReportsAgentDeckShowInvalidJSONWarning(t *testing.T) {
 	}
 
 	service := newService(Options{
-		MailboxServiceFactory: fakeMailboxServiceFactory{service: &fakeMailboxService{t: t}},
+		WaypostServiceFactory: fakeWaypostServiceFactory{service: &fakeWaypostService{t: t}},
 		CommandRunner:         runner,
 		DisableWakeScheduler:  true,
 		DisableLeaseRenewLoop: true,
 	})
 
-	status := callServiceTool(t, service, "mailbox_status", nil)
+	status := callServiceTool(t, service, "waypost_status", nil)
 	if got := status["default_sender"]; got != "agent-deck/deck-session-1" {
 		t.Fatalf("default_sender = %v, want agent-deck/deck-session-1", got)
 	}
@@ -5198,7 +5198,7 @@ func TestMailboxStatusReportsAgentDeckShowInvalidJSONWarning(t *testing.T) {
 	}
 }
 
-func TestMailboxStatusWarnsWhenOnlyAgentDeckAddressIsBound(t *testing.T) {
+func TestWaypostStatusWarnsWhenOnlyAgentDeckAddressIsBound(t *testing.T) {
 	isolateAutoBindEnv(t)
 	t.Setenv("AGENTDECK_INSTANCE_ID", "deck-session-1")
 
@@ -5216,20 +5216,20 @@ func TestMailboxStatusWarnsWhenOnlyAgentDeckAddressIsBound(t *testing.T) {
 	}
 
 	service := newService(Options{
-		MailboxServiceFactory: fakeMailboxServiceFactory{service: &fakeMailboxService{t: t}},
+		WaypostServiceFactory: fakeWaypostServiceFactory{service: &fakeWaypostService{t: t}},
 		CommandRunner:         runner,
 		DisableWakeScheduler:  true,
 		DisableLeaseRenewLoop: true,
 	})
 
-	status := callServiceTool(t, service, "mailbox_status", nil)
+	status := callServiceTool(t, service, "waypost_status", nil)
 	if got := status["default_sender"]; got != "agent-deck/deck-session-1" {
 		t.Fatalf("default_sender = %v, want agent-deck/deck-session-1", got)
 	}
 	assertHasToolSessionWarning(t, status)
 }
 
-func TestMailboxStatusIgnoresInvalidToolSessionEnvValues(t *testing.T) {
+func TestWaypostStatusIgnoresInvalidToolSessionEnvValues(t *testing.T) {
 	isolateAutoBindEnv(t)
 	t.Setenv("CODEX_THREAD_ID", "not-a-thread")
 	t.Setenv("CLAUDE_CODE_SESSION_ID", "claude-session")
@@ -5250,13 +5250,13 @@ func TestMailboxStatusIgnoresInvalidToolSessionEnvValues(t *testing.T) {
 	}
 
 	service := newService(Options{
-		MailboxServiceFactory: fakeMailboxServiceFactory{service: &fakeMailboxService{t: t}},
+		WaypostServiceFactory: fakeWaypostServiceFactory{service: &fakeWaypostService{t: t}},
 		CommandRunner:         runner,
 		DisableWakeScheduler:  true,
 		DisableLeaseRenewLoop: true,
 	})
 
-	status := callServiceTool(t, service, "mailbox_status", nil)
+	status := callServiceTool(t, service, "waypost_status", nil)
 	if got := status["bound_addresses"]; got != nil && !reflect.DeepEqual(got, []any{}) {
 		t.Fatalf("bound_addresses = %#v, want no env auto-bind", got)
 	}
@@ -5280,7 +5280,7 @@ func TestMailboxStatusIgnoresInvalidToolSessionEnvValues(t *testing.T) {
 	}
 }
 
-func TestMailboxStatusPreservesInvalidToolSessionEnvWarningsDuringFallbackRetry(t *testing.T) {
+func TestWaypostStatusPreservesInvalidToolSessionEnvWarningsDuringFallbackRetry(t *testing.T) {
 	isolateAutoBindEnv(t)
 	t.Setenv("CODEX_THREAD_ID", "0123456789abcdef")
 	t.Setenv("CLAUDE_CODE_SESSION_ID", "claude-session")
@@ -5299,19 +5299,19 @@ func TestMailboxStatusPreservesInvalidToolSessionEnvWarningsDuringFallbackRetry(
 	}
 
 	service := newService(Options{
-		MailboxServiceFactory: fakeMailboxServiceFactory{service: &fakeMailboxService{t: t}},
+		WaypostServiceFactory: fakeWaypostServiceFactory{service: &fakeWaypostService{t: t}},
 		CommandRunner:         runner,
 		DisableWakeScheduler:  true,
 		DisableLeaseRenewLoop: true,
 	})
 
-	first := callServiceTool(t, service, "mailbox_status", nil)
+	first := callServiceTool(t, service, "waypost_status", nil)
 	if got := first["bound_addresses"]; !reflect.DeepEqual(got, []any{"codex/0123456789abcdef"}) {
 		t.Fatalf("first bound_addresses = %#v, want codex fallback", got)
 	}
 	assertHasInvalidToolSessionEnvWarning(t, first, "CLAUDE_CODE_SESSION_ID")
 
-	second := callServiceTool(t, service, "mailbox_status", nil)
+	second := callServiceTool(t, service, "waypost_status", nil)
 	if currentCalls != 2 {
 		t.Fatalf("agent-deck current calls = %d, want retry on fallback", currentCalls)
 	}
@@ -5321,7 +5321,7 @@ func TestMailboxStatusPreservesInvalidToolSessionEnvWarningsDuringFallbackRetry(
 	assertHasInvalidToolSessionEnvWarning(t, second, "CLAUDE_CODE_SESSION_ID")
 }
 
-func TestMailboxStatusPreservesInvalidToolSessionEnvWarningsAfterAgentDeckUpgrade(t *testing.T) {
+func TestWaypostStatusPreservesInvalidToolSessionEnvWarningsAfterAgentDeckUpgrade(t *testing.T) {
 	isolateAutoBindEnv(t)
 	t.Setenv("CODEX_THREAD_ID", "0123456789abcdef")
 	t.Setenv("CLAUDE_CODE_SESSION_ID", "claude-session")
@@ -5345,19 +5345,19 @@ func TestMailboxStatusPreservesInvalidToolSessionEnvWarningsAfterAgentDeckUpgrad
 	}
 
 	service := newService(Options{
-		MailboxServiceFactory: fakeMailboxServiceFactory{service: &fakeMailboxService{t: t}},
+		WaypostServiceFactory: fakeWaypostServiceFactory{service: &fakeWaypostService{t: t}},
 		CommandRunner:         runner,
 		DisableWakeScheduler:  true,
 		DisableLeaseRenewLoop: true,
 	})
 
-	first := callServiceTool(t, service, "mailbox_status", nil)
+	first := callServiceTool(t, service, "waypost_status", nil)
 	if got := first["default_sender"]; got != "codex/0123456789abcdef" {
 		t.Fatalf("first default_sender = %v, want codex fallback", got)
 	}
 	assertHasInvalidToolSessionEnvWarning(t, first, "CLAUDE_CODE_SESSION_ID")
 
-	second := callServiceTool(t, service, "mailbox_status", nil)
+	second := callServiceTool(t, service, "waypost_status", nil)
 	if currentCalls != 2 {
 		t.Fatalf("agent-deck current calls = %d, want retry on fallback", currentCalls)
 	}
@@ -5407,7 +5407,7 @@ func TestInvalidCodexThreadEnvFallsBackToProcessProbe(t *testing.T) {
 	}
 
 	service := newService(Options{
-		MailboxServiceFactory: fakeMailboxServiceFactory{service: &fakeMailboxService{t: t}},
+		WaypostServiceFactory: fakeWaypostServiceFactory{service: &fakeWaypostService{t: t}},
 		CommandRunner:         runner,
 		DisableWakeScheduler:  true,
 		DisableLeaseRenewLoop: true,
@@ -5481,12 +5481,12 @@ func TestAutoBindFindsClaudeCodeSessionFromEnv(t *testing.T) {
 			}
 
 			service := newService(Options{
-				MailboxServiceFactory: fakeMailboxServiceFactory{service: &fakeMailboxService{t: t}},
+				WaypostServiceFactory: fakeWaypostServiceFactory{service: &fakeWaypostService{t: t}},
 				CommandRunner:         runner,
 				DisableWakeScheduler:  true,
 				DisableLeaseRenewLoop: true,
 			})
-			status := callServiceTool(t, service, "mailbox_status", nil)
+			status := callServiceTool(t, service, "waypost_status", nil)
 
 			if got := status["default_sender"]; got != tt.wantDefaultSender {
 				t.Fatalf("default_sender = %v, want %v", got, tt.wantDefaultSender)
@@ -5527,12 +5527,12 @@ func TestAutoBindFindsAgentDeckSessionFromCodexStateDB(t *testing.T) {
 	}
 
 	service := newService(Options{
-		MailboxServiceFactory: fakeMailboxServiceFactory{service: &fakeMailboxService{t: t}},
+		WaypostServiceFactory: fakeWaypostServiceFactory{service: &fakeWaypostService{t: t}},
 		CommandRunner:         runner,
 		DisableWakeScheduler:  true,
 		DisableLeaseRenewLoop: true,
 	})
-	status := callServiceTool(t, service, "mailbox_status", nil)
+	status := callServiceTool(t, service, "waypost_status", nil)
 
 	if got := status["default_sender"]; got != "agent-deck/deck-session-1" {
 		t.Fatalf("default_sender = %v, want agent-deck/deck-session-1", got)
@@ -5568,12 +5568,12 @@ func TestAutoBindPrefersCodexLinkedAgentDeckSessionOverAmbientCurrent(t *testing
 	}
 
 	service := newService(Options{
-		MailboxServiceFactory: fakeMailboxServiceFactory{service: &fakeMailboxService{t: t}},
+		WaypostServiceFactory: fakeWaypostServiceFactory{service: &fakeWaypostService{t: t}},
 		CommandRunner:         runner,
 		DisableWakeScheduler:  true,
 		DisableLeaseRenewLoop: true,
 	})
-	status := callServiceTool(t, service, "mailbox_status", nil)
+	status := callServiceTool(t, service, "waypost_status", nil)
 
 	if got := status["default_sender"]; got != "agent-deck/deck-session-1" {
 		t.Fatalf("default_sender = %v, want agent-deck/deck-session-1", got)
@@ -5616,7 +5616,7 @@ func TestAutoBindDoesNotChooseAgentDeckSessionFromStateDBByWorkdirAlone(t *testi
 	}
 
 	service := newService(Options{
-		MailboxServiceFactory: fakeMailboxServiceFactory{service: &fakeMailboxService{t: t}},
+		WaypostServiceFactory: fakeWaypostServiceFactory{service: &fakeWaypostService{t: t}},
 		CommandRunner:         runner,
 		DisableWakeScheduler:  true,
 		DisableLeaseRenewLoop: true,
@@ -5624,7 +5624,7 @@ func TestAutoBindDoesNotChooseAgentDeckSessionFromStateDBByWorkdirAlone(t *testi
 	service.sessions.parentPID = func() int { return 1 }
 	service.state.defaultWorkdir = workdir
 
-	status := callServiceTool(t, service, "mailbox_status", nil)
+	status := callServiceTool(t, service, "waypost_status", nil)
 	if got := status["bound_addresses"]; got != nil && !reflect.DeepEqual(got, []any{}) {
 		t.Fatalf("bound_addresses = %v, want empty without current agent-deck session signal", got)
 	}
@@ -5655,7 +5655,7 @@ func TestAutoBindComplementsCurrentAgentDeckSessionFromStateDBByWorkdir(t *testi
 	}
 
 	service := newService(Options{
-		MailboxServiceFactory: fakeMailboxServiceFactory{service: &fakeMailboxService{t: t}},
+		WaypostServiceFactory: fakeWaypostServiceFactory{service: &fakeWaypostService{t: t}},
 		CommandRunner:         runner,
 		DisableWakeScheduler:  true,
 		DisableLeaseRenewLoop: true,
@@ -5663,7 +5663,7 @@ func TestAutoBindComplementsCurrentAgentDeckSessionFromStateDBByWorkdir(t *testi
 	service.sessions.parentPID = func() int { return 1 }
 	service.state.defaultWorkdir = workdir
 
-	status := callServiceTool(t, service, "mailbox_status", nil)
+	status := callServiceTool(t, service, "waypost_status", nil)
 	wantAddresses := []any{"agent-deck/deck-session-1", "codex/0123456789abcdef"}
 	if !reflect.DeepEqual(status["bound_addresses"], wantAddresses) {
 		t.Fatalf("bound_addresses = %v, want %v", status["bound_addresses"], wantAddresses)
@@ -5703,14 +5703,14 @@ func TestAutoBindUsesSessionShowPathBeforeStateDBWorkdirLookup(t *testing.T) {
 	}
 
 	service := newService(Options{
-		MailboxServiceFactory: fakeMailboxServiceFactory{service: &fakeMailboxService{t: t}},
+		WaypostServiceFactory: fakeWaypostServiceFactory{service: &fakeWaypostService{t: t}},
 		CommandRunner:         runner,
 		DisableWakeScheduler:  true,
 		DisableLeaseRenewLoop: true,
 	})
 	service.sessions.parentPID = func() int { return 1 }
 
-	status := callServiceTool(t, service, "mailbox_status", nil)
+	status := callServiceTool(t, service, "waypost_status", nil)
 	wantAddresses := []any{"agent-deck/deck-session-1", "codex/0123456789abcdef"}
 	if !reflect.DeepEqual(status["bound_addresses"], wantAddresses) {
 		t.Fatalf("bound_addresses = %v, want %v", status["bound_addresses"], wantAddresses)
@@ -5757,7 +5757,7 @@ func TestAutoBindFindsCurrentSessionWhenNewerCodexSessionSharesWorkdir(t *testin
 	}
 
 	service := newService(Options{
-		MailboxServiceFactory: fakeMailboxServiceFactory{service: &fakeMailboxService{t: t}},
+		WaypostServiceFactory: fakeWaypostServiceFactory{service: &fakeWaypostService{t: t}},
 		CommandRunner:         runner,
 		DisableWakeScheduler:  true,
 		DisableLeaseRenewLoop: true,
@@ -5765,7 +5765,7 @@ func TestAutoBindFindsCurrentSessionWhenNewerCodexSessionSharesWorkdir(t *testin
 	service.sessions.parentPID = func() int { return 1 }
 	service.state.defaultWorkdir = workdir
 
-	status := callServiceTool(t, service, "mailbox_status", nil)
+	status := callServiceTool(t, service, "waypost_status", nil)
 	wantAddresses := []any{"agent-deck/deck-session-1", "codex/0123456789abcdef"}
 	if !reflect.DeepEqual(status["bound_addresses"], wantAddresses) {
 		t.Fatalf("bound_addresses = %v, want %v", status["bound_addresses"], wantAddresses)
@@ -5796,7 +5796,7 @@ func TestAutoBindDoesNotRetryStateDBAfterEmptyResultWithoutAgentDeckSignal(t *te
 	}
 
 	service := newService(Options{
-		MailboxServiceFactory: fakeMailboxServiceFactory{service: &fakeMailboxService{t: t}},
+		WaypostServiceFactory: fakeWaypostServiceFactory{service: &fakeWaypostService{t: t}},
 		CommandRunner:         runner,
 		DisableWakeScheduler:  true,
 		DisableLeaseRenewLoop: true,
@@ -5804,13 +5804,13 @@ func TestAutoBindDoesNotRetryStateDBAfterEmptyResultWithoutAgentDeckSignal(t *te
 	service.sessions.parentPID = func() int { return 1 }
 	service.state.defaultWorkdir = workdir
 
-	first := callServiceTool(t, service, "mailbox_status", nil)
+	first := callServiceTool(t, service, "waypost_status", nil)
 	if got := first["bound_addresses"]; got != nil && !reflect.DeepEqual(got, []any{}) {
 		t.Fatalf("first bound_addresses = %#v, want empty", got)
 	}
 
 	writeAgentDeckStateDB(t, home, "work", "deck-session-1", workdir, "0123456789abcdef")
-	second := callServiceTool(t, service, "mailbox_status", nil)
+	second := callServiceTool(t, service, "waypost_status", nil)
 	if got := second["bound_addresses"]; got != nil && !reflect.DeepEqual(got, []any{}) {
 		t.Fatalf("second bound_addresses = %#v, want empty without current agent-deck session signal", got)
 	}
@@ -5840,7 +5840,7 @@ func TestAutoBindRetriesAgentDeckStateDBAfterAgentDeckOnlyResult(t *testing.T) {
 	}
 
 	service := newService(Options{
-		MailboxServiceFactory: fakeMailboxServiceFactory{service: &fakeMailboxService{t: t}},
+		WaypostServiceFactory: fakeWaypostServiceFactory{service: &fakeWaypostService{t: t}},
 		CommandRunner:         runner,
 		DisableWakeScheduler:  true,
 		DisableLeaseRenewLoop: true,
@@ -5848,7 +5848,7 @@ func TestAutoBindRetriesAgentDeckStateDBAfterAgentDeckOnlyResult(t *testing.T) {
 	service.sessions.parentPID = func() int { return 1 }
 	service.state.defaultWorkdir = workdir
 
-	first := callServiceTool(t, service, "mailbox_status", nil)
+	first := callServiceTool(t, service, "waypost_status", nil)
 	wantFirst := []any{"agent-deck/deck-session-1"}
 	if !reflect.DeepEqual(first["bound_addresses"], wantFirst) {
 		t.Fatalf("first bound_addresses = %v, want %v", first["bound_addresses"], wantFirst)
@@ -5858,7 +5858,7 @@ func TestAutoBindRetriesAgentDeckStateDBAfterAgentDeckOnlyResult(t *testing.T) {
 	}
 
 	writeAgentDeckStateDB(t, home, "work", "deck-session-1", workdir, "0123456789abcdef")
-	second := callServiceTool(t, service, "mailbox_status", nil)
+	second := callServiceTool(t, service, "waypost_status", nil)
 	wantSecond := []any{"agent-deck/deck-session-1", "codex/0123456789abcdef"}
 	if !reflect.DeepEqual(second["bound_addresses"], wantSecond) {
 		t.Fatalf("second bound_addresses = %v, want %v", second["bound_addresses"], wantSecond)
@@ -5888,12 +5888,12 @@ func TestAutoBindSkipsBadAgentDeckDBAndFallsBackToCodexOnly(t *testing.T) {
 	}
 
 	service := newService(Options{
-		MailboxServiceFactory: fakeMailboxServiceFactory{service: &fakeMailboxService{t: t}},
+		WaypostServiceFactory: fakeWaypostServiceFactory{service: &fakeWaypostService{t: t}},
 		CommandRunner:         runner,
 		DisableWakeScheduler:  true,
 		DisableLeaseRenewLoop: true,
 	})
-	status := callServiceTool(t, service, "mailbox_status", nil)
+	status := callServiceTool(t, service, "waypost_status", nil)
 
 	if got := status["default_sender"]; got != "codex/0123456789abcdef" {
 		t.Fatalf("default_sender = %v, want codex/0123456789abcdef", got)
@@ -5929,32 +5929,32 @@ func TestAutoBindRetriesAgentDeckAfterCodexOnlyFallback(t *testing.T) {
 		}
 	}
 
-	mailboxService := &fakeMailboxService{t: t}
-	mailboxService.receiveBatchFunc = func(_ context.Context, params mailbox.ReceiveBatchParams) (mailbox.ReceiveResult, error) {
+	waypostService := &fakeWaypostService{t: t}
+	waypostService.receiveBatchFunc = func(_ context.Context, params waypost.ReceiveBatchParams) (waypost.ReceiveResult, error) {
 		want := []string{"agent-deck/deck-session-1", "codex/0123456789abcdef"}
 		if !reflect.DeepEqual(params.Addresses, want) {
 			t.Fatalf("receive addresses = %v, want %v", params.Addresses, want)
 		}
-		return mailbox.ReceiveResult{}, mailbox.ErrNoMessage
+		return waypost.ReceiveResult{}, waypost.ErrNoMessage
 	}
 
 	service := newService(Options{
-		MailboxServiceFactory: fakeMailboxServiceFactory{service: mailboxService},
+		WaypostServiceFactory: fakeWaypostServiceFactory{service: waypostService},
 		CommandRunner:         runner,
 		DisableWakeScheduler:  true,
 		DisableLeaseRenewLoop: true,
 	})
 
-	status := callServiceTool(t, service, "mailbox_status", nil)
+	status := callServiceTool(t, service, "waypost_status", nil)
 	if got := status["default_sender"]; got != "codex/0123456789abcdef" {
 		t.Fatalf("initial default_sender = %v, want codex/0123456789abcdef", got)
 	}
 
-	recv := callServiceTool(t, service, "mailbox_recv", nil)
+	recv := callServiceTool(t, service, "waypost_recv", nil)
 	if got := recv["warnings"]; got != nil {
 		t.Fatalf("recv warnings = %v, want nil after agent-deck retry succeeds", got)
 	}
-	status = callServiceTool(t, service, "mailbox_status", nil)
+	status = callServiceTool(t, service, "waypost_status", nil)
 	if got := status["default_sender"]; got != "agent-deck/deck-session-1" {
 		t.Fatalf("upgraded default_sender = %v, want agent-deck/deck-session-1", got)
 	}
@@ -5985,23 +5985,23 @@ func TestAutoBindRetriesAgentDeckAfterCodexFallbackWithExtraToolAddress(t *testi
 		}
 	}
 
-	mailboxService := &fakeMailboxService{t: t}
-	mailboxService.receiveBatchFunc = func(_ context.Context, params mailbox.ReceiveBatchParams) (mailbox.ReceiveResult, error) {
+	waypostService := &fakeWaypostService{t: t}
+	waypostService.receiveBatchFunc = func(_ context.Context, params waypost.ReceiveBatchParams) (waypost.ReceiveResult, error) {
 		want := []string{"agent-deck/deck-session-1", "codex/0123456789abcdef", "claude/aaaaaaaaaaaaaaaa"}
 		if !reflect.DeepEqual(params.Addresses, want) {
 			t.Fatalf("receive addresses = %v, want %v", params.Addresses, want)
 		}
-		return mailbox.ReceiveResult{}, mailbox.ErrNoMessage
+		return waypost.ReceiveResult{}, waypost.ErrNoMessage
 	}
 
 	service := newService(Options{
-		MailboxServiceFactory: fakeMailboxServiceFactory{service: mailboxService},
+		WaypostServiceFactory: fakeWaypostServiceFactory{service: waypostService},
 		CommandRunner:         runner,
 		DisableWakeScheduler:  true,
 		DisableLeaseRenewLoop: true,
 	})
 
-	status := callServiceTool(t, service, "mailbox_status", nil)
+	status := callServiceTool(t, service, "waypost_status", nil)
 	if got := status["default_sender"]; got != "codex/0123456789abcdef" {
 		t.Fatalf("initial default_sender = %v, want codex/0123456789abcdef", got)
 	}
@@ -6010,11 +6010,11 @@ func TestAutoBindRetriesAgentDeckAfterCodexFallbackWithExtraToolAddress(t *testi
 		t.Fatalf("initial bound_addresses = %v, want %v", status["bound_addresses"], wantInitialAddresses)
 	}
 
-	recv := callServiceTool(t, service, "mailbox_recv", nil)
+	recv := callServiceTool(t, service, "waypost_recv", nil)
 	if got := recv["warnings"]; got != nil {
 		t.Fatalf("recv warnings = %v, want nil after agent-deck retry succeeds", got)
 	}
-	status = callServiceTool(t, service, "mailbox_status", nil)
+	status = callServiceTool(t, service, "waypost_status", nil)
 	if got := status["default_sender"]; got != "agent-deck/deck-session-1" {
 		t.Fatalf("upgraded default_sender = %v, want agent-deck/deck-session-1", got)
 	}
@@ -6050,32 +6050,32 @@ func TestAutoBindRetriesAgentDeckAfterClaudeOnlyFallback(t *testing.T) {
 		}
 	}
 
-	mailboxService := &fakeMailboxService{t: t}
-	mailboxService.receiveBatchFunc = func(_ context.Context, params mailbox.ReceiveBatchParams) (mailbox.ReceiveResult, error) {
+	waypostService := &fakeWaypostService{t: t}
+	waypostService.receiveBatchFunc = func(_ context.Context, params waypost.ReceiveBatchParams) (waypost.ReceiveResult, error) {
 		want := []string{"agent-deck/deck-session-1", "claude/aaaaaaaaaaaaaaaa"}
 		if !reflect.DeepEqual(params.Addresses, want) {
 			t.Fatalf("receive addresses = %v, want %v", params.Addresses, want)
 		}
-		return mailbox.ReceiveResult{}, mailbox.ErrNoMessage
+		return waypost.ReceiveResult{}, waypost.ErrNoMessage
 	}
 
 	service := newService(Options{
-		MailboxServiceFactory: fakeMailboxServiceFactory{service: mailboxService},
+		WaypostServiceFactory: fakeWaypostServiceFactory{service: waypostService},
 		CommandRunner:         runner,
 		DisableWakeScheduler:  true,
 		DisableLeaseRenewLoop: true,
 	})
 
-	status := callServiceTool(t, service, "mailbox_status", nil)
+	status := callServiceTool(t, service, "waypost_status", nil)
 	if got := status["default_sender"]; got != "claude/aaaaaaaaaaaaaaaa" {
 		t.Fatalf("initial default_sender = %v, want claude/aaaaaaaaaaaaaaaa", got)
 	}
 
-	recv := callServiceTool(t, service, "mailbox_recv", nil)
+	recv := callServiceTool(t, service, "waypost_recv", nil)
 	if got := recv["warnings"]; got != nil {
 		t.Fatalf("recv warnings = %v, want nil after agent-deck retry succeeds", got)
 	}
-	status = callServiceTool(t, service, "mailbox_status", nil)
+	status = callServiceTool(t, service, "waypost_status", nil)
 	if got := status["default_sender"]; got != "agent-deck/deck-session-1" {
 		t.Fatalf("upgraded default_sender = %v, want agent-deck/deck-session-1", got)
 	}
@@ -6085,7 +6085,7 @@ func TestAutoBindRetriesAgentDeckAfterClaudeOnlyFallback(t *testing.T) {
 	}
 }
 
-func TestMailboxBindDisablesAgentDeckRetryUpgrade(t *testing.T) {
+func TestWaypostBindDisablesAgentDeckRetryUpgrade(t *testing.T) {
 	home := t.TempDir()
 	setTestHome(t, home)
 	isolateAutoBindEnv(t)
@@ -6110,25 +6110,25 @@ func TestMailboxBindDisablesAgentDeckRetryUpgrade(t *testing.T) {
 	}
 
 	service := newService(Options{
-		MailboxServiceFactory: fakeMailboxServiceFactory{service: &fakeMailboxService{t: t}},
+		WaypostServiceFactory: fakeWaypostServiceFactory{service: &fakeWaypostService{t: t}},
 		CommandRunner:         runner,
 		DisableWakeScheduler:  true,
 		DisableLeaseRenewLoop: true,
 	})
 
-	status := callServiceTool(t, service, "mailbox_status", nil)
+	status := callServiceTool(t, service, "waypost_status", nil)
 	if got := status["default_sender"]; got != "codex/0123456789abcdef" {
 		t.Fatalf("initial default_sender = %v, want codex/0123456789abcdef", got)
 	}
 
-	bind := callServiceTool(t, service, "mailbox_bind", map[string]any{
+	bind := callServiceTool(t, service, "waypost_bind", map[string]any{
 		"addresses": []string{"codex/manual"},
 	})
 	if got := bind["default_sender"]; got != "codex/manual" {
-		t.Fatalf("mailbox_bind default_sender = %v, want codex/manual", got)
+		t.Fatalf("waypost_bind default_sender = %v, want codex/manual", got)
 	}
 
-	status = callServiceTool(t, service, "mailbox_status", nil)
+	status = callServiceTool(t, service, "waypost_status", nil)
 	if got := status["default_sender"]; got != "codex/manual" {
 		t.Fatalf("status default_sender = %v, want codex/manual", got)
 	}
@@ -6148,7 +6148,7 @@ func TestMailboxBindDisablesAgentDeckRetryUpgrade(t *testing.T) {
 	}
 }
 
-func TestMailboxBindManualOverrideWarnsWhenNoToolAddressRemains(t *testing.T) {
+func TestWaypostBindManualOverrideWarnsWhenNoToolAddressRemains(t *testing.T) {
 	isolateAutoBindEnv(t)
 	t.Setenv("CODEX_THREAD_ID", "0123456789abcdef")
 
@@ -6164,22 +6164,22 @@ func TestMailboxBindManualOverrideWarnsWhenNoToolAddressRemains(t *testing.T) {
 	}
 
 	service := newService(Options{
-		MailboxServiceFactory: fakeMailboxServiceFactory{service: &fakeMailboxService{t: t}},
+		WaypostServiceFactory: fakeWaypostServiceFactory{service: &fakeWaypostService{t: t}},
 		CommandRunner:         runner,
 		DisableWakeScheduler:  true,
 		DisableLeaseRenewLoop: true,
 	})
 
-	status := callServiceTool(t, service, "mailbox_status", nil)
+	status := callServiceTool(t, service, "waypost_status", nil)
 	if got := status["default_sender"]; got != "codex/0123456789abcdef" {
 		t.Fatalf("initial default_sender = %v, want codex/0123456789abcdef", got)
 	}
 
-	bind := callServiceTool(t, service, "mailbox_bind", map[string]any{
+	bind := callServiceTool(t, service, "waypost_bind", map[string]any{
 		"addresses": []string{"workflow/manual"},
 	})
 	if got := bind["default_sender"]; got != "workflow/manual" {
-		t.Fatalf("mailbox_bind default_sender = %v, want workflow/manual", got)
+		t.Fatalf("waypost_bind default_sender = %v, want workflow/manual", got)
 	}
 	if got := bind["detected_agent_session_id"]; got != nil {
 		t.Fatalf("detected_agent_session_id = %v, want nil after manual bind override", got)
@@ -6210,7 +6210,7 @@ func TestAgentDeckRetryRechecksFallbackStateBeforeUpgrade(t *testing.T) {
 	}
 
 	service := newService(Options{
-		MailboxServiceFactory: fakeMailboxServiceFactory{service: &fakeMailboxService{t: t}},
+		WaypostServiceFactory: fakeWaypostServiceFactory{service: &fakeWaypostService{t: t}},
 		CommandRunner:         runner,
 		DisableWakeScheduler:  true,
 		DisableLeaseRenewLoop: true,
@@ -6244,17 +6244,17 @@ func TestAgentDeckRetryRechecksFallbackStateBeforeUpgrade(t *testing.T) {
 	}
 }
 
-func TestMailboxRecvWarnsWhenOnlyCodexSessionIsBound(t *testing.T) {
-	mailboxService := &fakeMailboxService{t: t}
-	mailboxService.receiveBatchFunc = func(_ context.Context, params mailbox.ReceiveBatchParams) (mailbox.ReceiveResult, error) {
+func TestWaypostRecvWarnsWhenOnlyCodexSessionIsBound(t *testing.T) {
+	waypostService := &fakeWaypostService{t: t}
+	waypostService.receiveBatchFunc = func(_ context.Context, params waypost.ReceiveBatchParams) (waypost.ReceiveResult, error) {
 		if !reflect.DeepEqual(params.Addresses, []string{"codex/self"}) {
 			t.Fatalf("receive addresses = %v, want [codex/self]", params.Addresses)
 		}
-		return mailbox.ReceiveResult{}, mailbox.ErrNoMessage
+		return waypost.ReceiveResult{}, waypost.ErrNoMessage
 	}
 
 	service := newService(Options{
-		MailboxServiceFactory: fakeMailboxServiceFactory{service: mailboxService},
+		WaypostServiceFactory: fakeWaypostServiceFactory{service: waypostService},
 		DisableWakeScheduler:  true,
 		DisableLeaseRenewLoop: true,
 	})
@@ -6263,28 +6263,28 @@ func TestMailboxRecvWarnsWhenOnlyCodexSessionIsBound(t *testing.T) {
 	service.state.detectedToolSessions = toolSessionIDs{"codex": "self"}
 	service.state.autoBindAttempted = true
 
-	out := callServiceTool(t, service, "mailbox_recv", nil)
+	out := callServiceTool(t, service, "waypost_recv", nil)
 	warnings, ok := out["warnings"].([]any)
 	if !ok || len(warnings) != 1 {
 		t.Fatalf("warnings = %#v, want one warning", out["warnings"])
 	}
 	warning := warnings[0].(string)
-	if !strings.Contains(warning, "agent-deck session current --json") || !strings.Contains(warning, "mailbox_bind") {
+	if !strings.Contains(warning, "agent-deck session current --json") || !strings.Contains(warning, "waypost_bind") {
 		t.Fatalf("warning = %v, want manual agent-deck bind recovery hint", warning)
 	}
 }
 
-func TestMailboxRecvWarnsWhenManualToolAddressIsBoundWithoutAgentDeck(t *testing.T) {
-	mailboxService := &fakeMailboxService{t: t}
-	mailboxService.receiveBatchFunc = func(_ context.Context, params mailbox.ReceiveBatchParams) (mailbox.ReceiveResult, error) {
+func TestWaypostRecvWarnsWhenManualToolAddressIsBoundWithoutAgentDeck(t *testing.T) {
+	waypostService := &fakeWaypostService{t: t}
+	waypostService.receiveBatchFunc = func(_ context.Context, params waypost.ReceiveBatchParams) (waypost.ReceiveResult, error) {
 		if !reflect.DeepEqual(params.Addresses, []string{"codex/manual"}) {
 			t.Fatalf("receive addresses = %v, want [codex/manual]", params.Addresses)
 		}
-		return mailbox.ReceiveResult{}, mailbox.ErrNoMessage
+		return waypost.ReceiveResult{}, waypost.ErrNoMessage
 	}
 
 	service := newService(Options{
-		MailboxServiceFactory: fakeMailboxServiceFactory{service: mailboxService},
+		WaypostServiceFactory: fakeWaypostServiceFactory{service: waypostService},
 		CommandRunner:         &fakeRunner{t: t},
 		DisableWakeScheduler:  true,
 		DisableLeaseRenewLoop: true,
@@ -6293,28 +6293,28 @@ func TestMailboxRecvWarnsWhenManualToolAddressIsBoundWithoutAgentDeck(t *testing
 	service.state.defaultSender = "codex/manual"
 	service.state.autoBindAttempted = true
 
-	out := callServiceTool(t, service, "mailbox_recv", nil)
+	out := callServiceTool(t, service, "waypost_recv", nil)
 	warnings, ok := out["warnings"].([]any)
 	if !ok || len(warnings) != 1 {
 		t.Fatalf("warnings = %#v, want one warning", out["warnings"])
 	}
 	warning := warnings[0].(string)
-	if !strings.Contains(warning, "agent-deck session current --json") || !strings.Contains(warning, "mailbox_bind") {
+	if !strings.Contains(warning, "agent-deck session current --json") || !strings.Contains(warning, "waypost_bind") {
 		t.Fatalf("warning = %v, want manual agent-deck bind recovery hint", warning)
 	}
 }
 
-func TestMailboxRecvWarnsWhenOnlyClaudeSessionIsBound(t *testing.T) {
-	mailboxService := &fakeMailboxService{t: t}
-	mailboxService.receiveBatchFunc = func(_ context.Context, params mailbox.ReceiveBatchParams) (mailbox.ReceiveResult, error) {
+func TestWaypostRecvWarnsWhenOnlyClaudeSessionIsBound(t *testing.T) {
+	waypostService := &fakeWaypostService{t: t}
+	waypostService.receiveBatchFunc = func(_ context.Context, params waypost.ReceiveBatchParams) (waypost.ReceiveResult, error) {
 		if !reflect.DeepEqual(params.Addresses, []string{"claude/self"}) {
 			t.Fatalf("receive addresses = %v, want [claude/self]", params.Addresses)
 		}
-		return mailbox.ReceiveResult{}, mailbox.ErrNoMessage
+		return waypost.ReceiveResult{}, waypost.ErrNoMessage
 	}
 
 	service := newService(Options{
-		MailboxServiceFactory: fakeMailboxServiceFactory{service: mailboxService},
+		WaypostServiceFactory: fakeWaypostServiceFactory{service: waypostService},
 		CommandRunner:         &fakeRunner{t: t},
 		DisableWakeScheduler:  true,
 		DisableLeaseRenewLoop: true,
@@ -6324,7 +6324,7 @@ func TestMailboxRecvWarnsWhenOnlyClaudeSessionIsBound(t *testing.T) {
 	service.state.detectedToolSessions = toolSessionIDs{"claude": "self"}
 	service.state.autoBindAttempted = true
 
-	out := callServiceTool(t, service, "mailbox_recv", nil)
+	out := callServiceTool(t, service, "waypost_recv", nil)
 	warnings, ok := out["warnings"].([]any)
 	if !ok || len(warnings) != 1 {
 		t.Fatalf("warnings = %#v, want one warning", out["warnings"])
@@ -6333,7 +6333,7 @@ func TestMailboxRecvWarnsWhenOnlyClaudeSessionIsBound(t *testing.T) {
 	if !ok {
 		t.Fatalf("warning = %#v, want string", warnings[0])
 	}
-	if !strings.Contains(warning, "agent-deck session current --json") || !strings.Contains(warning, "mailbox_bind") {
+	if !strings.Contains(warning, "agent-deck session current --json") || !strings.Contains(warning, "waypost_bind") {
 		t.Fatalf("warning = %v, want manual agent-deck bind recovery hint", warning)
 	}
 }
@@ -6430,8 +6430,8 @@ func writeAgentDeckStateDBRows(t *testing.T, home, profile string, rows []agentD
 
 func callServiceTool(t *testing.T, service *Service, name string, args map[string]any) map[string]any {
 	t.Helper()
-	if requiresMailboxStatusToolName(name) {
-		service.markMailboxStatusCalled()
+	if requiresWaypostStatusToolName(name) {
+		service.markWaypostStatusCalled()
 	}
 	return callTool(t, service.Server(), name, args)
 }
@@ -6444,7 +6444,7 @@ func callServiceToolWithoutStatusBootstrap(t *testing.T, service *Service, name 
 func readMCPDeliveryEventDetail(t *testing.T, stateDir, deliveryID, eventType string) map[string]any {
 	t.Helper()
 
-	runtime, err := mailbox.OpenRuntime(context.Background(), stateDir)
+	runtime, err := waypost.OpenRuntime(context.Background(), stateDir)
 	if err != nil {
 		t.Fatalf("OpenRuntime() error = %v", err)
 	}
@@ -6520,8 +6520,8 @@ func assertMCPMapOmitsForwardedMessageID(t *testing.T, payload map[string]any) {
 
 func callServiceToolExpectError(t *testing.T, service *Service, name string, args map[string]any) error {
 	t.Helper()
-	if requiresMailboxStatusToolName(name) {
-		service.markMailboxStatusCalled()
+	if requiresWaypostStatusToolName(name) {
+		service.markWaypostStatusCalled()
 	}
 	return callToolExpectError(t, service.Server(), name, args)
 }
@@ -6629,8 +6629,8 @@ func assertHasInvalidToolSessionEnvWarning(t *testing.T, output map[string]any, 
 	t.Fatalf("warnings = %#v, want invalid %s warning", warnings, envName)
 }
 
-func requiresMailboxStatusToolName(name string) bool {
-	for _, required := range requiresMailboxStatusToolNames() {
+func requiresWaypostStatusToolName(name string) bool {
+	for _, required := range requiresWaypostStatusToolNames() {
 		if name == required {
 			return true
 		}
@@ -6638,29 +6638,29 @@ func requiresMailboxStatusToolName(name string) bool {
 	return false
 }
 
-func requiresMailboxStatusToolNames() []string {
+func requiresWaypostStatusToolNames() []string {
 	return []string{
-		"mailbox_bind",
-		"mailbox_wait",
-		"mailbox_send",
-		"mailbox_forward",
-		"mailbox_recv",
-		"mailbox_claim_history",
-		"mailbox_list",
-		"mailbox_read",
-		"mailbox_ack",
-		"mailbox_release",
-		"mailbox_defer",
-		"mailbox_undefer",
-		"mailbox_fail",
-		"mailbox_group_create",
-		"mailbox_group_add_member",
-		"mailbox_group_remove_member",
-		"mailbox_group_members",
-		"mailbox_group_add_subscriber",
-		"mailbox_group_remove_subscriber",
-		"mailbox_group_subscribers",
-		"mailbox_address_inspect",
+		"waypost_bind",
+		"waypost_wait",
+		"waypost_send",
+		"waypost_forward",
+		"waypost_recv",
+		"waypost_claim_history",
+		"waypost_list",
+		"waypost_read",
+		"waypost_ack",
+		"waypost_release",
+		"waypost_defer",
+		"waypost_undefer",
+		"waypost_fail",
+		"waypost_group_create",
+		"waypost_group_add_member",
+		"waypost_group_remove_member",
+		"waypost_group_members",
+		"waypost_group_add_subscriber",
+		"waypost_group_remove_subscriber",
+		"waypost_group_subscribers",
+		"waypost_address_inspect",
 		"agent_deck_resolve_session",
 		"agent_deck_create_session",
 		"agent_deck_require_session",

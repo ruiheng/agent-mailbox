@@ -1,17 +1,17 @@
-# Lease Renew For Local Mailbox MCP
+# Lease Renew For Local Waypost MCP
 
 ## Summary
 
-Add explicit lease renewal to personal mailbox delivery, then move lease
-liveness management into the local mailbox MCP that already lives and dies with
+Add explicit lease renewal to personal waypost delivery, then move lease
+liveness management into the local waypost MCP that already lives and dies with
 the agent process.
 
-The mailbox core should stop treating lease duration as a caller-side estimate
+The waypost core should stop treating lease duration as a caller-side estimate
 of total task runtime. In the MCP-driven workflow, lease duration should mean
 "how quickly abandoned work becomes claimable again if the current agent
 session disappears."
 
-This design keeps the mailbox core generic while letting the local MCP hide
+This design keeps the waypost core generic while letting the local MCP hide
 renewal complexity from the model-facing interface.
 
 ## Problem
@@ -26,26 +26,26 @@ Current lease semantics are correct in principle but awkward in real agent use:
 That is the wrong boundary.
 
 The component that knows whether the worker is still alive is not the model and
-not the mailbox caller. It is the local mailbox MCP process that is co-located
+not the waypost caller. It is the local waypost MCP process that is co-located
 with the agent process and exits when that agent session exits.
 
 So the current design asks the wrong layer to guess the wrong thing.
 
 ## Goals
 
-- Preserve exclusive claim semantics for personal mailbox delivery.
+- Preserve exclusive claim semantics for personal waypost delivery.
 - Make abandoned work reclaimable quickly after agent or MCP death.
-- Remove lease-duration guessing from normal mailbox MCP users.
-- Keep mailbox core transport-agnostic and adapter-agnostic.
+- Remove lease-duration guessing from normal waypost MCP users.
+- Keep waypost core transport-agnostic and adapter-agnostic.
 - Keep crash recovery daemon-free.
 - Maintain auditable delivery lifecycle transitions.
 
 ## Non-Goals
 
-- No change to group mailbox semantics.
+- No change to group waypost semantics.
 - No remote or distributed lease coordination.
-- No mailbox-core knowledge of specific agent runtimes or session managers.
-- No mandatory background daemon owned by the mailbox store.
+- No waypost-core knowledge of specific agent runtimes or session managers.
+- No mandatory background daemon owned by the waypost store.
 - No redesign of message storage or blob handling.
 - No attempt in this round to remove `delivery_id` from persisted schema.
 
@@ -62,18 +62,18 @@ claim.
 
 So the correct change is:
 
-1. add explicit lease renewal to mailbox core
+1. add explicit lease renewal to waypost core
 2. keep the legacy default receive TTL unchanged for compatibility
 3. add an MCP-only short-TTL receive policy path
-4. let the local mailbox MCP renew active leases automatically
+4. let the local waypost MCP renew active leases automatically
 5. stop expecting agent callers to predict total work duration
 
 ## Design Overview
 
 Split responsibility cleanly:
 
-- mailbox core owns claim, renewal, expiry validation, and recovery
-- mailbox MCP owns the in-memory renewal loop for leases it currently holds
+- waypost core owns claim, renewal, expiry validation, and recovery
+- waypost MCP owns the in-memory renewal loop for leases it currently holds
 - model-facing consumers continue to think in terms of "receive work" and
   "finish work", not "guess a lease duration"
 
@@ -105,12 +105,12 @@ The key semantic change is this:
 
 That better matches how the system is actually used.
 
-## Mailbox Core API
+## Waypost Core API
 
-Add one new personal-mailbox lifecycle operation:
+Add one new personal-waypost lifecycle operation:
 
 ```text
-agent-mailbox renew --delivery <delivery_id> --lease-token <lease_token> --for 15s
+waypost renew --delivery <delivery_id> --lease-token <lease_token> --for 15s
 ```
 
 Store API:
@@ -205,7 +205,7 @@ This is a liveness window, not a task-duration estimate.
 
 ## Compatibility Boundary For Short TTL
 
-Preserving current non-MCP personal-mailbox behavior is a hard requirement in
+Preserving current non-MCP personal-waypost behavior is a hard requirement in
 this design.
 
 That means the short TTL must not arrive by silently changing the global
@@ -216,9 +216,9 @@ The boundary should be:
 - existing CLI `recv` keeps the current `5m` lease default
 - existing public `Store.Receive` and `Store.ReceiveBatch` semantics stay on the
   legacy default path
-- mailbox core factors claim logic so a narrow internal policy input can supply
+- waypost core factors claim logic so a narrow internal policy input can supply
   a shorter TTL
-- mailbox MCP uses that internal short-TTL policy path
+- waypost MCP uses that internal short-TTL policy path
 
 One acceptable implementation shape is:
 
@@ -238,7 +238,7 @@ future global default change while claiming non-MCP callers are unaffected.
 
 ## MCP Renewal Ownership
 
-The local mailbox MCP should own renewal for every lease it claims on behalf of
+The local waypost MCP should own renewal for every lease it claims on behalf of
 the agent session.
 
 Recommended MCP behavior:
@@ -248,7 +248,7 @@ Recommended MCP behavior:
 2. a background renewal loop periodically renews every active lease
 3. `ack`, `release`, `defer`, and `fail` remove that lease from the active set
 4. MCP shutdown stops the loop; no cleanup write is required
-5. expired unrenewed leases become claimable again by normal mailbox rules
+5. expired unrenewed leases become claimable again by normal waypost rules
 
 This gives the desired property:
 
@@ -286,7 +286,7 @@ timers.
 
 Recommended direction:
 
-- mailbox MCP internally tracks `delivery_id` and `lease_token`
+- waypost MCP internally tracks `delivery_id` and `lease_token`
 - normal model-facing operations stay high level
 - renewal is automatic and hidden for the common path
 
@@ -294,7 +294,7 @@ For the current MCP surface, it is acceptable to keep returning delivery
 metadata, but the MCP should treat lease management as its own responsibility.
 
 Longer term, the cleaner shape is a claim handle owned by the MCP session
-rather than exposing raw mailbox lease internals at every call boundary.
+rather than exposing raw waypost lease internals at every call boundary.
 
 That is a later simplification, not required for this round.
 
@@ -303,7 +303,7 @@ That is a later simplification, not required for this round.
 Add:
 
 ```text
-agent-mailbox renew --delivery ID --lease-token TOKEN --for DURATION
+waypost renew --delivery ID --lease-token TOKEN --for DURATION
 ```
 
 Behavior:
@@ -355,7 +355,7 @@ Renewal failure means one of three real things:
 
 1. another receiver already reclaimed the delivery and replaced the token
 2. the delivery was already transitioned by the current owner
-3. the mailbox store is temporarily unavailable
+3. the waypost store is temporarily unavailable
 
 MCP handling rules:
 
@@ -368,8 +368,8 @@ Do not silently continue processing forever after renewal failure.
 
 Stale-claim completion semantics must also be explicit.
 
-If local work finishes after the MCP has already lost lease ownership, mailbox
-completion must fail with a dedicated stale-claim error. The mailbox must not
+If local work finishes after the MCP has already lost lease ownership, waypost
+completion must fail with a dedicated stale-claim error. The waypost must not
 silently convert that into success.
 
 Expected caller and operator model:
@@ -381,7 +381,7 @@ Expected caller and operator model:
 - operator recovery should inspect downstream side effects before manually
   replaying or discarding the re-queued message
 
-This is not pretty, but it is honest. Once ownership is lost, the mailbox can
+This is not pretty, but it is honest. Once ownership is lost, the waypost can
 no longer promise that the local finisher is still the sole owner.
 
 ## Compatibility
@@ -397,7 +397,7 @@ Compatibility rules:
 - MCP-driven clients can opt into short TTL plus auto-renew through the new
   MCP-only receive policy path
 
-This avoids breaking existing personal-mailbox callers while improving the
+This avoids breaking existing personal-waypost callers while improving the
 primary agent path.
 
 ## Alternatives Considered
@@ -439,7 +439,7 @@ deployment model.
 
 Rejected.
 
-The mailbox already has the right primitive: `lease_expires_at`. A renewal
+The waypost already has the right primitive: `lease_expires_at`. A renewal
 operation updates the one field that matters.
 
 ## Risks And Tradeoffs
@@ -478,7 +478,7 @@ The first rollout therefore should explicitly test:
 3. add `delivery_lease_renewed` event coverage
 4. factor claim logic so MCP can use a short-TTL receive policy without
    changing legacy `recv` semantics
-5. update mailbox MCP to track active leases and renew them automatically
+5. update waypost MCP to track active leases and renew them automatically
 6. run failure testing under scheduler pause, SQLite contention, and MCP
    shutdown races
 7. only after evidence, consider tightening MCP TTL below the initial `30s`

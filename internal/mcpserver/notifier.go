@@ -59,7 +59,7 @@ func newNotificationManager(runner Runner, sessions *sessionManager) *notificati
 	return manager
 }
 
-func (m *notificationManager) notifyMailboxSend(ctx context.Context, input mailboxSendInput) notificationOutcome {
+func (m *notificationManager) notifyWaypostSend(ctx context.Context, input waypostSendInput) notificationOutcome {
 	if m.sessions.isLocalAddress(ctx, input.ToAddress) {
 		return notificationOutcome{Status: "skipped_local"}
 	}
@@ -75,7 +75,7 @@ func (m *notificationManager) notifyMailboxSend(ctx context.Context, input mailb
 	return m.notifyDirectWakeScope(ctx, *scope, input)
 }
 
-func (m *notificationManager) notifyGroupSubscribers(ctx context.Context, input mailboxSendInput, notifyAddresses []string) notificationOutcome {
+func (m *notificationManager) notifyGroupSubscribers(ctx context.Context, input waypostSendInput, notifyAddresses []string) notificationOutcome {
 	if len(notifyAddresses) == 0 {
 		return notificationOutcome{Status: "no_subscribers"}
 	}
@@ -120,7 +120,7 @@ func (m *notificationManager) notifyGroupSubscribers(ctx context.Context, input 
 	return outcome
 }
 
-func (m *notificationManager) notifyDirectWakeScope(ctx context.Context, scope wakeScope, input mailboxSendInput) notificationOutcome {
+func (m *notificationManager) notifyDirectWakeScope(ctx context.Context, scope wakeScope, input waypostSendInput) notificationOutcome {
 	outcome := notificationOutcome{Status: "unsupported"}
 	targets := scope.targetsForChannel(WakeChannelAgentDeck)
 	if len(targets) == 0 {

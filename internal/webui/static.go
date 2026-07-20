@@ -5,7 +5,7 @@ const indexHTML = `<!doctype html>
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>agent-mailbox roundtable</title>
+  <title>waypost roundtable</title>
   <style>
     :root {
       color-scheme: light;
@@ -226,7 +226,7 @@ const indexHTML = `<!doctype html>
 <body>
   <div class="shell">
     <aside>
-      <div class="brand">agent-mailbox</div>
+      <div class="brand">waypost</div>
       <div id="groups" class="group-list"></div>
     </aside>
     <main>
@@ -270,7 +270,7 @@ const indexHTML = `<!doctype html>
       if (selectedGroup) await loadTranscript(selectedGroup);
       else {
         setStatus("No groups", false);
-        timelineEl.innerHTML = '<div class="empty">No group mailboxes exist yet.</div>';
+        timelineEl.innerHTML = '<div class="empty">No group wayposts exist yet.</div>';
       }
     }
 

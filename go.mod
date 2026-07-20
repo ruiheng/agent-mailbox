@@ -1,4 +1,4 @@
-module github.com/ruiheng/agent-mailbox
+module github.com/ruiheng/waypost
 
 go 1.24.0
 

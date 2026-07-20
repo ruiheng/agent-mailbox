@@ -12,11 +12,11 @@ import (
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
-	"github.com/ruiheng/agent-mailbox/internal/mailbox"
+	"github.com/ruiheng/waypost/internal/waypost"
 )
 
 const (
-	serverName                   = "agent_mailbox"
+	serverName                   = "waypost"
 	serverVersion                = "0.4.0"
 	syncCmdTimeout               = 30 * time.Second
 	ensureSessionShowTimeout     = 30 * time.Second
@@ -24,7 +24,7 @@ const (
 	defaultLeaseRenewInterval    = 10 * time.Second
 	notificationDelivery         = "delivery_available"
 	notificationFallbackWake     = "fallback_wake"
-	mailboxOverviewURI           = "mailbox://bound/overview"
+	waypostOverviewURI           = "waypost://bound/overview"
 	defaultWakePollInterval      = 30 * time.Second
 	defaultWakeInterChannelGap   = 1 * time.Minute
 	defaultMCPHintInitialDelay   = 1 * time.Minute
@@ -33,10 +33,10 @@ const (
 	defaultAgentDeckCooldown     = 5 * time.Minute
 	defaultNotifyDelay           = 2 * time.Second
 	defaultStartupInstruction    = ""
-	defaultNotifyMessage         = "NOTICE: There might be new mail in agent-mailbox."
-	agentDeckBindRecoveryHint    = "agent-deck address auto-bind did not find your current session; run `agent-deck session current --json` to find your `agent-deck/<session-id>` address, then call `mailbox_bind` with that address."
-	toolSessionBindRecoveryHint  = "AI tool session auto-bind did not find codex/..., claude/..., gemini/..., or opencode/...; expose CODEX_THREAD_ID, CLAUDE_CODE_SESSION_ID, GEMINI_SESSION_ID, or OPENCODE_SESSION_ID, wait for agent-deck state sync for the current session, then call `mailbox_status` again or call `mailbox_bind` manually."
-	serverInstructions           = "Bootstrap this MCP process once per agent-managed session. The first tool call must be `mailbox_status`; it auto-binds any detectable agent-deck/codex/claude/gemini/opencode address and reports warnings. All other tools fail until `mailbox_status` has been called."
+	defaultNotifyMessage         = "NOTICE: There might be new delivery in waypost."
+	agentDeckBindRecoveryHint    = "agent-deck address auto-bind did not find your current session; run `agent-deck session current --json` to find your `agent-deck/<session-id>` address, then call `waypost_bind` with that address."
+	toolSessionBindRecoveryHint  = "AI tool session auto-bind did not find codex/..., claude/..., gemini/..., or opencode/...; expose CODEX_THREAD_ID, CLAUDE_CODE_SESSION_ID, GEMINI_SESSION_ID, or OPENCODE_SESSION_ID, wait for agent-deck state sync for the current session, then call `waypost_status` again or call `waypost_bind` manually."
+	serverInstructions           = "Bootstrap this MCP process once per agent-managed session. The first tool call must be `waypost_status`; it auto-binds any detectable agent-deck/codex/claude/gemini/opencode address and reports warnings. All other tools fail until `waypost_status` has been called."
 	unsetValue                   = "<unset>"
 )
 
@@ -50,99 +50,99 @@ type RunResult struct {
 	Stderr   string
 }
 
-type mailboxServiceFactory interface {
+type waypostServiceFactory interface {
 	Open(context.Context) (any, func() error, error)
 }
 
-type mailboxSender interface {
-	Send(context.Context, mailbox.SendParams) (mailbox.SendResult, error)
+type waypostSender interface {
+	Send(context.Context, waypost.SendParams) (waypost.SendResult, error)
 }
 
-type mailboxLister interface {
-	List(context.Context, mailbox.ListParams) ([]mailbox.ListedDelivery, error)
+type waypostLister interface {
+	List(context.Context, waypost.ListParams) ([]waypost.ListedDelivery, error)
 }
 
-type mailboxGroupMessageLister interface {
-	ListGroupMessages(context.Context, mailbox.GroupListParams) ([]mailbox.GroupListedMessage, error)
+type waypostGroupMessageLister interface {
+	ListGroupMessages(context.Context, waypost.GroupListParams) ([]waypost.GroupListedMessage, error)
 }
 
-type mailboxGroupMessageWaiter interface {
-	WaitGroupMessage(context.Context, mailbox.GroupWaitParams) (mailbox.GroupListedMessage, error)
+type waypostGroupMessageWaiter interface {
+	WaitGroupMessage(context.Context, waypost.GroupWaitParams) (waypost.GroupListedMessage, error)
 }
 
-type mailboxGroupMessageReceiver interface {
-	ReceiveGroupMessage(context.Context, mailbox.GroupReceiveParams) (mailbox.GroupReceivedMessage, error)
+type waypostGroupMessageReceiver interface {
+	ReceiveGroupMessage(context.Context, waypost.GroupReceiveParams) (waypost.GroupReceivedMessage, error)
 }
 
-type mailboxGroupManager interface {
-	CreateGroup(context.Context, string) (mailbox.GroupRecord, error)
-	AddGroupMember(context.Context, string, string) (mailbox.GroupMembershipRecord, error)
-	RemoveGroupMember(context.Context, string, string) (mailbox.GroupMembershipRecord, error)
-	ListGroupMembers(context.Context, string) ([]mailbox.GroupMembershipRecord, error)
+type waypostGroupManager interface {
+	CreateGroup(context.Context, string) (waypost.GroupRecord, error)
+	AddGroupMember(context.Context, string, string) (waypost.GroupMembershipRecord, error)
+	RemoveGroupMember(context.Context, string, string) (waypost.GroupMembershipRecord, error)
+	ListGroupMembers(context.Context, string) ([]waypost.GroupMembershipRecord, error)
 }
 
-type mailboxGroupSubscriberManager interface {
-	AddGroupNotificationSubscriber(context.Context, string, string, string) (mailbox.GroupNotificationSubscriberRecord, error)
-	RemoveGroupNotificationSubscriber(context.Context, string, string) (mailbox.GroupNotificationSubscriberRecord, error)
-	ListGroupNotificationSubscribers(context.Context, string) ([]mailbox.GroupNotificationSubscriberRecord, error)
+type waypostGroupSubscriberManager interface {
+	AddGroupNotificationSubscriber(context.Context, string, string, string) (waypost.GroupNotificationSubscriberRecord, error)
+	RemoveGroupNotificationSubscriber(context.Context, string, string) (waypost.GroupNotificationSubscriberRecord, error)
+	ListGroupNotificationSubscribers(context.Context, string) ([]waypost.GroupNotificationSubscriberRecord, error)
 }
 
-type mailboxAddressInspector interface {
-	InspectAddress(context.Context, string) (mailbox.AddressInspection, error)
+type waypostAddressInspector interface {
+	InspectAddress(context.Context, string) (waypost.AddressInspection, error)
 }
 
-type mailboxClaimableLister interface {
-	ListClaimableAddresses(context.Context, []string) ([]mailbox.ClaimableAddress, error)
+type waypostClaimableLister interface {
+	ListClaimableAddresses(context.Context, []string) ([]waypost.ClaimableAddress, error)
 }
 
-type mailboxBatchReceiver interface {
-	ReceiveBatchWithLeaseTTL(context.Context, mailbox.ReceiveBatchParams, time.Duration) (mailbox.ReceiveResult, error)
+type waypostBatchReceiver interface {
+	ReceiveBatchWithLeaseTTL(context.Context, waypost.ReceiveBatchParams, time.Duration) (waypost.ReceiveResult, error)
 }
 
-type mailboxWaiter interface {
-	Wait(context.Context, mailbox.WaitParams) (mailbox.ListedDelivery, error)
+type waypostWaiter interface {
+	Wait(context.Context, waypost.WaitParams) (waypost.ListedDelivery, error)
 }
 
-type mailboxDeliveryReader interface {
-	ReadDeliveries(context.Context, []string) ([]mailbox.ReadDelivery, error)
+type waypostDeliveryReader interface {
+	ReadDeliveries(context.Context, []string) ([]waypost.ReadDelivery, error)
 }
 
-type mailboxMessageReader interface {
-	ReadMessages(context.Context, []string) ([]mailbox.ReadMessage, error)
+type waypostMessageReader interface {
+	ReadMessages(context.Context, []string) ([]waypost.ReadMessage, error)
 }
 
-type mailboxLatestDeliveryReader interface {
-	ReadLatestDeliveries(context.Context, []string, string, int) ([]mailbox.ReadDelivery, bool, error)
+type waypostLatestDeliveryReader interface {
+	ReadLatestDeliveries(context.Context, []string, string, int) ([]waypost.ReadDelivery, bool, error)
 }
 
-type mailboxDeliveryTransitioner interface {
-	Ack(context.Context, string, string) (mailbox.DeliveryTransitionResult, error)
-	Release(context.Context, string, string) (mailbox.DeliveryTransitionResult, error)
-	Defer(context.Context, string, string, time.Time) (mailbox.DeliveryTransitionResult, error)
-	Undefer(context.Context, string) (mailbox.DeliveryTransitionResult, error)
-	Fail(context.Context, string, string, string) (mailbox.DeliveryTransitionResult, error)
+type waypostDeliveryTransitioner interface {
+	Ack(context.Context, string, string) (waypost.DeliveryTransitionResult, error)
+	Release(context.Context, string, string) (waypost.DeliveryTransitionResult, error)
+	Defer(context.Context, string, string, time.Time) (waypost.DeliveryTransitionResult, error)
+	Undefer(context.Context, string) (waypost.DeliveryTransitionResult, error)
+	Fail(context.Context, string, string, string) (waypost.DeliveryTransitionResult, error)
 }
 
-type mailboxLeaseRenewer interface {
-	Renew(context.Context, string, string, time.Duration) (mailbox.LeaseRenewResult, error)
+type waypostLeaseRenewer interface {
+	Renew(context.Context, string, string, time.Duration) (waypost.LeaseRenewResult, error)
 }
 
-type runtimeMailboxServiceFactory struct {
+type runtimeWaypostServiceFactory struct {
 	stateDir     string
-	openRuntime  func(context.Context, string) (*mailbox.Runtime, error)
-	closeRuntime func(*mailbox.Runtime) error
+	openRuntime  func(context.Context, string) (*waypost.Runtime, error)
+	closeRuntime func(*waypost.Runtime) error
 
 	mu      sync.Mutex
 	service any
-	runtime *mailbox.Runtime
+	runtime *waypost.Runtime
 	closed  bool
 }
 
-func (f *runtimeMailboxServiceFactory) Open(ctx context.Context) (any, func() error, error) {
+func (f *runtimeWaypostServiceFactory) Open(ctx context.Context) (any, func() error, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.closed {
-		return nil, nil, errors.New("mailbox runtime is closed")
+		return nil, nil, errors.New("waypost runtime is closed")
 	}
 	if f.service != nil {
 		return f.service, func() error { return nil }, nil
@@ -152,11 +152,11 @@ func (f *runtimeMailboxServiceFactory) Open(ctx context.Context) (any, func() er
 		return nil, nil, err
 	}
 	f.runtime = runtime
-	f.service = mailbox.NewOperations(runtime.Store())
+	f.service = waypost.NewOperations(runtime.Store())
 	return f.service, func() error { return nil }, nil
 }
 
-func (f *runtimeMailboxServiceFactory) Close() error {
+func (f *runtimeWaypostServiceFactory) Close() error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.closed {
@@ -168,7 +168,7 @@ func (f *runtimeMailboxServiceFactory) Close() error {
 	}
 	closeRuntime := f.closeRuntime
 	if closeRuntime == nil {
-		closeRuntime = func(runtime *mailbox.Runtime) error {
+		closeRuntime = func(runtime *waypost.Runtime) error {
 			return runtime.Close()
 		}
 	}
@@ -179,7 +179,7 @@ func (f *runtimeMailboxServiceFactory) Close() error {
 }
 
 type Options struct {
-	MailboxServiceFactory mailboxServiceFactory
+	WaypostServiceFactory waypostServiceFactory
 	CommandRunner         Runner
 	StateDir              string
 	Now                   func() time.Time
@@ -194,8 +194,8 @@ type Options struct {
 type Service struct {
 	ctx                    context.Context
 	cancel                 context.CancelFunc
-	mailboxServices        mailboxServiceFactory
-	closeMailboxServices   func() error
+	waypostServices        waypostServiceFactory
+	closeWaypostServices   func() error
 	commandRunner          Runner
 	sessions               *sessionManager
 	notifications          *notificationManager
@@ -210,13 +210,13 @@ type Service struct {
 	disableWakeScheduler   bool
 	wakeSchedulerState     *wakeSchedulerState
 	overviewSubscriptions  *resourceSubscriptionState
-	mailboxOverviewEmitter func(context.Context) notificationOutcome
+	waypostOverviewEmitter func(context.Context) notificationOutcome
 	leaseRenewLoopOnce     sync.Once
 	wakeSchedulerLoopOnce  sync.Once
 	backgroundMu           sync.Mutex
 	backgroundLoops        sync.WaitGroup
 	closeOnce              sync.Once
-	closeMailboxOnce       sync.Once
+	closeWaypostOnce       sync.Once
 	serverMu               sync.Mutex
 	server                 *mcp.Server
 }
@@ -264,14 +264,14 @@ func NewService(opts Options) *Service {
 }
 
 func newService(opts Options) *Service {
-	var closeMailboxServices func() error
-	if opts.MailboxServiceFactory == nil {
-		factory := &runtimeMailboxServiceFactory{
+	var closeWaypostServices func() error
+	if opts.WaypostServiceFactory == nil {
+		factory := &runtimeWaypostServiceFactory{
 			stateDir:    opts.StateDir,
-			openRuntime: mailbox.OpenRuntime,
+			openRuntime: waypost.OpenRuntime,
 		}
-		opts.MailboxServiceFactory = factory
-		closeMailboxServices = factory.Close
+		opts.WaypostServiceFactory = factory
+		closeWaypostServices = factory.Close
 	}
 	if opts.CommandRunner == nil {
 		opts.CommandRunner = osCommandRunner{cwd: currentWorkingDir()}
@@ -282,8 +282,8 @@ func newService(opts Options) *Service {
 	service := &Service{
 		ctx:                   ctx,
 		cancel:                cancel,
-		mailboxServices:       opts.MailboxServiceFactory,
-		closeMailboxServices:  closeMailboxServices,
+		waypostServices:       opts.WaypostServiceFactory,
+		closeWaypostServices:  closeWaypostServices,
 		commandRunner:         opts.CommandRunner,
 		sessions:              sessions,
 		state:                 state,
@@ -316,12 +316,12 @@ func newService(opts Options) *Service {
 	service.activeLeases = newActiveLeaseManager()
 	service.wakeSchedulerState = newWakeSchedulerState()
 	service.overviewSubscriptions = newResourceSubscriptionState()
-	service.mailboxOverviewEmitter = service.emitMailboxOverviewUpdated
+	service.waypostOverviewEmitter = service.emitWaypostOverviewUpdated
 	return service
 }
 
 // Close stops service-owned background loops and closes the service-owned
-// mailbox runtime. It does not wait for in-flight MCP handlers; callers that
+// waypost runtime. It does not wait for in-flight MCP handlers; callers that
 // need handler quiescence should close and drain their MCP sessions separately.
 func (s *Service) Close() {
 	s.closeOnce.Do(func() {
@@ -330,9 +330,9 @@ func (s *Service) Close() {
 		s.backgroundMu.Unlock()
 	})
 	s.backgroundLoops.Wait()
-	s.closeMailboxOnce.Do(func() {
-		if s.closeMailboxServices != nil {
-			_ = s.closeMailboxServices()
+	s.closeWaypostOnce.Do(func() {
+		if s.closeWaypostServices != nil {
+			_ = s.closeWaypostServices()
 		}
 	})
 }
@@ -367,9 +367,9 @@ func (s *Service) Server() *mcp.Server {
 		UnsubscribeHandler: s.unsubscribeResource,
 	})
 
-	s.registerMailboxTools(server)
+	s.registerWaypostTools(server)
 	s.registerSessionTools(server)
-	s.registerMailboxOverviewResource(server)
+	s.registerWaypostOverviewResource(server)
 	s.server = server
 	return server
 }
@@ -412,7 +412,7 @@ func (r osCommandRunner) Run(ctx context.Context, args []string, input string) (
 	return RunResult{}, err
 }
 
-func withMailboxService[T any, S any](ctx context.Context, factory mailboxServiceFactory, fn func(S) (T, error)) (T, error) {
+func withWaypostService[T any, S any](ctx context.Context, factory waypostServiceFactory, fn func(S) (T, error)) (T, error) {
 	var zero T
 	rawService, closeFunc, err := factory.Open(ctx)
 	if err != nil {
@@ -421,7 +421,7 @@ func withMailboxService[T any, S any](ctx context.Context, factory mailboxServic
 	defer closeFunc()
 	service, ok := rawService.(S)
 	if !ok {
-		return zero, fmt.Errorf("mailbox service %T does not satisfy %T", rawService, service)
+		return zero, fmt.Errorf("waypost service %T does not satisfy %T", rawService, service)
 	}
 	return fn(service)
 }
@@ -497,8 +497,8 @@ func dedupe(values []string) []string {
 	return out
 }
 
-func parseAddress(address string) (mailbox.ParsedAddress, error) {
-	return mailbox.ParseAddress(address)
+func parseAddress(address string) (waypost.ParsedAddress, error) {
+	return waypost.ParseAddress(address)
 }
 
 func notificationRouteForAddress(address string) (notificationRoute, error) {

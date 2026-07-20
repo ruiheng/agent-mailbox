@@ -1,12 +1,12 @@
-# Best-Effort Multi-Channel Mailbox Notification Design
+# Best-Effort Multi-Channel Waypost Notification Design
 
 ## Summary
 
-Add a unified best-effort notification design for the local mailbox MCP so
-mailbox-backed work can be hinted through multiple channels without treating
+Add a unified best-effort notification design for the local waypost MCP so
+waypost-backed work can be hinted through multiple channels without treating
 any one transport as authoritative.
 
-The mailbox remains the only source of truth. Notification channels such as
+The waypost remains the only source of truth. Notification channels such as
 `agent-deck` wake messages and MCP resource updates are only hints that new
 work may exist or that pending work still has not been claimed.
 
@@ -14,13 +14,13 @@ This design separates:
 
 - immediate send-time notification, which is an active sender behavior
 - delayed reminder escalation, which is a fallback scheduler behavior
-- mailbox state reads, which remain the authoritative way to learn the real
+- waypost state reads, which remain the authoritative way to learn the real
   delivery state
 - wake scope identity, which determines which notification channels are allowed
-  to act for a given pending-mail scope
+  to act for a given pending-delivery scope
 
-It also adds a minimal mailbox MCP resource surface so standards-compliant
-clients can read summary mailbox state and, when supported, subscribe to
+It also adds a minimal waypost MCP resource surface so standards-compliant
+clients can read summary waypost state and, when supported, subscribe to
 resource-update hints. That subscription path is explicitly best-effort and is
 not required for correctness. In this design it is only a local-instance hint,
 not a general cross-session wake transport.
@@ -29,33 +29,33 @@ not a general cross-session wake transport.
 
 Current notification behavior is split and under-modeled:
 
-- `mailbox_send` performs an immediate notify attempt through `agent-deck`
-- stale unread mail later triggers a separate unread-push loop
+- `waypost_send` performs an immediate notify attempt through `agent-deck`
+- stale unread delivery later triggers a separate unread-push loop
 - the two paths have different intent, timing, and state
-- MCP currently has no mailbox resource that exposes summary pending-mail state
+- MCP currently has no waypost resource that exposes summary pending-delivery state
 - MCP resource notifications are attractive as a standard mechanism, but client
   support is inconsistent and notification delivery itself is not reliable
 - the current implementation still couples stale-unread wake routing to the
-  mailbox address scheme itself
+  waypost address scheme itself
 - the repository already ships an external stale-wake helper script with its
   own timing and recheck policy
 
 That means the system has the wrong abstraction boundary.
 
-The mailbox is already the durable truth. The missing design is a clean model
+The waypost is already the durable truth. The missing design is a clean model
 for how multiple best-effort hint channels should be attempted over time
 without pretending that any notification result means the receiver has actually
-seen or processed the mail.
+seen or processed the delivery.
 
 ## Goals
 
-- Keep mailbox delivery state authoritative.
+- Keep waypost delivery state authoritative.
 - Treat every notification mechanism as best-effort only.
 - Preserve immediate send-time notification as an active sender behavior.
-- Add a delayed escalation path for still-pending mail.
+- Add a delayed escalation path for still-pending delivery.
 - Support multiple channels without firing them all at once.
 - Prefer lower-cost hints before heavier wake mechanisms in fallback stages.
-- Add a minimal MCP resource for summary mailbox state.
+- Add a minimal MCP resource for summary waypost state.
 - Support MCP resource subscription if the implementation cost stays low.
 - Avoid requiring MCP notification support for correctness.
 
@@ -63,9 +63,9 @@ seen or processed the mail.
 
 - No guarantee that any notification reaches or wakes the receiver.
 - No guarantee that a successful notify call means the receiver saw the hint.
-- No mailbox-core knowledge of any specific notification manager.
-- No change to mailbox delivery state semantics.
-- No replacement of mailbox polling or `mailbox_recv` with pushed message
+- No waypost-core knowledge of any specific notification manager.
+- No change to waypost delivery state semantics.
+- No replacement of waypost polling or `waypost_recv` with pushed message
   bodies.
 - No attempt in this round to make MCP a general remote session manager.
 - No dependence on MCP subscription support for message delivery correctness.
@@ -75,13 +75,13 @@ seen or processed the mail.
 The root issue is not that one more channel is needed.
 
 The real issue is that notification has been treated as if one successful call
-could stand in for observed mailbox progress. That is wrong. All notification
-mechanisms can fail, be delayed, be ignored, or arrive after the mail was
+could stand in for observed waypost progress. That is wrong. All notification
+mechanisms can fail, be delayed, be ignored, or arrive after the delivery was
 already handled by another path.
 
 So the right design is:
 
-1. keep mailbox state as the only truth
+1. keep waypost state as the only truth
 2. model notification as staged, best-effort hinting
 3. separate immediate sender behavior from delayed fallback behavior
 4. define a canonical wake scope that owns escalation state
@@ -92,12 +92,12 @@ So the right design is:
 Use one notification model with two distinct execution paths:
 
 1. direct notify path
-   - triggered immediately by `mailbox_send`
+   - triggered immediately by `waypost_send`
    - active sender intent
    - tries only cross-session-routable channels in priority order until one
      delivery attempt succeeds
 2. wake scheduler path
-   - triggered later while mail is still pending
+   - triggered later while delivery is still pending
    - fallback escalation intent
    - attempts channels over time with stage delays, inter-channel gaps, and
      per-channel cooldowns
@@ -106,7 +106,7 @@ Both paths share the same channel backends, but they do not share the same
 timing policy.
 
 Both paths must operate on the same canonical wake-scope model rather than
-deriving wake decisions directly from raw mailbox addresses.
+deriving wake decisions directly from raw waypost addresses.
 
 ## Wake Scope
 
@@ -120,7 +120,7 @@ type WakeTarget struct {
 
 type WakeScope struct {
     ScopeID          string
-    MailboxAddresses []string
+    WaypostAddresses []string
     WakeTargets      []WakeTarget
     OldestEligibleAt string
 }
@@ -133,8 +133,8 @@ Rules:
 - scheduler runtime is keyed by `WakeScope.ScopeID`
 - `PendingSince`, `LastAnyWakeAt`, and per-channel cooldown state belong to the
   wake scope, not to an entire MCP server instance
-- a wake scope may contain one or more mailbox addresses
-- wake channels act on `WakeTargets`, not on raw mailbox addresses
+- a wake scope may contain one or more waypost addresses
+- wake channels act on `WakeTargets`, not on raw waypost addresses
 
 This is the canonical answer to "what receiver are we trying to wake?"
 
@@ -145,7 +145,7 @@ instance.
 
 Membership rule:
 
-- include every mailbox address currently bound in that MCP server instance in
+- include every waypost address currently bound in that MCP server instance in
   the same local scheduler scope
 
 This means that when the local server is bound to both:
@@ -173,11 +173,11 @@ Suggested first-rollout scope identity:
 ### First-Rollout Wake Targets
 
 The first rollout should keep wake targets narrow and explicit even though scope
-membership covers all currently bound local inboxes.
+membership covers all currently bound local queues.
 
 Supported targeted wake mappings:
 
-- `agent-deck/<session-id>` mailbox address
+- `agent-deck/<session-id>` waypost address
   - allowed wake targets:
     - `agent_deck` target `<session-id>`
 
@@ -195,7 +195,7 @@ This avoids inventing hidden cross-scheme rules without an owning data model.
 rollout.
 
 Instead, it is a local-instance hint emitted by the MCP server that already
-owns the bound inboxes and the `mailbox://bound/overview` resource.
+owns the bound queues and the `waypost://bound/overview` resource.
 
 Rules:
 
@@ -208,20 +208,20 @@ Rules:
 This removes the earlier ambiguity around `codex/<session-id>` and remote MCP
 delivery.
 
-## Mailbox Truth Model
+## Waypost Truth Model
 
-The mailbox remains authoritative.
+The waypost remains authoritative.
 
 Notification must never be treated as equivalent to progress.
 
 These rules are mandatory:
 
-- delivery is pending because mailbox state says it is pending
-- delivery is no longer pending only because mailbox state changed
+- delivery is pending because waypost state says it is pending
+- delivery is no longer pending only because waypost state changed
 - no notification success result may suppress future fallback attempts by
   itself
-- fallback stops only when mailbox state no longer shows pending work
-- no wake target may be derived ad hoc from mailbox state outside the wake
+- fallback stops only when waypost state no longer shows pending work
+- no wake target may be derived ad hoc from waypost state outside the wake
   scope resolver
 
 For this design, pending work means:
@@ -229,7 +229,7 @@ For this design, pending work means:
 - at least one visible personal delivery is claimable by the same rules used by
   `recv`
 
-The implementation should not use `read/unread` language for personal mailbox
+The implementation should not use `read/unread` language for personal waypost
 deliveries. The actual state model is still `queued`, `leased`, `acked`, and
 `dead_letter`.
 
@@ -237,7 +237,7 @@ deliveries. The actual state model is still `queued`, `leased`, `acked`, and
 
 ### Stage 1: Immediate Direct Notify
 
-This stage belongs to `mailbox_send`.
+This stage belongs to `waypost_send`.
 
 Intent:
 
@@ -251,7 +251,7 @@ Rules:
 - stop after the first channel that reports a successful delivery attempt
 - if a channel is unavailable or returns failure, try the next channel
 - even after one immediate attempt succeeds, later fallback stages may still
-  run if the mailbox state shows the work remains pending
+  run if the waypost state shows the work remains pending
 
 Recommended direct-notify priority:
 
@@ -358,7 +358,7 @@ The availability rule is intentionally channel-specific:
 ### Local Hint Emitters
 
 These are local-instance side effects emitted by the server that already owns
-the mailbox scope. They are not modeled as cross-session targets.
+the waypost scope. They are not modeled as cross-session targets.
 
 Suggested interface:
 
@@ -376,7 +376,7 @@ Required first local hint emitter:
 
 Its availability rule is:
 
-- available only when the mailbox overview resource currently has at least one
+- available only when the waypost overview resource currently has at least one
   subscriber on the same MCP server instance that is evaluating the wake scope
 
 ## Direct Notify Path
@@ -403,7 +403,7 @@ state.
 
 The direct notify path must resolve allowed targeted wake channels from the
 wake scope first. It must not infer future cross-scheme wake behavior from the
-mailbox address string itself.
+waypost address string itself.
 
 In the first rollout, direct notify must only use cross-session-routable
 targets such as `agent-deck`. It must not attempt `mcp_resource_updated`.
@@ -414,7 +414,7 @@ Refactor the current unread-push loop into a generic wake scheduler.
 
 The scheduler should:
 
-1. read authoritative mailbox state for the current bound inbox scope
+1. read authoritative waypost state for the current bound queue scope
 2. determine whether visible pending work exists
 3. if nothing is pending, clear scheduler runtime for that scope
 4. if work is pending, evaluate channel attempts by stage timing
@@ -431,7 +431,7 @@ type WakeRuntime struct {
 }
 ```
 
-`PendingSince` should be derived from mailbox truth when possible, not from
+`PendingSince` should be derived from waypost truth when possible, not from
 best-effort in-memory observation. The existing stale-address query already
 returns the oldest eligible timestamp and is the right base signal.
 
@@ -471,7 +471,7 @@ resource is useful for hints and UI, but it is not the identity key for
 cooldowns or escalation ownership.
 
 This priority order is valid only because the scheduler is local to the server
-instance that already owns the inbox scope. It is not a statement that
+instance that already owns the queue scope. It is not a statement that
 `mcp_resource_updated` can wake arbitrary remote sessions.
 
 The scheduler therefore has two sequential evaluation phases for each scope:
@@ -483,9 +483,9 @@ This is an intentional modeling distinction, not an implementation accident.
 
 ## MCP Resource Surface
 
-Add one minimal mailbox summary resource:
+Add one minimal waypost summary resource:
 
-- `mailbox://bound/overview`
+- `waypost://bound/overview`
 
 This resource is intentionally local to the current MCP server instance. It is
 not a general routing destination.
@@ -503,11 +503,11 @@ Suggested content:
 ```
 
 The resource content is a snapshot only. Clients that need real work must still
-call mailbox tools such as `mailbox_recv`.
+call waypost tools such as `waypost_recv`.
 
 This resource is intentionally coarse. It does not replace wake-scope runtime
 identity. In the first rollout it summarizes the same local scheduler scope
-that contains all currently bound inbox addresses for the server instance.
+that contains all currently bound queue addresses for the server instance.
 
 ## MCP Capability Declaration
 
@@ -523,7 +523,7 @@ If subscription support is implemented in this round:
 
 Rationale:
 
-- `mailbox://bound/overview` is a standard MCP resource surface
+- `waypost://bound/overview` is a standard MCP resource surface
 - list-changed capability should be declared from the first rollout
 - subscription is optional for correctness but acceptable when implementation
   cost is low
@@ -535,7 +535,7 @@ it as optional best-effort behavior.
 
 Rules:
 
-- clients may subscribe to `mailbox://bound/overview`
+- clients may subscribe to `waypost://bound/overview`
 - the server may emit `notifications/resources/updated`
 - receiver behavior is client-dependent and must not be relied on for
   correctness
@@ -543,7 +543,7 @@ Rules:
 - this path is local to the MCP server instance that owns the resource and is
   not a remote wake transport
 
-The implementation should track whether `mailbox://bound/overview` currently
+The implementation should track whether `waypost://bound/overview` currently
 has subscribers so the `mcp_resource_updated` local hint emitter can cheaply
 answer availability.
 
@@ -555,14 +555,14 @@ overview snapshot.
 
 Minimum trigger points:
 
-- `mailbox_bind`
-- `mailbox_send`
-- `mailbox_recv`
-- `mailbox_ack`
-- `mailbox_release`
-- `mailbox_defer`
-- `mailbox_undefer`
-- `mailbox_fail`
+- `waypost_bind`
+- `waypost_send`
+- `waypost_recv`
+- `waypost_ack`
+- `waypost_release`
+- `waypost_defer`
+- `waypost_undefer`
+- `waypost_fail`
 
 This is intentionally a hint channel only. Missing an update notification must
 not break correctness because the resource remains readable on demand.
@@ -570,15 +570,15 @@ not break correctness because the resource remains readable on demand.
 ## Relation To Former `mail_hint`
 
 The former inline `mail_hint` field was removed from generic tool results to
-avoid opening mailbox storage as a side effect of ordinary MCP calls.
+avoid opening waypost storage as a side effect of ordinary MCP calls.
 
 Rules:
 
-- `mailbox://bound/overview` is the standard MCP-readable summary surface
+- `waypost://bound/overview` is the standard MCP-readable summary surface
 - `resources/updated` is an optional best-effort push hint for subscribed
   clients
-- `mailbox_recv` remains the authoritative receive path when an agent wants to
-  claim available mail
+- `waypost_recv` remains the authoritative receive path when an agent wants to
+  claim available delivery
 
 The removed inline hint and the resource path overlapped in purpose, but not in
 transport shape:
@@ -589,11 +589,11 @@ transport shape:
   session-manager wakes
 
 Do not reintroduce inline result probing unless a caller needs it enough to pay
-the mailbox storage cost explicitly.
+the waypost storage cost explicitly.
 
 ## Server Lifetime Requirement
 
-The mailbox MCP service must hold one long-lived `*mcp.Server` instance.
+The waypost MCP service must hold one long-lived `*mcp.Server` instance.
 
 Reason:
 
@@ -608,8 +608,8 @@ for the full service lifetime.
 ## Existing External Stale-Wake Helper
 
 The current external helper script
-[`scripts/wake-stale-agent-deck-sessions.sh`](/home/ruiheng/agent-mailbox/scripts/wake-stale-agent-deck-sessions.sh)
-already implements stale-mail wake behavior outside the MCP process.
+[`scripts/wake-stale-agent-deck-sessions.sh`](../scripts/wake-stale-agent-deck-sessions.sh)
+already implements stale-delivery wake behavior outside the MCP process.
 
 It must not become a second owner of reminder policy.
 
@@ -637,7 +637,7 @@ suppression data.
 Minimum required observability for the first rollout:
 
 - wake scope id
-- mailbox addresses in the scope
+- waypost addresses in the scope
 - chosen backend
 - backend category: local hint emitter or targeted wake channel
 - attempted target when applicable
@@ -654,8 +654,8 @@ These may begin as structured logs, but they are not optional design detail.
 
 This design is additive.
 
-- mailbox delivery semantics remain unchanged
-- `mailbox_send` still supports immediate notify behavior
+- waypost delivery semantics remain unchanged
+- `waypost_send` still supports immediate notify behavior
 - notification results remain advisory
 - clients that do not support MCP resources or subscriptions still work
 - external session-manager wake paths still work without MCP subscription
@@ -669,7 +669,7 @@ This design is additive.
 
 Rejected.
 
-That is dishonest. All channels are best-effort and mailbox state is already
+That is dishonest. All channels are best-effort and waypost state is already
 the durable truth.
 
 ### Fire all available channels immediately on send
@@ -698,7 +698,7 @@ Rejected for the first design round.
 The feature is standard MCP functionality and cheap to expose. It is acceptable
 so long as the design keeps it explicitly non-authoritative and best-effort.
 
-### Keep deriving wake targets directly from mailbox address schemes
+### Keep deriving wake targets directly from waypost address schemes
 
 Rejected.
 
@@ -716,7 +716,7 @@ design should say that directly.
 ## Risks And Tradeoffs
 
 - MCP subscription support may not help in some clients even when implemented.
-- Direct notify may succeed while the receiver still never processes the mail.
+- Direct notify may succeed while the receiver still never processes the delivery.
 - Multiple best-effort channels increase policy complexity if timing is not
   centralized.
 - A one-minute first fallback delay may still be too aggressive or too passive
@@ -727,7 +727,7 @@ design should say that directly.
   wakeups, which may leave some future routing scenarios unsupported until a
   stronger resolver model is designed.
 - The first-rollout scheduler scope intentionally merges all currently bound
-  local inbox addresses into one scope, which is simple and matches current
+  local queue addresses into one scope, which is simple and matches current
   MCP-managed-session ownership but may later need refinement if one server
   process ever needs multiple independent reminder domains.
 - The MCP resource hint channel is intentionally local-only in the first
@@ -735,31 +735,31 @@ design should say that directly.
 - The scheduler now has two backend categories instead of one uniform target
   model, which is slightly more explicit but also less superficially elegant.
 
-These are acceptable tradeoffs if the mailbox remains authoritative and the
+These are acceptable tradeoffs if the waypost remains authoritative and the
 scheduler logic stays centralized.
 
 ## Open Questions
 
 - Should `agent_deck.initial_delay` start at `3m` or `5m` in the first
   rollout?
-- Should the mailbox overview resource later split into one resource per bound
+- Should the waypost overview resource later split into one resource per bound
   address, or is one summary resource enough?
 - Should direct notify expose attempted-channel summaries in tool output in
   addition to required structured logs?
 - Should a future wake-scope resolver support explicit cross-manager aliasing
-  between mailbox addresses and wake targets?
+  between waypost addresses and wake targets?
 - If remote MCP-to-MCP wake is ever needed, what component should own discovery
   and delivery to another session's MCP server instance?
 - If future local hint emitters other than `mcp_resource_updated` appear,
   should they share one local-emitter interface or split by transport family?
-- If a future MCP server instance can bind unrelated inbox groups, should local
+- If a future MCP server instance can bind unrelated queue groups, should local
   scheduler scope membership stay "all bound addresses" or become explicitly
   partitioned?
 
 ## Suggested Rollout
 
 1. cache one long-lived MCP server instance inside `Service`
-2. add `mailbox://bound/overview` resource registration
+2. add `waypost://bound/overview` resource registration
 3. ensure initialize advertises `resources.listChanged = true`
 4. optionally add MCP subscribe support and resource-updated hints
 5. refactor immediate send-time notify into a direct-notify coordinator
@@ -771,5 +771,5 @@ scheduler logic stays centralized.
    fallback after direct
    notify
 
-This keeps the root boundary clean: mailbox truth first, notification hints
+This keeps the root boundary clean: waypost truth first, notification hints
 second.

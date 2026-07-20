@@ -36,15 +36,15 @@ type agentDeckRequireSessionInput struct {
 }
 
 func (s *Service) registerSessionTools(server *mcp.Server) {
-	addToolRequiringMailboxStatus(server, s, &mcp.Tool{
+	addToolRequiringWaypostStatus(server, s, &mcp.Tool{
 		Name:        "agent_deck_resolve_session",
 		Description: "Resolve one agent-deck session ref or id with session, or resolve multiple independently with sessions. Single-session responses remain unchanged; batch responses return ordered per-session results.",
 	}, s.agentDeckResolveSession)
-	addToolRequiringMailboxStatus(server, s, &mcp.Tool{
+	addToolRequiringWaypostStatus(server, s, &mcp.Tool{
 		Name:        "agent_deck_create_session",
 		Description: "Create a new agent-deck session in an explicit workdir. The target must not already exist. Supports explicit group placement, parent linkage, detached sessions, and optional startup_instruction passed only to agent-deck launch --message.",
 	}, s.agentDeckCreateSession)
-	addToolRequiringMailboxStatus(server, s, &mcp.Tool{
+	addToolRequiringWaypostStatus(server, s, &mcp.Tool{
 		Name:        "agent_deck_require_session",
 		Description: "Require one existing agent-deck session with session_id or session_ref, or multiple session ids or refs independently with sessions in the same explicit workdir. Verifies each session already matches the requested workdir and starts it if needed. Does not create sessions.",
 	}, s.agentDeckRequireSession)

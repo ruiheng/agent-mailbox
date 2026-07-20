@@ -10,16 +10,16 @@ Usage:
 
 Purpose:
   Find agent-deck sessions that are idle or waiting and have stale unread
-  mailbox items, then send a wakeup message only after a short confirm-delay
+  waypost items, then send a wakeup message only after a short confirm-delay
   recheck.
 
 Options:
-  --older-than DURATION       Required stale threshold for agent-mailbox stale
+  --older-than DURATION       Required stale threshold for waypost stale
   --confirm-delay SECONDS     Delay before rechecking a candidate session (default: 2)
   --profile NAME             Agent-deck profile to query
-  --state-dir PATH           Mailbox state directory to query
+  --state-dir PATH           Waypost state directory to query
   --wake-message TEXT        Ignored; agent-deck wake instruction is fixed
-  --all-mail-states          Pass --all to agent-deck list (include sessions hidden by default)
+  --all-delivery-states      Pass --all to agent-deck list (include sessions hidden by default)
   -h, --help                 Show help
 
 Install options:
@@ -119,11 +119,11 @@ if [[ "${1:-}" == "install" ]]; then
   exit 0
 fi
 
-mailbox() {
+run_waypost() {
   if [[ -n "$state_dir" ]]; then
-    agent-mailbox --state-dir "$state_dir" "$@"
+    waypost --state-dir "$state_dir" "$@"
   else
-    agent-mailbox "$@"
+    waypost "$@"
   fi
 }
 
@@ -167,7 +167,7 @@ older_than=""
 confirm_delay_seconds=2
 profile=""
 state_dir=""
-readonly fixed_wake_message="NOTICE: There might be new mail in agent-mailbox."
+readonly fixed_wake_message="NOTICE: There might be new delivery in waypost."
 list_all=0
 
 while [[ $# -gt 0 ]]; do
@@ -177,7 +177,7 @@ while [[ $# -gt 0 ]]; do
   --profile) profile="${2:-}"; shift 2 ;;
   --state-dir) state_dir="${2:-}"; shift 2 ;;
   --wake-message) shift 2 ;;
-  --all-mail-states) list_all=1; shift 1 ;;
+  --all-delivery-states) list_all=1; shift 1 ;;
   -h|--help) usage; exit 0 ;;
   *) die "unknown option: $1" ;;
   esac
@@ -187,7 +187,7 @@ done
 [[ "$confirm_delay_seconds" =~ ^[0-9]+$ ]] || die "--confirm-delay must be a non-negative integer"
 
 require_cmd agent-deck
-require_cmd agent-mailbox
+require_cmd waypost
 require_cmd jq
 require_cmd sleep
 
@@ -224,11 +224,11 @@ for session_id in "${active_ids[@]}"; do
 done
 
 set +e
-stale_json="$(mailbox "${stale_args[@]}" 2>&1)"
+stale_json="$(run_waypost "${stale_args[@]}" 2>&1)"
 stale_status=$?
 set -e
 if (( stale_status != 0 )); then
-  die "agent-mailbox stale failed: $stale_json"
+  die "waypost stale failed: $stale_json"
 fi
 
 while IFS=$'\t' read -r address oldest_eligible_at claimable_count; do
@@ -240,7 +240,7 @@ done < <(
 )
 
 if (( ${#stale_addresses[@]} == 0 )); then
-  info "no stale unread mail found for active sessions"
+  info "no stale unread delivery found for active sessions"
   exit 0
 fi
 
@@ -277,7 +277,7 @@ for address in "${stale_addresses[@]}"; do
   fi
 
   set +e
-  current_stale_json="$(mailbox stale --for "$address" --older-than "$older_than" --json 2>&1)"
+  current_stale_json="$(run_waypost stale --for "$address" --older-than "$older_than" --json 2>&1)"
   current_stale_status=$?
   set -e
   if (( current_stale_status != 0 )); then

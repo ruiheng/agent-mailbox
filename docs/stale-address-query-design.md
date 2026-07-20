@@ -2,35 +2,35 @@
 
 ## Summary
 
-Add a read-only mailbox query that tells a caller which supplied personal
-addresses currently have old, still-receivable mail. The mailbox must not know
+Add a read-only waypost query that tells a caller which supplied personal
+addresses currently have old, still-receivable delivery. The waypost must not know
 where those addresses came from, whether they belong to `agent-deck`, or
 whether the caller plans to wake anything up.
 
 ## Problem
 
 External session managers want to periodically check whether a set of live
-workers has unread mail that has been sitting too long.
+workers has unread delivery that has been sitting too long.
 
-The mailbox already has the authoritative delivery state, but it does not yet
+The waypost already has the authoritative delivery state, but it does not yet
 expose an address-level query for:
 
 - a caller-provided address set
 - currently receivable personal deliveries only
-- addresses whose oldest receivable mail is older than a threshold
+- addresses whose oldest receivable delivery is older than a threshold
 
-The wrong direction is to teach `agent-mailbox` about one concrete session
+The wrong direction is to teach `waypost` about one concrete session
 manager, session liveness, or notification state. Those belong outside the
-mailbox.
+waypost.
 
 ## Goals
 
 - Provide one read-only query over a caller-provided address set.
 - Return stale addresses, not full message bodies.
-- Use existing mailbox truth: deliveries that are currently receivable by the
+- Use existing waypost truth: deliveries that are currently receivable by the
   existing `recv` rules.
 - Keep the result small but actionable for an external scheduler.
-- Preserve the current mailbox layering: mailbox core first, adapter second.
+- Preserve the current waypost layering: waypost core first, adapter second.
 
 ## Non-Goals
 
@@ -38,14 +38,14 @@ mailbox.
 - No session discovery, liveness checks, or manager-specific filtering.
 - No notification cooldown or "already nudged" state.
 - No writes, side effects, or background daemon.
-- No group mailbox support in the first version.
+- No group waypost support in the first version.
 
 ## Core Judgment
 
 This should be a new address-level query, not a patch on `list`.
 
 `list` returns delivery snapshots. The new capability answers a different
-question: "among these addresses, which inboxes currently have mail that has
+question: "among these addresses, which queues currently have delivery that has
 been waiting too long?" That is a grouped, thresholded query over deliveries.
 
 ## Proposed CLI
@@ -53,7 +53,7 @@ been waiting too long?" That is a grouped, thresholded query over deliveries.
 Add a new command:
 
 ```bash
-agent-mailbox stale --for ADDRESS --for ADDRESS ... --older-than 10m [--json | --yaml]
+waypost stale --for ADDRESS --for ADDRESS ... --older-than 10m [--json | --yaml]
 ```
 
 Rules:
@@ -61,10 +61,10 @@ Rules:
 - require at least one `--for`
 - deduplicate repeated `--for` values
 - require `--older-than > 0`
-- personal mailbox only
-- known group addresses fail explicitly, matching current personal-mailbox
+- personal waypost only
+- known group addresses fail explicitly, matching current personal-waypost
   commands
-- unseen addresses behave like empty inboxes
+- unseen addresses behave like empty queues
 - return success with an empty result when nothing is stale
 - support `--json` and `--yaml`
 - structured output only in v1; no plain-text mode
@@ -104,7 +104,7 @@ Important exclusions:
 - do not consider invisible future deliveries stale
 - do not silently ignore known group addresses in v1
 
-This is intentionally a receivability-based definition, not a "mail was ever
+This is intentionally a receivability-based definition, not a "delivery was ever
 sent long ago" definition and not a queued-only definition.
 
 ## Data Model
@@ -145,7 +145,7 @@ Implementation should:
 
 1. normalize and deduplicate input addresses
 2. resolve them to endpoint ids with existing personal-address rules
-3. reject known group-address collisions the same way personal mailbox commands
+3. reject known group-address collisions the same way personal waypost commands
    already do
 4. query only matching endpoints
 5. aggregate over currently receivable deliveries
@@ -153,7 +153,7 @@ Implementation should:
 Multiple supplied addresses may resolve to the same endpoint. The query must
 deduplicate by endpoint and return at most one result row per resolved endpoint.
 Use the first supplied address that resolved to that endpoint as the result
-label. This preserves caller scope without duplicating one underlying inbox.
+label. This preserves caller scope without duplicating one underlying queue.
 
 Representative SQL shape:
 
@@ -179,7 +179,7 @@ HAVING oldest_eligible_at <= :stale_before
 ORDER BY oldest_eligible_at ASC, d.recipient_endpoint_id ASC
 ```
 
-This is simple, deterministic, and matches the mailbox truth directly. The SQL
+This is simple, deterministic, and matches the waypost truth directly. The SQL
 sketch orders by endpoint id only as an internal deterministic tiebreaker before
 result labeling. Final user-visible output must be sorted after endpoint rows
 have been mapped back to their chosen caller-scoped address labels.
@@ -188,7 +188,7 @@ have been mapped back to their chosen caller-scoped address labels.
 
 Return one entry per stale endpoint, ordered by:
 
-1. oldest eligible mail first
+1. oldest eligible delivery first
 2. chosen caller-scoped address lexicographically as a stable tiebreaker
 
 Each result entry includes:
@@ -198,7 +198,7 @@ Each result entry includes:
 - `claimable_count`
 
 Do not return message ids, subjects, bodies, or sender metadata. The caller can
-issue more specific mailbox queries later if it needs them.
+issue more specific waypost queries later if it needs them.
 
 ## Compatibility
 
@@ -218,18 +218,18 @@ Rejected.
 That would mix delivery listing with address-level aggregation and either bloat
 `list` output or create awkward mode-dependent shapes.
 
-### Add notification write state to mailbox
+### Add notification write state to waypost
 
 Rejected.
 
-Whether an external manager already notified someone is not mailbox truth. The
-mailbox should not own transport policy or cooldown state for this feature.
+Whether an external manager already notified someone is not waypost truth. The
+waypost should not own transport policy or cooldown state for this feature.
 
 ### Query all addresses globally without caller input
 
 Rejected.
 
-The mailbox should not guess which addresses correspond to currently live
+The waypost should not guess which addresses correspond to currently live
 workers. The caller already owns that policy and should pass the scope
 explicitly.
 
@@ -237,7 +237,7 @@ explicitly.
 
 Rejected.
 
-That would conflict with current mailbox receive eligibility, which already
+That would conflict with current waypost receive eligibility, which already
 treats expired leases as claimable again. A stale query that ignored expired
 leases would under-report receivable work.
 
@@ -246,7 +246,7 @@ leases would under-report receivable work.
 - Large address sets will create larger `IN (...)` queries. This is acceptable
   for the current local-first scope; if it becomes a problem later, batch the
   input or add a temp-table strategy.
-- The query is personal-mailbox-only in v1. If callers later want group
+- The query is personal-waypost-only in v1. If callers later want group
   semantics, that should be a separate design.
 - The result only describes current receivable state. A caller that needs
   message metadata, send age, or explicit failure reasons is asking for a

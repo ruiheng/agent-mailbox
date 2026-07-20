@@ -5,11 +5,12 @@ import (
 	"context"
 	"errors"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
-	"github.com/ruiheng/agent-mailbox/internal/mailbox"
-	"github.com/ruiheng/agent-mailbox/internal/webui"
+	"github.com/ruiheng/waypost/internal/waypost"
+	"github.com/ruiheng/waypost/internal/webui"
 )
 
 func TestRunRootHelpIncludesMCP(t *testing.T) {
@@ -19,7 +20,7 @@ func TestRunRootHelpIncludesMCP(t *testing.T) {
 	app := New(strings.NewReader(""), &stdout, &bytes.Buffer{})
 
 	err := app.Run(context.Background(), []string{"--help"})
-	if !errors.Is(err, mailbox.ErrHelpRequested) {
+	if !errors.Is(err, waypost.ErrHelpRequested) {
 		t.Fatalf("Run(--help) error = %v, want ErrHelpRequested", err)
 	}
 	if !strings.Contains(stdout.String(), "mcp") {
@@ -37,7 +38,7 @@ func TestRunRootHelpIncludesForward(t *testing.T) {
 	app := New(strings.NewReader(""), &stdout, &bytes.Buffer{})
 
 	err := app.Run(context.Background(), []string{"--help"})
-	if !errors.Is(err, mailbox.ErrHelpRequested) {
+	if !errors.Is(err, waypost.ErrHelpRequested) {
 		t.Fatalf("Run(--help) error = %v, want ErrHelpRequested", err)
 	}
 	if !strings.Contains(stdout.String(), "  forward             Forward a stored message or delivery") {
@@ -66,11 +67,35 @@ func TestRunMCPHelp(t *testing.T) {
 	app := New(strings.NewReader(""), &stdout, &bytes.Buffer{})
 
 	err := app.Run(context.Background(), []string{"mcp", "--help"})
-	if !errors.Is(err, mailbox.ErrHelpRequested) {
+	if !errors.Is(err, waypost.ErrHelpRequested) {
 		t.Fatalf("Run(mcp --help) error = %v, want ErrHelpRequested", err)
 	}
-	if !strings.Contains(stdout.String(), "agent-mailbox mcp") {
+	if !strings.Contains(stdout.String(), "waypost mcp") {
 		t.Fatalf("mcp help = %q, want usage text", stdout.String())
+	}
+}
+
+func TestRunMigrateMovesLegacyState(t *testing.T) {
+	source := filepath.Join(t.TempDir(), "legacy-state")
+	destination := filepath.Join(t.TempDir(), "waypost-state")
+	if err := os.MkdirAll(source, 0o700); err != nil {
+		t.Fatalf("MkdirAll(source) error = %v", err)
+	}
+
+	var stdout bytes.Buffer
+	app := New(strings.NewReader(""), &stdout, &bytes.Buffer{})
+	if err := app.Run(context.Background(), []string{
+		"--state-dir", destination,
+		"migrate",
+		"--from", source,
+	}); err != nil {
+		t.Fatalf("Run(migrate) error = %v", err)
+	}
+	if _, err := os.Lstat(destination); err != nil {
+		t.Fatalf("migrated destination = %v, want directory", err)
+	}
+	if !strings.Contains(stdout.String(), "migrated legacy state") {
+		t.Fatalf("migrate output = %q, want migration summary", stdout.String())
 	}
 }
 
@@ -181,15 +206,15 @@ func TestRunGroupWebHelp(t *testing.T) {
 	app := New(strings.NewReader(""), &stdout, &bytes.Buffer{})
 
 	err := app.Run(context.Background(), []string{"group", "web", "--help"})
-	if !errors.Is(err, mailbox.ErrHelpRequested) {
+	if !errors.Is(err, waypost.ErrHelpRequested) {
 		t.Fatalf("Run(group web --help) error = %v, want ErrHelpRequested", err)
 	}
-	if !strings.Contains(stdout.String(), "agent-mailbox [--state-dir PATH] group web") {
+	if !strings.Contains(stdout.String(), "waypost [--state-dir PATH] group web") {
 		t.Fatalf("group web help = %q, want usage text", stdout.String())
 	}
 }
 
-func TestRunDelegatesMailboxCommandsWithStateDir(t *testing.T) {
+func TestRunDelegatesWaypostCommandsWithStateDir(t *testing.T) {
 	t.Parallel()
 
 	stateDir := t.TempDir()

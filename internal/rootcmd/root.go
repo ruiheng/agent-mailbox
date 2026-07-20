@@ -9,9 +9,9 @@ import (
 	"os"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
-	"github.com/ruiheng/agent-mailbox/internal/mailbox"
-	"github.com/ruiheng/agent-mailbox/internal/mcpserver"
-	"github.com/ruiheng/agent-mailbox/internal/webui"
+	"github.com/ruiheng/waypost/internal/mcpserver"
+	"github.com/ruiheng/waypost/internal/waypost"
+	"github.com/ruiheng/waypost/internal/webui"
 )
 
 type App struct {
@@ -43,10 +43,13 @@ func (a *App) Run(ctx context.Context, args []string) error {
 	}
 	if helpRequested {
 		a.writeRootHelp()
-		return mailbox.ErrHelpRequested
+		return waypost.ErrHelpRequested
 	}
 	if len(rest) == 0 {
-		return errors.New("expected a command: mcp, send, forward, recv, wait, watch, read, ack, renew, release, defer, undefer, fail, list, stale, group, or address")
+		return errors.New("expected a command: mcp, migrate, send, forward, recv, wait, watch, read, ack, renew, release, defer, undefer, fail, list, stale, group, or address")
+	}
+	if rest[0] == "migrate" {
+		return a.runMigrateCommand(stateDir, rest[1:])
 	}
 	if rest[0] == "mcp" {
 		return a.runMCPCommand(ctx, stateDir, rest[1:])
@@ -56,15 +59,15 @@ func (a *App) Run(ctx context.Context, args []string) error {
 	}
 
 	forwarded := append([]string(nil), rest...)
-	return mailbox.NewApp(a.stdin, a.stdout, a.stderr).RunWithStateDir(ctx, stateDir, forwarded)
+	return waypost.NewApp(a.stdin, a.stdout, a.stderr).RunWithStateDir(ctx, stateDir, forwarded)
 }
 
 func parseGlobalArgs(args []string) (string, []string, bool, error) {
-	fs := flag.NewFlagSet("agent-mailbox", flag.ContinueOnError)
+	fs := flag.NewFlagSet("waypost", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 
 	var stateDir string
-	fs.StringVar(&stateDir, "state-dir", "", "override mailbox state directory")
+	fs.StringVar(&stateDir, "state-dir", "", "override waypost state directory")
 
 	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
@@ -79,15 +82,41 @@ func (a *App) runMCPCommand(ctx context.Context, stateDir string, args []string)
 	if len(args) > 0 {
 		if len(args) == 1 && isHelpArg(args[0]) {
 			a.writeMCPHelp()
-			return mailbox.ErrHelpRequested
+			return waypost.ErrHelpRequested
 		}
 		return fmt.Errorf("mcp does not accept arguments")
 	}
 	return a.runMCP(ctx, stateDir)
 }
 
+func (a *App) runMigrateCommand(stateDir string, args []string) error {
+	fs := flag.NewFlagSet("waypost migrate", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+
+	var sourceDir string
+	fs.StringVar(&sourceDir, "from", "", "legacy state directory to migrate")
+
+	if err := fs.Parse(args); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			a.writeMigrateHelp()
+			return waypost.ErrHelpRequested
+		}
+		return err
+	}
+	if fs.NArg() != 0 {
+		return fmt.Errorf("migrate does not accept positional arguments")
+	}
+
+	result, err := waypost.MigrateLegacyState(stateDir, sourceDir)
+	if err != nil {
+		return err
+	}
+	_, err = fmt.Fprintf(a.stdout, "migrated legacy state: %s -> %s\n", result.Source, result.Destination)
+	return err
+}
+
 func (a *App) runGroupWebCommand(ctx context.Context, stateDir string, args []string) error {
-	fs := flag.NewFlagSet("agent-mailbox group web", flag.ContinueOnError)
+	fs := flag.NewFlagSet("waypost group web", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 
 	var listen string
@@ -98,7 +127,7 @@ func (a *App) runGroupWebCommand(ctx context.Context, stateDir string, args []st
 	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			a.writeGroupWebHelp()
-			return mailbox.ErrHelpRequested
+			return waypost.ErrHelpRequested
 		}
 		return err
 	}
@@ -138,10 +167,11 @@ func isTerminalFile(value any) bool {
 func (a *App) writeRootHelp() {
 	writeHelp(a.stdout, []string{
 		"Usage:",
-		"  agent-mailbox [--state-dir PATH] <command> [options]",
+		"  waypost [--state-dir PATH] <command> [options]",
 		"",
 		"Commands:",
 		"  mcp                 Run the built-in stdio MCP server",
+		"  migrate             Move state from the previous default directory",
 		"  send                Send a message to an address",
 		"  forward             Forward a stored message or delivery",
 		"  recv                Claim the next delivery",
@@ -149,8 +179,8 @@ func (a *App) writeRootHelp() {
 		"  watch               Observe deliveries without claiming",
 		"  read                Read one persisted personal message or delivery",
 		"  list                List deliveries",
-		"  stale               List stale personal inboxes",
-		"  group               Manage group mailboxes",
+		"  stale               List stale personal queues",
+		"  group               Manage group wayposts",
 		"  address             Inspect address bindings",
 		"  ack                 Acknowledge a leased delivery",
 		"  renew               Extend a leased delivery",
@@ -160,26 +190,36 @@ func (a *App) writeRootHelp() {
 		"  fail                Record a failed delivery attempt",
 		"",
 		"Global options:",
-		"  --state-dir PATH    Override mailbox state directory",
+		"  --state-dir PATH    Override waypost state directory",
 		"  --help              Show help",
 		"",
-		"Use \"agent-mailbox <command> --help\" for command-specific details.",
+		"Use \"waypost <command> --help\" for command-specific details.",
 	})
 }
 
 func (a *App) writeMCPHelp() {
 	writeHelp(a.stdout, []string{
 		"Usage:",
-		"  agent-mailbox mcp",
+		"  waypost mcp",
 		"",
-		"Run the built-in stdio MCP server using the main agent-mailbox binary.",
+		"Run the built-in stdio MCP server using the main waypost binary.",
+	})
+}
+
+func (a *App) writeMigrateHelp() {
+	writeHelp(a.stdout, []string{
+		"Usage:",
+		"  waypost [--state-dir PATH] migrate [--from LEGACY_PATH]",
+		"",
+		"Migrate one legacy local state directory to the current Waypost state path.",
+		"Stop all previous-version processes before running this command.",
 	})
 }
 
 func (a *App) writeGroupWebHelp() {
 	writeHelp(a.stdout, []string{
 		"Usage:",
-		"  agent-mailbox [--state-dir PATH] group web [--listen ADDRESS] [--group ADDRESS]",
+		"  waypost [--state-dir PATH] group web [--listen ADDRESS] [--group ADDRESS]",
 		"",
 		"Options:",
 		"  --listen ADDRESS    HTTP listen address (default 127.0.0.1:0)",

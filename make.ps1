@@ -9,10 +9,10 @@ param(
 $ErrorActionPreference = "Stop"
 
 $go = if ($env:GO) { $env:GO } else { "go" }
-$cmdPath = if ($env:CMD_PATH) { $env:CMD_PATH } else { "./cmd/mailbox" }
-$launcherCmdPath = if ($env:LAUNCHER_CMD_PATH) { $env:LAUNCHER_CMD_PATH } else { "./cmd/mailbox-launcher" }
+$cmdPath = if ($env:CMD_PATH) { $env:CMD_PATH } else { "./cmd/waypost" }
+$launcherCmdPath = if ($env:LAUNCHER_CMD_PATH) { $env:LAUNCHER_CMD_PATH } else { "./cmd/waypost-launcher" }
 $binDir = if ($env:BIN_DIR) { $env:BIN_DIR } else { "bin" }
-$binaryName = if ($env:BINARY_NAME) { $env:BINARY_NAME } else { "agent-mailbox.exe" }
+$binaryName = if ($env:BINARY_NAME) { $env:BINARY_NAME } else { "waypost.exe" }
 $prefix = if ($env:PREFIX) { $env:PREFIX } else { Join-Path $env:USERPROFILE ".local" }
 $destDir = if ($env:DESTDIR) { $env:DESTDIR } else { "" }
 $installDirWasExplicit = -not [string]::IsNullOrWhiteSpace($env:INSTALL_DIR)
@@ -21,7 +21,7 @@ $installPrefix = Split-Path -Path $installDir -Parent
 if ([string]::IsNullOrWhiteSpace($installPrefix)) {
     $installPrefix = if ($installDirWasExplicit) { "." } else { $prefix }
 }
-$appRoot = Join-Path (Join-Path $installPrefix "lib") "agent-mailbox"
+$appRoot = Join-Path (Join-Path $installPrefix "lib") "waypost"
 $buildOutput = Join-Path $binDir $binaryName
 $runArgs = if ($env:ARGS) { $null } else { $RemainingArgs }
 
@@ -43,7 +43,7 @@ function Invoke-Go {
 }
 
 function Initialize-GoCache {
-    $cacheRoot = Join-Path $env:LOCALAPPDATA "agent-mailbox\go"
+    $cacheRoot = Join-Path $env:LOCALAPPDATA "waypost\go"
 
     if ([string]::IsNullOrWhiteSpace($env:GOCACHE)) {
         $env:GOCACHE = Join-Path $cacheRoot "build"
@@ -364,7 +364,7 @@ public static class CommandLineArgumentSplitter {
 function Show-Help {
     @(
         "Available targets:"
-        "  ./make.ps1 build              Build the agent-mailbox CLI into $buildOutput"
+        "  ./make.ps1 build              Build the waypost CLI into $buildOutput"
         "  ./make.ps1 test               Run the Go test suite"
         "  ./make.ps1 run -- <args>      Run the CLI with go run and pass args through"
         "  ./make.ps1 run-mcp            Run the built-in stdio MCP server with go run"
@@ -417,8 +417,8 @@ switch ($Target) {
         $versionedBinary = Join-Path $versionRoot $binaryName
         $manifestPath = Join-Path $destinationAppRoot "active-version.json"
         $launcherDestination = Join-Path $destinationRoot $binaryName
-        $launcherBuildOutput = Join-Path $binDir "agent-mailbox-launcher.exe"
-        $cliBuildOutput = Join-Path $binDir "agent-mailbox-install-$PID.exe"
+        $launcherBuildOutput = Join-Path $binDir "waypost-launcher.exe"
+        $cliBuildOutput = Join-Path $binDir "waypost-install-$PID.exe"
         $manifestExecutable = Join-Path (Join-Path "versions" $version) $binaryName
         $existingLauncherCanContinue = Test-Path -LiteralPath $manifestPath
 

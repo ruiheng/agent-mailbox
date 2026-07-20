@@ -16,7 +16,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ruiheng/agent-mailbox/internal/mailbox"
+	"github.com/ruiheng/waypost/internal/waypost"
 )
 
 type blockingReader struct {
@@ -31,8 +31,8 @@ func (r blockingReader) Read([]byte) (int, error) {
 func TestGroupsEndpointListsGroups(t *testing.T) {
 	t.Parallel()
 
-	stateDir := filepath.Join(t.TempDir(), "mailbox-state")
-	runtime, err := mailbox.OpenRuntime(context.Background(), stateDir)
+	stateDir := filepath.Join(t.TempDir(), "waypost-state")
+	runtime, err := waypost.OpenRuntime(context.Background(), stateDir)
 	if err != nil {
 		t.Fatalf("OpenRuntime() error = %v", err)
 	}
@@ -57,7 +57,7 @@ func TestGroupsEndpointListsGroups(t *testing.T) {
 
 	var payload struct {
 		DefaultGroup string                `json:"default_group"`
-		Groups       []mailbox.GroupRecord `json:"groups"`
+		Groups       []waypost.GroupRecord `json:"groups"`
 	}
 	if err := json.NewDecoder(response.Body).Decode(&payload); err != nil {
 		t.Fatalf("Decode(groups) error = %v", err)
@@ -220,8 +220,8 @@ func TestCopyTextWithSystemCommandContinuesAfterCommandFailure(t *testing.T) {
 func TestTranscriptEndpointReturnsBodies(t *testing.T) {
 	t.Parallel()
 
-	stateDir := filepath.Join(t.TempDir(), "mailbox-state")
-	runtime, err := mailbox.OpenRuntime(context.Background(), stateDir)
+	stateDir := filepath.Join(t.TempDir(), "waypost-state")
+	runtime, err := waypost.OpenRuntime(context.Background(), stateDir)
 	if err != nil {
 		t.Fatalf("OpenRuntime() error = %v", err)
 	}
@@ -230,7 +230,7 @@ func TestTranscriptEndpointReturnsBodies(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateGroup() error = %v", err)
 	}
-	if _, err := store.Send(context.Background(), mailbox.SendParams{
+	if _, err := store.Send(context.Background(), waypost.SendParams{
 		ToAddress:     group.Address,
 		FromAddress:   "agent/sender",
 		Subject:       "subject",
@@ -258,7 +258,7 @@ func TestTranscriptEndpointReturnsBodies(t *testing.T) {
 	}
 
 	var payload struct {
-		Messages []mailbox.GroupTranscriptMessage `json:"messages"`
+		Messages []waypost.GroupTranscriptMessage `json:"messages"`
 	}
 	if err := json.NewDecoder(response.Body).Decode(&payload); err != nil {
 		t.Fatalf("Decode(transcript) error = %v", err)
@@ -274,11 +274,11 @@ func TestTranscriptEndpointReturnsBodies(t *testing.T) {
 	}
 }
 
-func TestServerReusesMailboxRuntime(t *testing.T) {
+func TestServerReusesWaypostRuntime(t *testing.T) {
 	t.Parallel()
 
-	stateDir := filepath.Join(t.TempDir(), "mailbox-state")
-	runtime, err := mailbox.OpenRuntime(context.Background(), stateDir)
+	stateDir := filepath.Join(t.TempDir(), "waypost-state")
+	runtime, err := waypost.OpenRuntime(context.Background(), stateDir)
 	if err != nil {
 		t.Fatalf("OpenRuntime() error = %v", err)
 	}
@@ -308,7 +308,7 @@ func TestServerReusesMailboxRuntime(t *testing.T) {
 
 	first := handler.runtime
 	if first == nil {
-		t.Fatal("server did not open mailbox runtime")
+		t.Fatal("server did not open waypost runtime")
 	}
 	response, err := http.Get(server.URL + "/api/groups")
 	if err != nil {
@@ -316,15 +316,15 @@ func TestServerReusesMailboxRuntime(t *testing.T) {
 	}
 	response.Body.Close()
 	if handler.runtime != first {
-		t.Fatal("server opened a new mailbox runtime instead of reusing the existing one")
+		t.Fatal("server opened a new waypost runtime instead of reusing the existing one")
 	}
 }
 
 func TestEventsEndpointStreamsNewMessages(t *testing.T) {
 	t.Parallel()
 
-	stateDir := filepath.Join(t.TempDir(), "mailbox-state")
-	runtime, err := mailbox.OpenRuntime(context.Background(), stateDir)
+	stateDir := filepath.Join(t.TempDir(), "waypost-state")
+	runtime, err := waypost.OpenRuntime(context.Background(), stateDir)
 	if err != nil {
 		t.Fatalf("OpenRuntime() error = %v", err)
 	}
@@ -357,11 +357,11 @@ func TestEventsEndpointStreamsNewMessages(t *testing.T) {
 		t.Fatalf("status = %d, want 200", response.StatusCode)
 	}
 
-	secondRuntime, err := mailbox.OpenRuntime(context.Background(), stateDir)
+	secondRuntime, err := waypost.OpenRuntime(context.Background(), stateDir)
 	if err != nil {
 		t.Fatalf("OpenRuntime(second) error = %v", err)
 	}
-	if _, err := secondRuntime.Store().Send(context.Background(), mailbox.SendParams{
+	if _, err := secondRuntime.Store().Send(context.Background(), waypost.SendParams{
 		ToAddress:     group.Address,
 		FromAddress:   "agent/sse",
 		Subject:       "sse",

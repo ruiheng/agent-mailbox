@@ -23,30 +23,30 @@ The first version should not try to solve everything:
 
 Separate the system into four layers:
 
-1. mailbox core
+1. waypost core
 2. consumer CLI / local API
 3. transport adapters
 4. workflow protocols
 
-The mailbox core owns persistence, routing, leasing, and recovery.
+The waypost core owns persistence, routing, leasing, and recovery.
 The consumer CLI exposes explicit local operations such as `send`, `recv`,
 `watch`, and `ack`.
 Transport adapters may notify other runtimes, but they are not the source of
 truth.
-Workflow protocols sit above the mailbox and should treat it as infrastructure.
+Workflow protocols sit above the waypost and should treat it as infrastructure.
 
 The system is pull-first:
 
-- the authoritative state is in the mailbox store
+- the authoritative state is in the waypost store
 - receivers explicitly claim work when ready
-- transport failures do not redefine mailbox correctness
+- transport failures do not redefine waypost correctness
 
 ## 3. Storage
 
 Use a centralized state directory:
 
-- default: `$XDG_STATE_HOME/ai-agent/mailbox`
-- fallback: `~/.local/state/ai-agent/mailbox`
+- default: `$XDG_STATE_HOME/ai-agent/waypost`
+- fallback: `~/.local/state/ai-agent/waypost`
 
 The directory should be created with user-only permissions, for example `0700`.
 The v1 trust boundary is one local Unix user on one machine.
@@ -85,14 +85,14 @@ Deduplication by content hash is not required in v1.
 Blob storage format in v1:
 
 - store blobs as regular files under `blobs/`
-- use mailbox-generated ids as blob filenames
+- use waypost-generated ids as blob filenames
 - do not use content-hash naming in v1
 - directory sharding may be added later if blob count makes it necessary
 
 ## 4. Identity Model
 
 The public routing model is address-first.
-Senders and receivers talk in terms of mailbox addresses.
+Senders and receivers talk in terms of waypost addresses.
 Endpoint ids still exist internally so current state can use stable foreign keys.
 
 Use two identity forms:
@@ -107,7 +107,7 @@ Rules:
 - addresses are created lazily on first use instead of through a separate
   registration step
 - addresses are namespaced
-- address uniqueness is enforced per mailbox instance
+- address uniqueness is enforced per waypost instance
 
 Recommended address prefixes:
 
@@ -131,7 +131,7 @@ Suggested fields:
 
 ### Address
 
-Addresses are the only public mailbox identity in v1.
+Addresses are the only public waypost identity in v1.
 
 Suggested fields:
 
@@ -175,10 +175,10 @@ Rules:
 - message bodies are always read through blob lookup, not through dual inline/blob
   branches
 - `idempotency_key` is an optional opaque sender field in v1
-- v1 does not enforce mailbox-level deduplication for `idempotency_key`
+- v1 does not enforce waypost-level deduplication for `idempotency_key`
 - `schema_version` describes the sender-defined schema version of the message
   body for the given `content_type`
-- the mailbox stores `schema_version` but does not interpret it in v1
+- the waypost stores `schema_version` but does not interpret it in v1
 - `body_sha256` is computed and stored by `send`
 - `recv` verifies `body_size` and `body_sha256` before returning the message
 - a blob size/hash mismatch is treated as message-body corruption
@@ -267,7 +267,7 @@ Recommended exit codes:
 ### Send
 
 ```text
-agent-mailbox send --to workflow/reviewer/task-123 --subject "review request" --body-file /abs/path/request.md [--json | --yaml] [--full]
+waypost send --to workflow/reviewer/task-123 --subject "review request" --body-file /abs/path/request.md [--json | --yaml] [--full]
 ```
 
 Behavior:
@@ -300,17 +300,17 @@ SQLite transaction.
 ### Receive
 
 ```text
-agent-mailbox recv --for workflow/reviewer/task-123 --for workflow/reviewer/task-456 --max 10 --json [--full]
+waypost recv --for workflow/reviewer/task-123 --for workflow/reviewer/task-456 --max 10 --json [--full]
 ```
 
 Behavior:
 
 - attempt an immediate batch claim
 - require at least one `--for` address; repeated `--for` flags search the union
-  of the requested inboxes
+  of the requested queues
 - support `--max <n>` to bound how many deliveries can be leased in one command;
   default to `1`
-- unseen addresses behave like empty inboxes instead of failing the whole command
+- unseen addresses behave like empty queues instead of failing the whole command
 - repeatedly select the oldest visible queued delivery across the eligible union
 - selection order is `visible_at`, then `message_created_at`, then `delivery_id`
 - transition each claimed delivery to `leased`
@@ -334,14 +334,14 @@ default timeout is part of the base contract and must be stable.
 ### Watch
 
 ```text
-agent-mailbox watch --for workflow/reviewer/task-123 --for workflow/reviewer/task-456 --timeout 30s --json
+waypost watch --for workflow/reviewer/task-123 --for workflow/reviewer/task-456 --timeout 30s --json
 ```
 
 Behavior:
 
 - require at least one `--for` address; repeated `--for` flags watch the union of
-  the requested inboxes
-- unseen addresses behave like empty inboxes until matching deliveries exist
+  the requested queues
+- unseen addresses behave like empty queues until matching deliveries exist
 - default watch scope is currently visible queued deliveries
 - `--state <state>` may watch another delivery state using the same delivery
   metadata schema as `list`
@@ -365,7 +365,7 @@ Timeout behavior:
 ### Ack
 
 ```text
-agent-mailbox ack --delivery <delivery_id> --lease-token <lease_token>
+waypost ack --delivery <delivery_id> --lease-token <lease_token>
 ```
 
 Behavior:
@@ -376,7 +376,7 @@ Behavior:
 ### Release
 
 ```text
-agent-mailbox release --delivery <delivery_id> --lease-token <lease_token>
+waypost release --delivery <delivery_id> --lease-token <lease_token>
 ```
 
 Behavior:
@@ -388,7 +388,7 @@ Behavior:
 ### Defer
 
 ```text
-agent-mailbox defer --delivery <delivery_id> --lease-token <lease_token> --until 2026-03-18T12:00:00Z
+waypost defer --delivery <delivery_id> --lease-token <lease_token> --until 2026-03-18T12:00:00Z
 ```
 
 Behavior:
@@ -400,7 +400,7 @@ Behavior:
 ### Undefer
 
 ```text
-agent-mailbox undefer --delivery <delivery_id>
+waypost undefer --delivery <delivery_id>
 ```
 
 Behavior:
@@ -412,7 +412,7 @@ Behavior:
 ### Fail
 
 ```text
-agent-mailbox fail --delivery <delivery_id> --lease-token <lease_token> --reason "tool crashed"
+waypost fail --delivery <delivery_id> --lease-token <lease_token> --reason "tool crashed"
 ```
 
 Behavior:
@@ -428,7 +428,7 @@ Failure handling is fixed in v1 so behavior is testable and predictable.
 ### List
 
 ```text
-agent-mailbox list --for workflow/reviewer/task-123 --json
+waypost list --for workflow/reviewer/task-123 --json
 ```
 
 Behavior:
@@ -447,7 +447,7 @@ That means:
 - `wait` is a first-class observe-only blocking operation
 - `watch` is a first-class observe-only operation
 - no receiver is forced to accept pushed full-body content
-- transport failures do not redefine mailbox correctness
+- transport failures do not redefine waypost correctness
 
 Adapters may still be useful:
 
@@ -461,11 +461,11 @@ The recommended default adapter behavior is notification, not forced full-body
 injection.
 For example, an `agent-deck` adapter would ideally send:
 
-- a short hint that new mail exists
+- a short hint that new delivery exists
 - the endpoint address
 - the command needed to fetch the next message
 
-The actual message remains in the mailbox store until a receiver explicitly
+The actual message remains in the waypost store until a receiver explicitly
 claims it.
 
 The first implementation does not require any adapter.
@@ -474,7 +474,7 @@ The first implementation does not require any adapter.
 
 Different routing semantics should not be conflated.
 
-### Direct Mailbox
+### Direct Waypost
 
 - one delivery targets one endpoint
 - one receiver eventually acks it
@@ -505,12 +505,12 @@ Requirements:
 - message creation must be atomic
 - `queued -> leased` must be atomic
 - lease expiry must make abandoned work claimable again
-- transport notification must not imply mailbox completion
+- transport notification must not imply waypost completion
 
 Recovery principles:
 
 - if a consumer dies before `ack`, lease expiry recovers the delivery
-- if an adapter fails, the delivery remains in the mailbox
+- if an adapter fails, the delivery remains in the waypost
 - state transitions must be auditable through an event log
 
 Recovery does not require a daemon in v1.

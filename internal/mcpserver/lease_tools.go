@@ -4,7 +4,7 @@ import (
 	"context"
 	"time"
 
-	"github.com/ruiheng/agent-mailbox/internal/mailbox"
+	"github.com/ruiheng/waypost/internal/waypost"
 )
 
 const (
@@ -57,10 +57,10 @@ func (s *Service) processLeaseRenewals(ctx context.Context) error {
 	return firstErr
 }
 
-func (s *Service) renewLeaseWithRetry(ctx context.Context, lease activeLease) (mailbox.LeaseRenewResult, error) {
+func (s *Service) renewLeaseWithRetry(ctx context.Context, lease activeLease) (waypost.LeaseRenewResult, error) {
 	var lastErr error
 	for attempt := 0; attempt < leaseRenewRetryAttempts; attempt++ {
-		renewed, err := withMailboxService(ctx, s.mailboxServices, func(service mailboxLeaseRenewer) (mailbox.LeaseRenewResult, error) {
+		renewed, err := withWaypostService(ctx, s.waypostServices, func(service waypostLeaseRenewer) (waypost.LeaseRenewResult, error) {
 			return service.Renew(ctx, lease.DeliveryID, lease.LeaseToken, s.mcpLeaseTTL)
 		})
 		if err == nil {
@@ -71,10 +71,10 @@ func (s *Service) renewLeaseWithRetry(ctx context.Context, lease activeLease) (m
 			break
 		}
 		if err := waitForLeaseRenewRetry(ctx, leaseRenewRetryDelay); err != nil {
-			return mailbox.LeaseRenewResult{}, err
+			return waypost.LeaseRenewResult{}, err
 		}
 	}
-	return mailbox.LeaseRenewResult{}, lastErr
+	return waypost.LeaseRenewResult{}, lastErr
 }
 
 func waitForLeaseRenewRetry(ctx context.Context, delay time.Duration) error {

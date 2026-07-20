@@ -1,42 +1,64 @@
-# Mailbox CLI
+# Waypost CLI
 
-`agent-mailbox` is a local mailbox CLI for one Unix user on one machine.
+`waypost` is a local handoff CLI for one Unix user on one machine.
 
 This guide is intentionally short. It covers what a user needs to run the CLI:
 
 - where state lives
 - the normal send/receive flow
-- how immediate receive, observe-only wait, observe-only watch, and stale-inbox inspection work
+- how immediate receive, observe-only wait, observe-only watch, and stale-address inspection work
 - what each command is for
 
 ## State Directory
 
-The mailbox keeps all local state in one directory.
+The waypost keeps all local state in one directory.
 
 Resolution order:
 
-- `$MAILBOX_STATE_DIR`
-- `$XDG_STATE_HOME/ai-agent/mailbox`
-- `~/.local/state/ai-agent/mailbox`
+- `$WAYPOST_STATE_DIR`
+- `$XDG_STATE_HOME/ai-agent/waypost`
+- `~/.local/state/ai-agent/waypost`
 
 For demos or tests, use an isolated directory:
 
 ```bash
-export MAILBOX_STATE_DIR=/tmp/mailbox-demo
+export WAYPOST_STATE_DIR=/tmp/waypost-demo
 ```
 
 You can also override it per command:
 
 ```bash
-agent-mailbox --state-dir /tmp/mailbox-demo list --for workflow/reviewer/task-123
+waypost --state-dir /tmp/waypost-demo list --for workflow/reviewer/task-123
+```
+
+### Migrate previous local state
+
+Stop all previous-version processes, then move the previous default state
+directory to the new Waypost location:
+
+```bash
+waypost migrate
+```
+
+When the previous default state exists, normal commands require this migration
+before they initialize the new default state. The destination must not already
+exist for a new migration. If the migration is interrupted, rerun the same
+command to finish it; normal Waypost commands will refuse to initialize the
+target until then. Source and destination must not overlap. They may be on
+different filesystems: Waypost copies the complete state first and removes the
+old directory only afterward. For a custom previous location, pass it
+explicitly:
+
+```bash
+waypost --state-dir /new/waypost-state migrate --from /old/legacy-state
 ```
 
 ## Web Transcript UI
 
-Run a local read-only UI for group mail:
+Run a local read-only UI for group messages:
 
 ```bash
-agent-mailbox --state-dir /tmp/mailbox-demo group web --group group/ops
+waypost --state-dir /tmp/waypost-demo group web --group group/ops
 ```
 
 By default it listens on `127.0.0.1:0`, so the OS chooses a free local port and
@@ -50,7 +72,7 @@ Send a message:
 
 ```bash
 printf 'review request body\n' | \
-agent-mailbox send \
+waypost send \
   --to workflow/reviewer/task-123 \
   --from agent/sender \
   --subject "review request" \
@@ -60,7 +82,7 @@ agent-mailbox send \
 Receive a message:
 
 ```bash
-agent-mailbox recv \
+waypost recv \
   --for workflow/reviewer/task-123 \
   --json
 ```
@@ -69,10 +91,10 @@ Swap `--json` for `--yaml` when you want the same payload in YAML.
 Add `--full` when you need the full legacy payload instead of the default
 compact view.
 
-Search multiple inboxes with one receive:
+Receive from multiple addresses with one command:
 
 ```bash
-agent-mailbox recv \
+waypost recv \
   --for workflow/reviewer/task-123 \
   --for workflow/reviewer/task-456 \
   --json
@@ -81,7 +103,7 @@ agent-mailbox recv \
 Claim multiple messages in one call:
 
 ```bash
-agent-mailbox recv \
+waypost recv \
   --for workflow/reviewer/task-123 \
   --max 10 \
   --json
@@ -97,7 +119,7 @@ follow-up actions.
 Observe deliveries without claiming them:
 
 ```bash
-agent-mailbox wait \
+waypost wait \
   --for workflow/reviewer/task-123 \
   --timeout 30s \
   --json
@@ -110,7 +132,7 @@ message bodies or lease tokens, and it does not reserve the delivery. Add
 Observe deliveries continuously without claiming them:
 
 ```bash
-agent-mailbox watch \
+waypost watch \
   --for workflow/reviewer/task-123 \
   --timeout 30s \
   --json
@@ -119,23 +141,23 @@ agent-mailbox watch \
 `watch` emits delivery metadata only. It never returns message bodies or lease
 tokens. Use `--yaml` to emit the same metadata as a YAML document stream.
 
-Find inboxes with receivable mail older than a threshold:
+Find queues with receivable delivery older than a threshold:
 
 ```bash
-agent-mailbox stale \
+waypost stale \
   --for workflow/reviewer/task-123 \
   --for workflow/reviewer/task-456 \
   --older-than 10m \
   --json
 ```
 
-`stale` is personal-mailbox-only and structured-output-only in v1. Use
+`stale` is personal-waypost-only and structured-output-only in v1. Use
 `--json` or `--yaml`; plain-text mode is intentionally unsupported.
 
 Ack when processing succeeds:
 
 ```bash
-agent-mailbox ack \
+waypost ack \
   --delivery <delivery_id> \
   --lease-token <lease_token>
 ```
@@ -143,7 +165,7 @@ agent-mailbox ack \
 Renew an active lease when processing needs more time:
 
 ```bash
-agent-mailbox renew \
+waypost renew \
   --delivery <delivery_id> \
   --lease-token <lease_token> \
   --for 10m
@@ -152,7 +174,7 @@ agent-mailbox renew \
 List already-acked deliveries later:
 
 ```bash
-agent-mailbox list \
+waypost list \
   --for workflow/reviewer/task-123 \
   --state acked \
   --json
@@ -161,33 +183,33 @@ agent-mailbox list \
 Read one persisted delivery body later:
 
 ```bash
-agent-mailbox read \
+waypost read \
   --message <message_id> \
   --json
 ```
 
-Read the latest delivery for one inbox in one step:
+Read the latest delivery for one queue in one step:
 
 ```bash
-agent-mailbox read \
+waypost read \
   --latest \
   --for workflow/reviewer/task-123 \
   --json
 ```
 
-Group mailbox quick start:
+Group waypost quick start:
 
 ```bash
-agent-mailbox group create --group group/eng
-agent-mailbox group add-member --group group/eng --person alice
-printf 'team sync\n' | agent-mailbox send --to group/eng --group --body-file -
-agent-mailbox list --for group/eng --as alice --json
-agent-mailbox recv --for group/eng --as alice --json
+waypost group create --group group/eng
+waypost group add-member --group group/eng --person alice
+printf 'team sync\n' | waypost send --to group/eng --group --body-file -
+waypost list --for group/eng --as alice --json
+waypost recv --for group/eng --as alice --json
 ```
 
-## Group Mailbox
+## Group Waypost
 
-Group mailbox is explicit. It does not reuse lease/ack queue semantics.
+Group waypost is explicit. It does not reuse lease/ack queue semantics.
 
 Rules:
 
@@ -195,7 +217,7 @@ Rules:
 - add or remove members with `group add-member` and `group remove-member`
 - use `send --to <group-address> --group` for group messages
 - use `list|wait|recv --for <group-address> --as <person>` for group reads
-- `watch`, `ack`, `renew`, `release`, `defer`, `undefer`, and `fail` stay personal-mailbox-only
+- `watch`, `ack`, `renew`, `release`, `defer`, `undefer`, and `fail` stay personal-waypost-only
 - `--as` is caller-asserted identity in the trusted local workflow environment;
   it is not an authentication boundary
 
@@ -217,18 +239,18 @@ Rules:
 - `--max` defaults to `1` and may not exceed `10`
 - `--json` and `--yaml` are mutually exclusive
 - no-message returns exit code `2`
-- repeated `--for` flags search the union of the requested inboxes
+- repeated `--for` flags search the union of the requested queues
 - selection is global oldest-first by `visible_at`, then `message_created_at`,
   then `delivery_id`
-- unseen addresses behave like empty inboxes
-- `has_more=true` means the batch hit the requested max and more claimable mail remains
+- unseen addresses behave like empty queues
+- `has_more=true` means the batch hit the requested max and more claimable delivery remains
 
 ## Wait
 
 `wait` is the one-shot observe-only companion to `recv`.
 
 ```bash
-agent-mailbox wait --for <address> [--for <address> ...] [--timeout 30s] [--json | --yaml] [--full]
+waypost wait --for <address> [--for <address> ...] [--timeout 30s] [--json | --yaml] [--full]
 ```
 
 `--timeout` uses Go duration syntax such as `30s`, `5m`, `120ms`, or `1m30s`.
@@ -237,7 +259,7 @@ Rules:
 
 - `wait` is observe-only; it does not claim deliveries, create lease tokens, or
   reserve the result
-- repeated `--for` flags search the union of the requested inboxes
+- repeated `--for` flags search the union of the requested queues
 - duplicate `--for` values are ignored after the first occurrence
 - default wait scope is currently visible queued deliveries
 - `--json` emits one delivery metadata object
@@ -247,14 +269,14 @@ Rules:
   before it expires, `wait` exits with code `2`
 - selection is deterministic global oldest-first by `visible_at`, then
   `message_created_at`, then `delivery_id`
-- unseen addresses behave like empty inboxes until a matching delivery exists
+- unseen addresses behave like empty queues until a matching delivery exists
 
 ## Watch
 
 `watch` is the observe-only companion to `recv`.
 
 ```bash
-agent-mailbox watch --for <address> [--for <address> ...] [--state dead_letter] [--timeout 30s] [--json | --yaml]
+waypost watch --for <address> [--for <address> ...] [--state dead_letter] [--timeout 30s] [--json | --yaml]
 ```
 
 `--timeout` uses Go duration syntax such as `30s`, `5m`, `120ms`, or `1m30s`.
@@ -263,7 +285,7 @@ Rules:
 
 - `watch` always stays observe-only; it does not claim deliveries or create
   lease tokens
-- repeated `--for` flags search the union of the requested inboxes
+- repeated `--for` flags search the union of the requested queues
 - duplicate `--for` values are ignored after the first occurrence
 - default output watches currently visible queued deliveries
 - `--state <state>` watches that delivery state instead
@@ -273,7 +295,7 @@ Rules:
 - `--timeout` is an idle timeout; if no newly matching delivery appears during
   that interval, `watch` exits successfully
 - duplicate polling cycles do not reprint the same unchanged delivery snapshot
-- unseen addresses behave like empty inboxes until matching deliveries exist
+- unseen addresses behave like empty queues until matching deliveries exist
 
 ## Commands
 
@@ -282,14 +304,14 @@ Rules:
 Run the built-in stdio MCP server from the main binary.
 
 ```bash
-agent-mailbox mcp
+waypost mcp
 ```
 
 Notes:
 
-- this starts the mailbox MCP server over stdio
-- use the main `agent-mailbox` binary in MCP configs and pass `mcp` as the first argument
-- `--state-dir` remains a global option on the main binary, but the MCP server manages mailbox state through its own tool calls rather than per-command CLI flags
+- this starts the waypost MCP server over stdio
+- use the main `waypost` binary in MCP configs and pass `mcp` as the first argument
+- `--state-dir` remains a global option on the main binary, but the MCP server manages waypost state through its own tool calls rather than per-command CLI flags
 
 ### `send`
 
@@ -297,7 +319,7 @@ Queue one message for a recipient address, or append one message to a known grou
 address when `--group` is set.
 
 ```bash
-agent-mailbox send --to <address> --body-file <path-or-> [--group] [--json | --yaml] [--full]
+waypost send --to <address> --body-file <path-or-> [--group] [--json | --yaml] [--full]
 ```
 
 Use `--json` or `--yaml` for scripts and agents.
@@ -335,15 +357,15 @@ Claim one or more personal deliveries, or receive one unread group message for a
 specific person.
 
 ```bash
-agent-mailbox recv --for <address> [--for <address> ...] [--max 10] [--json | --yaml] [--full]
-agent-mailbox recv --for <group-address> --as <person> [--json | --yaml] [--full]
+waypost recv --for <address> [--for <address> ...] [--max 10] [--json | --yaml] [--full]
+waypost recv --for <group-address> --as <person> [--json | --yaml] [--full]
 ```
 
 Use `--json` or `--yaml` for scripts and agents.
 
 Notes:
 
-- repeat `--for` to search multiple inboxes with one batch claim
+- repeat `--for` to search multiple queues with one batch claim
 - `--max <n>` limits how many deliveries one invocation can lease and may not exceed `10`
 - duplicate `--for` values are ignored after the first occurrence
 - without `--max`, default plain-text and structured output return a compact
@@ -351,7 +373,7 @@ Notes:
   `subject`, `content_type`, and `body`
 - add `--full` to return the full legacy single-message payload
 - with `--max`, plain-text output prints each claimed message and appends
-  `notice=more_messages_available` when additional claimable mail remains
+  `notice=more_messages_available` when additional claimable delivery remains
 - with `--max`, `--json` and `--yaml` emit a result object with `messages` and `has_more`
 - with `--max --full`, each `messages[]` entry uses the full legacy payload
 - unseen addresses are ignored until a matching delivery exists
@@ -372,8 +394,8 @@ Observe until one matching queued delivery exists, or until one unread visible
 group message exists for a specific person.
 
 ```bash
-agent-mailbox wait --for <address> [--for <address> ...] [--timeout 30s] [--json | --yaml] [--full]
-agent-mailbox wait --for <group-address> --as <person> [--timeout 30s] [--json | --yaml] [--full]
+waypost wait --for <address> [--for <address> ...] [--timeout 30s] [--json | --yaml] [--full]
+waypost wait --for <group-address> --as <person> [--timeout 30s] [--json | --yaml] [--full]
 ```
 
 Use `--json` or `--yaml` for scripts and agents.
@@ -381,7 +403,7 @@ Use `--json` or `--yaml` for scripts and agents.
 Notes:
 
 - `--timeout` uses Go duration syntax such as `30s`, `5m`, `120ms`, or `1m30s`
-- repeat `--for` to search multiple inboxes with one wait
+- repeat `--for` to search multiple queues with one wait
 - duplicate `--for` values are ignored after the first occurrence
 - plain-text output includes `recipient_address=...`
 - default `wait` output is a compact metadata view with `delivery_id`,
@@ -401,7 +423,7 @@ Notes:
 Observe matching deliveries without claiming them.
 
 ```bash
-agent-mailbox watch --for <address> [--for <address> ...] [--state dead_letter] [--timeout 30s] [--json | --yaml]
+waypost watch --for <address> [--for <address> ...] [--state dead_letter] [--timeout 30s] [--json | --yaml]
 ```
 
 Use `--json` or `--yaml` for streaming consumers.
@@ -420,12 +442,12 @@ Notes:
 ### `read`
 
 Read one or more persisted messages, one or more deliveries by id, or the
-latest deliveries for one or more inboxes.
+latest deliveries for one or more queues.
 
 ```bash
-agent-mailbox read --message <id> [--message <id> ...] [--json | --yaml]
-agent-mailbox read --delivery <id> [--delivery <id> ...] [--json | --yaml]
-agent-mailbox read --latest --for <address> [--for <address> ...] [--state <state>] [--limit <n>] [--json | --yaml]
+waypost read --message <id> [--message <id> ...] [--json | --yaml]
+waypost read --delivery <id> [--delivery <id> ...] [--json | --yaml]
+waypost read --latest --for <address> [--for <address> ...] [--state <state>] [--limit <n>] [--json | --yaml]
 ```
 
 Use `--json` or `--yaml` for scripts and agents.
@@ -439,7 +461,7 @@ Notes:
   `queued`, `leased`, `acked`, or `dead_letter`
 - `--latest` requires at least one `--for`
 - `--latest` defaults to no state filter (`any`) and `--limit 1`
-- `--latest` searches the union of the requested inboxes and returns newest-first
+- `--latest` searches the union of the requested queues and returns newest-first
 - structured output always returns an object with `items` and `has_more`
 - returns the persisted body after verifying the blob size and sha256
 - plain-text output prints one item after another, separated by `---`
@@ -452,7 +474,7 @@ Notes:
 Mark a leased delivery as complete.
 
 ```bash
-agent-mailbox ack --delivery <delivery_id> --lease-token <lease_token>
+waypost ack --delivery <delivery_id> --lease-token <lease_token>
 ```
 
 ### `renew`
@@ -460,7 +482,7 @@ agent-mailbox ack --delivery <delivery_id> --lease-token <lease_token>
 Extend a current lease without changing the lease token.
 
 ```bash
-agent-mailbox renew --delivery <delivery_id> --lease-token <lease_token> --for 10m
+waypost renew --delivery <delivery_id> --lease-token <lease_token> --for 10m
 ```
 
 Notes:
@@ -475,7 +497,7 @@ Notes:
 Return a leased delivery to the queue immediately.
 
 ```bash
-agent-mailbox release --delivery <delivery_id> --lease-token <lease_token>
+waypost release --delivery <delivery_id> --lease-token <lease_token>
 ```
 
 ### `defer`
@@ -483,7 +505,7 @@ agent-mailbox release --delivery <delivery_id> --lease-token <lease_token>
 Return a leased delivery to the queue, but hide it until a future time.
 
 ```bash
-agent-mailbox defer \
+waypost defer \
   --delivery <delivery_id> \
   --lease-token <lease_token> \
   --until 2026-03-18T12:00:00Z
@@ -494,7 +516,7 @@ agent-mailbox defer \
 Make a deferred queued delivery visible immediately.
 
 ```bash
-agent-mailbox undefer --delivery <delivery_id>
+waypost undefer --delivery <delivery_id>
 ```
 
 Notes:
@@ -508,7 +530,7 @@ Notes:
 Record a processing failure.
 
 ```bash
-agent-mailbox fail \
+waypost fail \
   --delivery <delivery_id> \
   --lease-token <lease_token> \
   --reason "tool crashed"
@@ -525,8 +547,8 @@ Inspect queued personal deliveries for one recipient address, or inspect group
 message metadata visible to one person.
 
 ```bash
-agent-mailbox list --for <address> [--state queued|leased|acked|dead_letter] [--json | --yaml]
-agent-mailbox list --for <group-address> --as <person> [--json | --yaml]
+waypost list --for <address> [--state queued|leased|acked|dead_letter] [--json | --yaml]
+waypost list --for <group-address> --as <person> [--json | --yaml]
 ```
 
 Notes:
@@ -546,11 +568,11 @@ Notes:
 
 ### `stale`
 
-List personal inboxes whose oldest currently receivable delivery is older than
+List personal queues whose oldest currently receivable delivery is older than
 the requested threshold.
 
 ```bash
-agent-mailbox stale --for <address> [--for <address> ...] --older-than 10m [--json | --yaml]
+waypost stale --for <address> [--for <address> ...] --older-than 10m [--json | --yaml]
 ```
 
 Use `--json` or `--yaml`. One of them is required.
@@ -558,11 +580,11 @@ Use `--json` or `--yaml`. One of them is required.
 Notes:
 
 - `--older-than` uses Go duration syntax such as `30s`, `5m`, `120ms`, or `1h`
-- repeat `--for` to check multiple inboxes in one query
+- repeat `--for` to check multiple queues in one query
 - duplicate `--for` values are ignored after the first occurrence
 - plain-text mode is not supported in v1
-- unseen addresses behave like empty inboxes
-- known group addresses fail explicitly; this command is personal-mailbox-only
+- unseen addresses behave like empty queues
+- known group addresses fail explicitly; this command is personal-waypost-only
 - queued deliveries count when `visible_at <= now`
 - expired leased deliveries count when `lease_expires_at <= now`
 - future invisible deliveries do not count as stale
@@ -574,7 +596,7 @@ Notes:
 Reserve a group address explicitly.
 
 ```bash
-agent-mailbox group create --group <address> [--json | --yaml]
+waypost group create --group <address> [--json | --yaml]
 ```
 
 Notes:
@@ -588,7 +610,7 @@ Notes:
 Add one person to an existing group.
 
 ```bash
-agent-mailbox group add-member --group <address> --person <person> [--json | --yaml]
+waypost group add-member --group <address> --person <person> [--json | --yaml]
 ```
 
 Notes:
@@ -604,7 +626,7 @@ Notes:
 Close the active membership for one person in a group.
 
 ```bash
-agent-mailbox group remove-member --group <address> --person <person> [--json | --yaml]
+waypost group remove-member --group <address> --person <person> [--json | --yaml]
 ```
 
 Notes:
@@ -618,7 +640,7 @@ Notes:
 List active and historical membership records for one group.
 
 ```bash
-agent-mailbox group members --group <address> [--json | --yaml]
+waypost group members --group <address> [--json | --yaml]
 ```
 
 Notes:
@@ -633,7 +655,7 @@ Inspect whether an address is currently unbound, a personal endpoint, or a
 group.
 
 ```bash
-agent-mailbox address inspect --address <address> [--json | --yaml]
+waypost address inspect --address <address> [--json | --yaml]
 ```
 
 Notes:

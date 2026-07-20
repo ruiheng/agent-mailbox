@@ -23,7 +23,7 @@ type WakeTarget struct {
 
 type wakeScope struct {
 	ScopeID          string
-	MailboxAddresses []string
+	WaypostAddresses []string
 	WakeTargets      []WakeTarget
 }
 
@@ -36,7 +36,7 @@ type wakeSnapshot struct {
 	QueuedVisibleCount        int
 }
 
-type visibleMailboxState struct {
+type visibleWaypostState struct {
 	QueuedVisibleCount int
 	OldestEligibleAt   string
 }
@@ -136,11 +136,11 @@ func (s *Service) tryWakeChannel(ctx context.Context, snapshot wakeSnapshot, run
 	switch channel {
 	case WakeHintMCPResourceUpdated:
 		if !s.overviewSubscriptions.hasLiveSubscribers(s.Server()) {
-			logWakeSuppressed(snapshot, runtime, now, channel, config.Category, mailboxOverviewURI, "unavailable:no_subscribers")
+			logWakeSuppressed(snapshot, runtime, now, channel, config.Category, waypostOverviewURI, "unavailable:no_subscribers")
 			return false
 		}
-		outcome := s.mailboxOverviewEmitter(ctx)
-		logWakeAttempt(snapshot, now, channel, config.Category, mailboxOverviewURI, outcome)
+		outcome := s.waypostOverviewEmitter(ctx)
+		logWakeAttempt(snapshot, now, channel, config.Category, waypostOverviewURI, outcome)
 		if notificationOutcomeDelivered(outcome) {
 			s.wakeSchedulerState.markDelivered(snapshot.ScopeID, channel, now, snapshot.PendingSince)
 			return true
@@ -195,7 +195,7 @@ func (s *Service) currentLocalWakeScope(ctx context.Context) (*wakeScope, error)
 	}
 	return &wakeScope{
 		ScopeID:          localWakeScopeID(snapshot),
-		MailboxAddresses: append([]string(nil), snapshot.BoundAddresses...),
+		WaypostAddresses: append([]string(nil), snapshot.BoundAddresses...),
 		WakeTargets:      targets,
 	}, nil
 }
@@ -210,7 +210,7 @@ func directWakeScopeForAddress(address string) (*wakeScope, string, error) {
 	}
 	return &wakeScope{
 		ScopeID:          "direct/" + strings.TrimSpace(address),
-		MailboxAddresses: []string{strings.TrimSpace(address)},
+		WaypostAddresses: []string{strings.TrimSpace(address)},
 		WakeTargets:      []WakeTarget{target},
 	}, scheme, nil
 }
@@ -263,7 +263,7 @@ func wakeTargetForAddress(address string) (WakeTarget, bool, string, error) {
 }
 
 func (s *Service) currentWakeSnapshot(ctx context.Context, scope wakeScope) (wakeSnapshot, error) {
-	visible, err := s.visibleMailboxSnapshot(ctx, scope.MailboxAddresses)
+	visible, err := s.visibleWaypostSnapshot(ctx, scope.WaypostAddresses)
 	if err != nil {
 		return wakeSnapshot{}, err
 	}
@@ -271,21 +271,21 @@ func (s *Service) currentWakeSnapshot(ctx context.Context, scope wakeScope) (wak
 		ScopeID:                   scope.ScopeID,
 		HasPendingVisibleDelivery: visible.QueuedVisibleCount > 0,
 		PendingSince:              visible.OldestEligibleAt,
-		BoundAddresses:            append([]string(nil), scope.MailboxAddresses...),
+		BoundAddresses:            append([]string(nil), scope.WaypostAddresses...),
 		WakeTargets:               append([]WakeTarget(nil), scope.WakeTargets...),
 		QueuedVisibleCount:        visible.QueuedVisibleCount,
 	}, nil
 }
 
-func (s *Service) visibleMailboxSnapshot(ctx context.Context, addresses []string) (visibleMailboxState, error) {
+func (s *Service) visibleWaypostSnapshot(ctx context.Context, addresses []string) (visibleWaypostState, error) {
 	if len(addresses) == 0 {
-		return visibleMailboxState{}, nil
+		return visibleWaypostState{}, nil
 	}
-	return withMailboxService(ctx, s.mailboxServices, func(service mailboxClaimableLister) (visibleMailboxState, error) {
-		state := visibleMailboxState{}
+	return withWaypostService(ctx, s.waypostServices, func(service waypostClaimableLister) (visibleWaypostState, error) {
+		state := visibleWaypostState{}
 		claimable, err := service.ListClaimableAddresses(ctx, addresses)
 		if err != nil {
-			return visibleMailboxState{}, err
+			return visibleWaypostState{}, err
 		}
 		for _, address := range claimable {
 			state.QueuedVisibleCount += address.ClaimableCount

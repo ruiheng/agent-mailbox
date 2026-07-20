@@ -15,7 +15,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/ruiheng/agent-mailbox/internal/mailbox"
+	"github.com/ruiheng/waypost/internal/waypost"
 )
 
 var (
@@ -126,8 +126,8 @@ func newSessionManager(runner Runner, state *serverState) *sessionManager {
 	}
 }
 
-func (m *sessionManager) bind(ctx context.Context, input mailboxBindInput) (boundState, error) {
-	boundAddresses, err := mailbox.NormalizeAddressList(input.Addresses)
+func (m *sessionManager) bind(ctx context.Context, input waypostBindInput) (boundState, error) {
+	boundAddresses, err := waypost.NormalizeAddressList(input.Addresses)
 	if err != nil {
 		return boundState{}, err
 	}
@@ -137,11 +137,11 @@ func (m *sessionManager) bind(ctx context.Context, input mailboxBindInput) (boun
 		defaultSender = boundAddresses[0]
 	}
 	if defaultSender != "" {
-		defaultSender, err = mailbox.NormalizeAddress(defaultSender)
+		defaultSender, err = waypost.NormalizeAddress(defaultSender)
 		if err != nil {
 			return boundState{}, fmt.Errorf("invalid default_sender: %w", err)
 		}
-		if mailbox.IsGroupAddress(defaultSender) {
+		if waypost.IsGroupAddress(defaultSender) {
 			return boundState{}, errors.New("default_sender cannot be a group address")
 		}
 	}
@@ -164,7 +164,7 @@ func (m *sessionManager) bind(ctx context.Context, input mailboxBindInput) (boun
 func personalAddressesOnly(addresses []string) []string {
 	out := addresses[:0]
 	for _, address := range addresses {
-		if mailbox.IsGroupAddress(address) {
+		if waypost.IsGroupAddress(address) {
 			continue
 		}
 		out = append(out, address)
@@ -188,7 +188,7 @@ func (m *sessionManager) boundState(ctx context.Context) (boundState, error) {
 		warnings = append(warnings, toolSessionBindRecoveryHint)
 	}
 	if len(snapshot.BoundAddresses) == 0 {
-		warnings = append(warnings, "no mailbox addresses are currently bound")
+		warnings = append(warnings, "no waypost addresses are currently bound")
 	}
 
 	return boundState{
@@ -593,7 +593,7 @@ func boundAddressesByScheme(boundAddresses []string, schemes ...string) []string
 	}
 	addresses := make([]string, 0, len(boundAddresses))
 	for _, address := range boundAddresses {
-		parsed, err := mailbox.ParseAddress(address)
+		parsed, err := waypost.ParseAddress(address)
 		if err != nil {
 			continue
 		}
@@ -650,23 +650,23 @@ func (m *sessionManager) extractCodexSessionIDFromLsof(ctx context.Context, pid 
 	return "", nil
 }
 
-func (m *sessionManager) mailboxAddresses(ctx context.Context, addresses []string) ([]string, error) {
+func (m *sessionManager) waypostAddresses(ctx context.Context, addresses []string) ([]string, error) {
 	if len(addresses) > 0 {
-		return mailbox.NormalizeAddressList(addresses)
+		return waypost.NormalizeAddressList(addresses)
 	}
 	bound, err := m.boundState(ctx)
 	if err != nil {
 		return nil, err
 	}
 	if len(bound.BoundAddresses) == 0 {
-		return nil, errors.New("no mailbox addresses provided and no mailbox addresses are bound")
+		return nil, errors.New("no waypost addresses provided and no waypost addresses are bound")
 	}
 	return append([]string(nil), bound.BoundAddresses...), nil
 }
 
 func (m *sessionManager) senderAddress(ctx context.Context, override string) (string, error) {
 	if strings.TrimSpace(override) != "" {
-		return mailbox.NormalizeAddress(override)
+		return waypost.NormalizeAddress(override)
 	}
 	bound, err := m.boundState(ctx)
 	if err != nil {
@@ -678,7 +678,7 @@ func (m *sessionManager) senderAddress(ctx context.Context, override string) (st
 	case len(bound.BoundAddresses) > 0:
 		return bound.BoundAddresses[0], nil
 	default:
-		return "", errors.New("mailbox_send requires from_address or a bound default_sender")
+		return "", errors.New("waypost_send requires from_address or a bound default_sender")
 	}
 }
 

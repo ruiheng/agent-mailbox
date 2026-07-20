@@ -1,7 +1,7 @@
 GO ?= go
-CMD_PATH ?= ./cmd/mailbox
+CMD_PATH ?= ./cmd/waypost
 BIN_DIR ?= bin
-BINARY_NAME ?= agent-mailbox
+BINARY_NAME ?= waypost
 PREFIX ?= /usr/local
 DESTDIR ?=
 INSTALL_DIR ?= $(PREFIX)/bin
@@ -12,7 +12,7 @@ BUILD_OUTPUT := $(BIN_DIR)/$(BINARY_NAME)
 help:
 	@printf '%s\n' \
 		'Available targets:' \
-		'  make build                 Build the agent-mailbox CLI into $(BUILD_OUTPUT)' \
+		'  make build                 Build the waypost CLI into $(BUILD_OUTPUT)' \
 		'  make test                  Run the Go test suite' \
 		'  make run ARGS="..."        Run the CLI with go run and pass ARGS through' \
 		'  make run-mcp               Run the built-in stdio MCP server with go run' \

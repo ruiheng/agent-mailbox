@@ -4,7 +4,7 @@ import (
 	"errors"
 	"sync"
 
-	"github.com/ruiheng/agent-mailbox/internal/mailbox"
+	"github.com/ruiheng/waypost/internal/waypost"
 )
 
 type activeLease struct {
@@ -50,7 +50,7 @@ func newActiveLeaseManager() *activeLeaseManager {
 	}
 }
 
-func (m *activeLeaseManager) trackReceive(result mailbox.ReceiveResult, claimedAt string) {
+func (m *activeLeaseManager) trackReceive(result waypost.ReceiveResult, claimedAt string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -71,7 +71,7 @@ func (m *activeLeaseManager) trackReceive(result mailbox.ReceiveResult, claimedA
 	}
 }
 
-func (m *activeLeaseManager) updateRenewed(result mailbox.LeaseRenewResult, renewedAt string) {
+func (m *activeLeaseManager) updateRenewed(result waypost.LeaseRenewResult, renewedAt string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -189,9 +189,9 @@ func renewalFailureDefinitive(err error) bool {
 	if err == nil {
 		return false
 	}
-	return errors.Is(err, mailbox.ErrLeaseExpired) ||
-		errors.Is(err, mailbox.ErrLeaseNotFound) ||
-		errors.Is(err, mailbox.ErrLeaseNotLeased) ||
-		errors.Is(err, mailbox.ErrLeaseRenewChanged) ||
-		errors.Is(err, mailbox.ErrLeaseTokenMismatch)
+	return errors.Is(err, waypost.ErrLeaseExpired) ||
+		errors.Is(err, waypost.ErrLeaseNotFound) ||
+		errors.Is(err, waypost.ErrLeaseNotLeased) ||
+		errors.Is(err, waypost.ErrLeaseRenewChanged) ||
+		errors.Is(err, waypost.ErrLeaseTokenMismatch)
 }
