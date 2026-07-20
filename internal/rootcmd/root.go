@@ -111,7 +111,12 @@ func (a *App) runMigrateCommand(stateDir string, args []string) error {
 	if err != nil {
 		return err
 	}
-	_, err = fmt.Fprintf(a.stdout, "migrated legacy state: %s -> %s\n", result.Source, result.Destination)
+	if _, err := fmt.Fprintf(a.stdout, "migrated legacy state: %s -> %s\n", result.Source, result.Destination); err != nil {
+		return err
+	}
+	if result.SourceRetained {
+		_, err = fmt.Fprintf(a.stdout, "legacy source retained as a recovery copy: %s\n", result.Source)
+	}
 	return err
 }
 

@@ -45,9 +45,15 @@ before they initialize the new default state. The destination must not already
 exist for a new migration. If the migration is interrupted, rerun the same
 command to finish it; normal Waypost commands will refuse to initialize the
 target until then. Source and destination must not overlap. They may be on
-different filesystems: Waypost copies the complete state first and removes the
-old directory only afterward. For a custom previous location, pass it
-explicitly:
+different filesystems: on Unix-like systems, Waypost durably copies the
+complete state and records a copy commit before removing the old directory. On
+Windows cross-volume migrations it retains the old directory as a reported
+recovery copy, because Windows does not expose durable directory syncing.
+
+If an older interrupted migration has no durable copy-commit marker and its
+source no longer exists, Waypost refuses to treat the destination as complete.
+
+For a custom previous location, pass both paths explicitly:
 
 ```bash
 waypost --state-dir /new/waypost-state migrate --from /old/legacy-state

@@ -25,14 +25,23 @@ waypost migrate
 ```
 
 The command moves the directory into the current Waypost state path. Across
-filesystem boundaries it copies the completed state before removing the old
-directory. When the previous default state exists, normal commands refuse to
+filesystem boundaries on Unix-like systems, it durably copies the complete
+state and writes a copy-commit marker before removing the old directory. On
+Windows cross-volume migrations, it keeps the old directory as an explicit
+recovery copy because Windows does not expose durable directory syncing; the
+command reports that retained source. When the previous default state exists,
+normal commands refuse to
 initialize the new default state until you migrate it. A new migration refuses
 to overwrite an existing destination; if an interrupted migration left its own
 state behind, rerun the same command to finish it. While that migration is
 incomplete, normal Waypost commands refuse to create or open a new database at
-the destination. Source and destination paths must not overlap. For a previous
-custom location, provide both paths explicitly:
+the destination. Source and destination paths must not overlap.
+
+If an older interrupted migration lacks a durable copy-commit marker and its
+source is already absent, Waypost refuses to guess that the destination is
+complete; inspect or restore the source before retrying.
+
+For a previous custom location, provide both paths explicitly:
 
 ```bash
 waypost --state-dir /new/waypost-state migrate --from /old/legacy-state

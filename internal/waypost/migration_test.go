@@ -10,6 +10,30 @@ import (
 	"testing"
 )
 
+func assertFinalMigrationMarker(t *testing.T, destination string, retained bool) {
+	t.Helper()
+	marker, exists, err := readMigrationMarker(destination)
+	if err != nil {
+		t.Fatalf("readMigrationMarker() error = %v", err)
+	}
+	if retained {
+		if !exists {
+			t.Fatal("migration marker = missing, want retained recovery marker")
+		}
+		if marker.Version != migrationMarkerVersion || marker.Stage != migrationStageCopyCommitted {
+			t.Fatalf("retained migration marker = %+v, want version=%d stage=%q", marker, migrationMarkerVersion, migrationStageCopyCommitted)
+		}
+		return
+	}
+	if exists {
+		t.Fatalf("migration marker = %+v, want removed", marker)
+	}
+}
+
+func crossDeviceRenameError(oldPath, newPath string) error {
+	return &os.LinkError{Op: "rename", Old: oldPath, New: newPath, Err: syscall.EXDEV}
+}
+
 func TestMigrateLegacyStateMovesDirectoryAndDatabaseFiles(t *testing.T) {
 	root := t.TempDir()
 	source := filepath.Join(root, "legacy-state")
@@ -165,6 +189,9 @@ func TestMigrateLegacyStateResumesAfterLegacyDirectoryWasMoved(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(destination, legacyDatabaseFilename+"-wal"), []byte("wal"), 0o600); err != nil {
 		t.Fatalf("WriteFile(legacy database wal) error = %v", err)
 	}
+	if err := writeMigrationMarker(destination, newMigrationMarker(source, destination)); err != nil {
+		t.Fatalf("writeMigrationMarker() error = %v", err)
+	}
 
 	result, err := MigrateLegacyState(destination, source)
 	if err != nil {
@@ -265,7 +292,8 @@ func TestMigrateLegacyStateResumesPreparedMigrationAfterMove(t *testing.T) {
 		t.Fatalf("writeMigrationMarker() error = %v", err)
 	}
 
-	if _, err := MigrateLegacyState(destination, source); err != nil {
+	_, err := MigrateLegacyState(destination, source)
+	if err != nil {
 		t.Fatalf("MigrateLegacyState() error = %v", err)
 	}
 	if _, err := os.Lstat(migrationMarkerPath(destination)); !errors.Is(err, os.ErrNotExist) {
@@ -296,7 +324,14 @@ func TestMigrateLegacyStateCopiesAcrossFilesystems(t *testing.T) {
 	if result.Source != source || result.Destination != destination {
 		t.Fatalf("migrateLegacyState() result = %+v, want source=%q destination=%q", result, source, destination)
 	}
-	if _, err := os.Lstat(source); !errors.Is(err, os.ErrNotExist) {
+	if result.SourceRetained != retainLegacySourceAfterCopy() {
+		t.Fatalf("migrateLegacyState() source retained = %t, want %t", result.SourceRetained, retainLegacySourceAfterCopy())
+	}
+	if retainLegacySourceAfterCopy() {
+		if _, err := os.Lstat(source); err != nil {
+			t.Fatalf("legacy source after cross-filesystem migration = %v, want retained recovery copy", err)
+		}
+	} else if _, err := os.Lstat(source); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("legacy source after cross-filesystem migration = %v, want not exist", err)
 	}
 	if got, err := os.ReadFile(filepath.Join(destination, databaseFilename)); err != nil || string(got) != "database" {
@@ -305,11 +340,12 @@ func TestMigrateLegacyStateCopiesAcrossFilesystems(t *testing.T) {
 	if got, err := os.ReadFile(filepath.Join(destination, blobsDirName, "blob")); err != nil || string(got) != "body" {
 		t.Fatalf("ReadFile(blob) = %q, %v; want body, nil", got, err)
 	}
-	if _, err := os.Lstat(migrationMarkerPath(destination)); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("migration marker after cross-filesystem migration = %v, want not exist", err)
-	}
+	assertFinalMigrationMarker(t, destination, result.SourceRetained && keepMigrationRecoveryMarker())
 	if _, err := os.Lstat(migrationCopiedMarkerPath(destination)); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("migration copy marker after cross-filesystem migration = %v, want not exist", err)
+	}
+	if _, err := os.Lstat(migrationCopyingMarkerPath(destination)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("migration copying marker after cross-filesystem migration = %v, want not exist", err)
 	}
 }
 
@@ -327,24 +363,56 @@ func TestMigrateLegacyStateResumesCopiedStateCleanup(t *testing.T) {
 		t.Fatalf("WriteFile(current database) error = %v", err)
 	}
 	marker := newMigrationMarker(source, destination)
+	marker.Stage = migrationStageCopyCommitted
 	if err := writeMigrationMarker(destination, marker); err != nil {
 		t.Fatalf("writeMigrationMarker() error = %v", err)
 	}
-	if err := writeMigrationCopiedMarker(destination); err != nil {
-		t.Fatalf("writeMigrationCopiedMarker() error = %v", err)
-	}
 
-	if _, err := MigrateLegacyState(destination, source); err != nil {
+	result, err := MigrateLegacyState(destination, source)
+	if err != nil {
 		t.Fatalf("MigrateLegacyState() error = %v", err)
 	}
-	if _, err := os.Lstat(source); !errors.Is(err, os.ErrNotExist) {
+	if result.SourceRetained != retainLegacySourceAfterCopy() {
+		t.Fatalf("MigrateLegacyState() source retained = %t, want %t", result.SourceRetained, retainLegacySourceAfterCopy())
+	}
+	if retainLegacySourceAfterCopy() {
+		if _, err := os.Lstat(source); err != nil {
+			t.Fatalf("legacy source after resumed copied migration = %v, want retained recovery copy", err)
+		}
+	} else if _, err := os.Lstat(source); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("legacy source after resumed copied migration = %v, want not exist", err)
 	}
-	if _, err := os.Lstat(migrationMarkerPath(destination)); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("migration marker after resumed copied migration = %v, want not exist", err)
-	}
+	assertFinalMigrationMarker(t, destination, result.SourceRetained && keepMigrationRecoveryMarker())
 	if _, err := os.Lstat(migrationCopiedMarkerPath(destination)); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("migration copy marker after resumed copied migration = %v, want not exist", err)
+	}
+}
+
+func TestMigrateLegacyStateResumesCurrentCleanupAfterSourceRemoval(t *testing.T) {
+	root := t.TempDir()
+	source := filepath.Join(root, "legacy-state")
+	destination := filepath.Join(root, "waypost-state")
+	if err := os.MkdirAll(destination, 0o700); err != nil {
+		t.Fatalf("MkdirAll(destination) error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(destination, databaseFilename), []byte("database"), 0o600); err != nil {
+		t.Fatalf("WriteFile(current database) error = %v", err)
+	}
+	marker := newMigrationMarker(source, destination)
+	marker.Stage = migrationStageCopyCommitted
+	if err := writeMigrationMarker(destination, marker); err != nil {
+		t.Fatalf("writeMigrationMarker() error = %v", err)
+	}
+
+	result, err := MigrateLegacyState(destination, source)
+	if err != nil {
+		t.Fatalf("MigrateLegacyState() error = %v", err)
+	}
+	if result.SourceRetained {
+		t.Fatalf("MigrateLegacyState() source retained = true, want false when source is already absent")
+	}
+	if _, err := os.Lstat(migrationMarkerPath(destination)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("migration marker after resumed cleanup = %v, want not exist", err)
 	}
 }
 
@@ -364,11 +432,14 @@ func TestMigrateLegacyStateRestartsIncompleteCrossFilesystemCopy(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(destination, "partial"), []byte("partial"), 0o600); err != nil {
 		t.Fatalf("WriteFile(partial destination) error = %v", err)
 	}
-	if err := writeMigrationMarker(destination, newMigrationMarker(source, destination)); err != nil {
+	marker := newMigrationMarker(source, destination)
+	marker.Stage = migrationStageCopying
+	if err := writeMigrationMarker(destination, marker); err != nil {
 		t.Fatalf("writeMigrationMarker() error = %v", err)
 	}
 
-	if _, err := MigrateLegacyState(destination, source); err != nil {
+	result, err := MigrateLegacyState(destination, source)
+	if err != nil {
 		t.Fatalf("MigrateLegacyState() error = %v", err)
 	}
 	if got, err := os.ReadFile(filepath.Join(destination, databaseFilename)); err != nil || string(got) != "database" {
@@ -377,7 +448,480 @@ func TestMigrateLegacyStateRestartsIncompleteCrossFilesystemCopy(t *testing.T) {
 	if _, err := os.Lstat(filepath.Join(destination, "partial")); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("partial destination after resumed migration = %v, want not exist", err)
 	}
-	if _, err := os.Lstat(migrationMarkerPath(destination)); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("migration marker after resumed copy = %v, want not exist", err)
+	assertFinalMigrationMarker(t, destination, result.SourceRetained && keepMigrationRecoveryMarker())
+}
+
+func TestMigrateLegacyStateRejectsUncommittedCopyWithoutSource(t *testing.T) {
+	root := t.TempDir()
+	source := filepath.Join(root, "legacy-state")
+	destination := filepath.Join(root, "waypost-state")
+	if err := os.MkdirAll(destination, 0o700); err != nil {
+		t.Fatalf("MkdirAll(destination) error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(destination, legacyDatabaseFilename), []byte("database"), 0o600); err != nil {
+		t.Fatalf("WriteFile(legacy database) error = %v", err)
+	}
+	marker := newMigrationMarker(source, destination)
+	marker.Stage = migrationStageCopying
+	if err := writeMigrationMarker(destination, marker); err != nil {
+		t.Fatalf("writeMigrationMarker() error = %v", err)
+	}
+
+	_, err := MigrateLegacyState(destination, source)
+	if err == nil {
+		t.Fatal("MigrateLegacyState() error = nil, want uncommitted copy error")
+	}
+	if !strings.Contains(err.Error(), "no durable copy commit") {
+		t.Fatalf("MigrateLegacyState() error = %q, want durable copy commit guidance", err)
+	}
+	if got, err := os.ReadFile(filepath.Join(destination, legacyDatabaseFilename)); err != nil || string(got) != "database" {
+		t.Fatalf("ReadFile(legacy database) = %q, %v; want database, nil", got, err)
+	}
+	if _, err := os.Lstat(filepath.Join(destination, databaseFilename)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("current database after rejected resume = %v, want not exist", err)
+	}
+	if _, err := os.Lstat(migrationMarkerPath(destination)); err != nil {
+		t.Fatalf("migration marker after rejected resume = %v, want preserved", err)
+	}
+}
+
+func TestMigrateLegacyStateFinishesCommittedCopyAfterSourceRemoval(t *testing.T) {
+	root := t.TempDir()
+	source := filepath.Join(root, "legacy-state")
+	destination := filepath.Join(root, "waypost-state")
+	if err := os.MkdirAll(destination, 0o700); err != nil {
+		t.Fatalf("MkdirAll(destination) error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(destination, legacyDatabaseFilename), []byte("database"), 0o600); err != nil {
+		t.Fatalf("WriteFile(legacy database) error = %v", err)
+	}
+	marker := newMigrationMarker(source, destination)
+	marker.Stage = migrationStageCopyCommitted
+	if err := writeMigrationMarker(destination, marker); err != nil {
+		t.Fatalf("writeMigrationMarker() error = %v", err)
+	}
+
+	result, err := MigrateLegacyState(destination, source)
+	if err != nil {
+		t.Fatalf("MigrateLegacyState() error = %v", err)
+	}
+	if result.SourceRetained {
+		t.Fatalf("MigrateLegacyState() source retained = true, want false when source is already absent")
+	}
+	if got, err := os.ReadFile(filepath.Join(destination, databaseFilename)); err != nil || string(got) != "database" {
+		t.Fatalf("ReadFile(current database) = %q, %v; want database, nil", got, err)
+	}
+	for _, path := range []string{
+		migrationMarkerPath(destination),
+		migrationCopyingMarkerPath(destination),
+		migrationCopiedMarkerPath(destination),
+	} {
+		if _, err := os.Lstat(path); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("migration marker %q after resumed commit = %v, want not exist", path, err)
+		}
+	}
+}
+
+func TestMigrateLegacyStateResumesVersionZeroCommittedCopyAfterSourceRemoval(t *testing.T) {
+	root := t.TempDir()
+	source := filepath.Join(root, "legacy-state")
+	destination := filepath.Join(root, "waypost-state")
+	if err := os.MkdirAll(destination, 0o700); err != nil {
+		t.Fatalf("MkdirAll(destination) error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(destination, legacyDatabaseFilename), []byte("database"), 0o600); err != nil {
+		t.Fatalf("WriteFile(legacy database) error = %v", err)
+	}
+	marker := migrationMarker{Source: source, Destination: destination}
+	if err := writeMigrationMarker(destination, marker); err != nil {
+		t.Fatalf("writeMigrationMarker() error = %v", err)
+	}
+	if err := writeMigrationFile(migrationCopiedMarkerPath(destination), []byte(legacyCopiedMarkerContents), false); err != nil {
+		t.Fatalf("write legacy copy marker error = %v", err)
+	}
+
+	if _, err := MigrateLegacyState(destination, source); err != nil {
+		t.Fatalf("MigrateLegacyState() error = %v", err)
+	}
+	if got, err := os.ReadFile(filepath.Join(destination, databaseFilename)); err != nil || string(got) != "database" {
+		t.Fatalf("ReadFile(current database) = %q, %v; want database, nil", got, err)
+	}
+	for _, path := range []string{
+		migrationMarkerPath(destination),
+		migrationCopiedMarkerPath(destination),
+	} {
+		if _, err := os.Lstat(path); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("legacy migration marker %q after resume = %v, want not exist", path, err)
+		}
+	}
+}
+
+func TestMigrateLegacyStateRejectsVersionZeroMoveWithoutCommitAfterSourceRemoval(t *testing.T) {
+	root := t.TempDir()
+	source := filepath.Join(root, "legacy-state")
+	destination := filepath.Join(root, "waypost-state")
+	if err := os.MkdirAll(destination, 0o700); err != nil {
+		t.Fatalf("MkdirAll(destination) error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(destination, legacyDatabaseFilename), []byte("database"), 0o600); err != nil {
+		t.Fatalf("WriteFile(legacy database) error = %v", err)
+	}
+	marker := migrationMarker{Source: source, Destination: destination}
+	if err := writeMigrationMarker(destination, marker); err != nil {
+		t.Fatalf("writeMigrationMarker() error = %v", err)
+	}
+
+	_, err := MigrateLegacyState(destination, source)
+	if err == nil {
+		t.Fatal("MigrateLegacyState() error = nil, want missing copy commit error")
+	}
+	if !strings.Contains(err.Error(), "lacks a durable copy commit") {
+		t.Fatalf("MigrateLegacyState() error = %q, want missing copy commit guidance", err)
+	}
+	if got, err := os.ReadFile(filepath.Join(destination, legacyDatabaseFilename)); err != nil || string(got) != "database" {
+		t.Fatalf("ReadFile(legacy database) = %q, %v; want database, nil", got, err)
+	}
+	if _, err := os.Lstat(migrationMarkerPath(destination)); err != nil {
+		t.Fatalf("legacy migration marker after rejected resume = %v, want preserved", err)
+	}
+}
+
+func TestMigrateLegacyStateRestartsVersionZeroMigrationFromSource(t *testing.T) {
+	root := t.TempDir()
+	source := filepath.Join(root, "legacy-state")
+	destination := filepath.Join(root, "waypost-state")
+	if err := os.MkdirAll(source, 0o700); err != nil {
+		t.Fatalf("MkdirAll(source) error = %v", err)
+	}
+	if err := os.MkdirAll(destination, 0o700); err != nil {
+		t.Fatalf("MkdirAll(destination) error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(source, legacyDatabaseFilename), []byte("source database"), 0o600); err != nil {
+		t.Fatalf("WriteFile(source database) error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(destination, "partial"), []byte("partial"), 0o600); err != nil {
+		t.Fatalf("WriteFile(partial destination) error = %v", err)
+	}
+	if err := writeMigrationMarker(destination, migrationMarker{Source: source, Destination: destination}); err != nil {
+		t.Fatalf("writeMigrationMarker() error = %v", err)
+	}
+
+	result, err := migrateLegacyState(destination, source, crossDeviceRenameError)
+	if err != nil {
+		t.Fatalf("migrateLegacyState() error = %v", err)
+	}
+	if got, err := os.ReadFile(filepath.Join(destination, databaseFilename)); err != nil || string(got) != "source database" {
+		t.Fatalf("ReadFile(current database) = %q, %v; want source database, nil", got, err)
+	}
+	if _, err := os.Lstat(filepath.Join(destination, "partial")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("partial destination after source restart = %v, want not exist", err)
+	}
+	assertFinalMigrationMarker(t, destination, result.SourceRetained && keepMigrationRecoveryMarker())
+}
+
+func TestMigrateLegacyStateRestartsMovingMigrationFromSource(t *testing.T) {
+	root := t.TempDir()
+	source := filepath.Join(root, "legacy-state")
+	destination := filepath.Join(root, "waypost-state")
+	if err := os.MkdirAll(source, 0o700); err != nil {
+		t.Fatalf("MkdirAll(source) error = %v", err)
+	}
+	if err := os.MkdirAll(destination, 0o700); err != nil {
+		t.Fatalf("MkdirAll(destination) error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(source, legacyDatabaseFilename), []byte("source database"), 0o600); err != nil {
+		t.Fatalf("WriteFile(source database) error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(destination, "partial"), []byte("partial"), 0o600); err != nil {
+		t.Fatalf("WriteFile(partial destination) error = %v", err)
+	}
+	if err := writeMigrationMarker(destination, newMigrationMarker(source, destination)); err != nil {
+		t.Fatalf("writeMigrationMarker() error = %v", err)
+	}
+
+	result, err := migrateLegacyState(destination, source, crossDeviceRenameError)
+	if err != nil {
+		t.Fatalf("migrateLegacyState() error = %v", err)
+	}
+	if got, err := os.ReadFile(filepath.Join(destination, databaseFilename)); err != nil || string(got) != "source database" {
+		t.Fatalf("ReadFile(current database) = %q, %v; want source database, nil", got, err)
+	}
+	if _, err := os.Lstat(filepath.Join(destination, "partial")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("partial destination after source restart = %v, want not exist", err)
+	}
+	assertFinalMigrationMarker(t, destination, result.SourceRetained && keepMigrationRecoveryMarker())
+}
+
+func TestMigrateLegacyStateRestartsOwnedDestinationWithoutPrimaryMarker(t *testing.T) {
+	root := t.TempDir()
+	source := filepath.Join(root, "legacy-state")
+	destination := filepath.Join(root, "waypost-state")
+	if err := os.MkdirAll(source, 0o700); err != nil {
+		t.Fatalf("MkdirAll(source) error = %v", err)
+	}
+	if err := os.MkdirAll(destination, 0o700); err != nil {
+		t.Fatalf("MkdirAll(destination) error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(source, legacyDatabaseFilename), []byte("source database"), 0o600); err != nil {
+		t.Fatalf("WriteFile(source database) error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(destination, "partial"), []byte("partial"), 0o600); err != nil {
+		t.Fatalf("WriteFile(partial destination) error = %v", err)
+	}
+	if err := writeMigrationOwnership(destination, newMigrationMarker(source, destination)); err != nil {
+		t.Fatalf("writeMigrationOwnership() error = %v", err)
+	}
+
+	result, err := migrateLegacyState(destination, source, crossDeviceRenameError)
+	if err != nil {
+		t.Fatalf("migrateLegacyState() error = %v", err)
+	}
+	if got, err := os.ReadFile(filepath.Join(destination, databaseFilename)); err != nil || string(got) != "source database" {
+		t.Fatalf("ReadFile(current database) = %q, %v; want source database, nil", got, err)
+	}
+	if _, err := os.Lstat(filepath.Join(destination, "partial")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("partial destination after owned recovery = %v, want not exist", err)
+	}
+	assertFinalMigrationMarker(t, destination, result.SourceRetained && keepMigrationRecoveryMarker())
+}
+
+func TestMigrateLegacyStateKeepsFinalizedRetainedCopy(t *testing.T) {
+	if !keepMigrationRecoveryMarker() {
+		t.Skip("only Windows retains a recovery marker")
+	}
+
+	root := t.TempDir()
+	source := filepath.Join(root, "legacy-state")
+	destination := filepath.Join(root, "waypost-state")
+	if err := os.MkdirAll(source, 0o700); err != nil {
+		t.Fatalf("MkdirAll(source) error = %v", err)
+	}
+	if err := os.MkdirAll(destination, 0o700); err != nil {
+		t.Fatalf("MkdirAll(destination) error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(source, legacyDatabaseFilename), []byte("legacy database"), 0o600); err != nil {
+		t.Fatalf("WriteFile(legacy database) error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(destination, databaseFilename), []byte("new waypost data"), 0o600); err != nil {
+		t.Fatalf("WriteFile(current database) error = %v", err)
+	}
+	marker := newMigrationMarker(source, destination)
+	marker.Stage = migrationStageCopyCommitted
+	if err := writeMigrationMarker(destination, marker); err != nil {
+		t.Fatalf("writeMigrationMarker() error = %v", err)
+	}
+
+	result, err := MigrateLegacyState(destination, source)
+	if err != nil {
+		t.Fatalf("MigrateLegacyState() error = %v", err)
+	}
+	if !result.SourceRetained {
+		t.Fatal("MigrateLegacyState() source retained = false, want retained Windows recovery source")
+	}
+	if got, err := os.ReadFile(filepath.Join(destination, databaseFilename)); err != nil || string(got) != "new waypost data" {
+		t.Fatalf("ReadFile(current database) = %q, %v; want preserved Waypost data, nil", got, err)
+	}
+	assertFinalMigrationMarker(t, destination, true)
+}
+
+func TestMigrateLegacyStateKeepsFinalizedOwnedDestinationWithoutPrimaryMarker(t *testing.T) {
+	if !keepMigrationRecoveryMarker() {
+		t.Skip("only Windows retains a recovery marker")
+	}
+
+	root := t.TempDir()
+	source := filepath.Join(root, "legacy-state")
+	destination := filepath.Join(root, "waypost-state")
+	if err := os.MkdirAll(source, 0o700); err != nil {
+		t.Fatalf("MkdirAll(source) error = %v", err)
+	}
+	if err := os.MkdirAll(destination, 0o700); err != nil {
+		t.Fatalf("MkdirAll(destination) error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(source, legacyDatabaseFilename), []byte("legacy database"), 0o600); err != nil {
+		t.Fatalf("WriteFile(legacy database) error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(destination, databaseFilename), []byte("new waypost data"), 0o600); err != nil {
+		t.Fatalf("WriteFile(current database) error = %v", err)
+	}
+	if err := writeMigrationOwnership(destination, newMigrationMarker(source, destination)); err != nil {
+		t.Fatalf("writeMigrationOwnership() error = %v", err)
+	}
+
+	result, err := MigrateLegacyState(destination, source)
+	if err != nil {
+		t.Fatalf("MigrateLegacyState() error = %v", err)
+	}
+	if !result.SourceRetained {
+		t.Fatal("MigrateLegacyState() source retained = false, want retained Windows recovery source")
+	}
+	if got, err := os.ReadFile(filepath.Join(destination, databaseFilename)); err != nil || string(got) != "new waypost data" {
+		t.Fatalf("ReadFile(current database) = %q, %v; want preserved Waypost data, nil", got, err)
+	}
+	assertFinalMigrationMarker(t, destination, true)
+}
+
+func TestMigrateLegacyStateRecoversVersion2CleanupInterruptions(t *testing.T) {
+	tests := []struct {
+		name          string
+		copying       bool
+		copied        bool
+		sourcePresent bool
+	}{
+		{
+			name:    "before stage cleanup",
+			copying: true,
+			copied:  true,
+		},
+		{
+			name:    "after copy commit marker cleanup",
+			copying: true,
+		},
+		{
+			name:          "after copy commit marker cleanup with retained source",
+			copying:       true,
+			sourcePresent: true,
+		},
+		{
+			name: "after stage marker cleanup",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			root := t.TempDir()
+			source := filepath.Join(root, "legacy-state")
+			destination := filepath.Join(root, "waypost-state")
+			if test.sourcePresent {
+				if err := os.MkdirAll(source, 0o700); err != nil {
+					t.Fatalf("MkdirAll(source) error = %v", err)
+				}
+			}
+			if err := os.MkdirAll(destination, 0o700); err != nil {
+				t.Fatalf("MkdirAll(destination) error = %v", err)
+			}
+			if err := os.WriteFile(filepath.Join(destination, databaseFilename), []byte("database"), 0o600); err != nil {
+				t.Fatalf("WriteFile(current database) error = %v", err)
+			}
+			marker := migrationMarker{
+				Version:     legacyStagedMarkerVersion,
+				Source:      source,
+				Destination: destination,
+			}
+			if err := writeMigrationMarker(destination, marker); err != nil {
+				t.Fatalf("writeMigrationMarker() error = %v", err)
+			}
+			if test.copying {
+				if err := writeMigrationCopyingMarker(destination); err != nil {
+					t.Fatalf("writeMigrationCopyingMarker() error = %v", err)
+				}
+			}
+			if test.copied {
+				if err := writeMigrationCopiedMarker(destination); err != nil {
+					t.Fatalf("writeMigrationCopiedMarker() error = %v", err)
+				}
+			}
+
+			result, err := MigrateLegacyState(destination, source)
+			if err != nil {
+				t.Fatalf("MigrateLegacyState() error = %v", err)
+			}
+			wantSourceRetained := test.sourcePresent && retainLegacySourceAfterCopy()
+			if result.SourceRetained != wantSourceRetained {
+				t.Fatalf("MigrateLegacyState() source retained = %t, want %t", result.SourceRetained, wantSourceRetained)
+			}
+			assertFinalMigrationMarker(t, destination, result.SourceRetained && keepMigrationRecoveryMarker())
+			for _, path := range []string{
+				migrationCopyingMarkerPath(destination),
+				migrationCopiedMarkerPath(destination),
+			} {
+				if _, err := os.Lstat(path); !errors.Is(err, os.ErrNotExist) {
+					t.Fatalf("migration marker %q after resumed cleanup = %v, want not exist", path, err)
+				}
+			}
+		})
+	}
+}
+
+func TestMigrateLegacyStateRefusesUnmarkedDestination(t *testing.T) {
+	root := t.TempDir()
+	source := filepath.Join(root, "legacy-state")
+	destination := filepath.Join(root, "waypost-state")
+	if err := os.MkdirAll(destination, 0o700); err != nil {
+		t.Fatalf("MkdirAll(destination) error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(destination, legacyDatabaseFilename), []byte("database"), 0o600); err != nil {
+		t.Fatalf("WriteFile(legacy database) error = %v", err)
+	}
+
+	_, err := MigrateLegacyState(destination, source)
+	if err == nil {
+		t.Fatal("MigrateLegacyState() error = nil, want existing destination error")
+	}
+	if got, err := os.ReadFile(filepath.Join(destination, legacyDatabaseFilename)); err != nil || string(got) != "database" {
+		t.Fatalf("ReadFile(legacy database) = %q, %v; want database, nil", got, err)
+	}
+	if _, err := os.Lstat(filepath.Join(destination, databaseFilename)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("current database after rejected unmarked destination = %v, want not exist", err)
+	}
+}
+
+func TestEnsureMigrationCompleteRecoversOrphanedVersion2CleanupMarker(t *testing.T) {
+	stateDir := filepath.Join(t.TempDir(), "waypost-state")
+	if err := os.MkdirAll(stateDir, 0o700); err != nil {
+		t.Fatalf("MkdirAll(stateDir) error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(stateDir, databaseFilename), []byte("database"), 0o600); err != nil {
+		t.Fatalf("WriteFile(current database) error = %v", err)
+	}
+	if err := writeMigrationCopyingMarker(stateDir); err != nil {
+		t.Fatalf("writeMigrationCopyingMarker() error = %v", err)
+	}
+
+	if err := ensureMigrationComplete(stateDir); err != nil {
+		t.Fatalf("ensureMigrationComplete() error = %v", err)
+	}
+	if _, err := os.Lstat(migrationCopyingMarkerPath(stateDir)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("orphaned stage marker after recovery = %v, want not exist", err)
+	}
+}
+
+func TestOpenRuntimeRejectsOrphanedMigrationStageMarkers(t *testing.T) {
+	stateDir := filepath.Join(t.TempDir(), "waypost-state")
+	if err := writeMigrationCopyingMarker(stateDir); err != nil {
+		t.Fatalf("writeMigrationCopyingMarker() error = %v", err)
+	}
+
+	_, err := OpenRuntime(context.Background(), stateDir)
+	if err == nil {
+		t.Fatal("OpenRuntime() error = nil, want incomplete migration error")
+	}
+	if !strings.Contains(err.Error(), "stage markers") {
+		t.Fatalf("OpenRuntime() error = %q, want stage-marker guidance", err)
+	}
+	if _, err := os.Lstat(stateDir); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("state directory after rejected OpenRuntime = %v, want not exist", err)
+	}
+}
+
+func TestMigrateLegacyStateCopiesReadOnlyDatabaseAcrossFilesystems(t *testing.T) {
+	root := t.TempDir()
+	source := filepath.Join(root, "legacy-state")
+	destination := filepath.Join(root, "waypost-state")
+	if err := os.MkdirAll(source, 0o700); err != nil {
+		t.Fatalf("MkdirAll(source) error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(source, legacyDatabaseFilename), []byte("database"), 0o400); err != nil {
+		t.Fatalf("WriteFile(legacy database) error = %v", err)
+	}
+
+	_, err := migrateLegacyState(destination, source, func(oldPath, newPath string) error {
+		return &os.LinkError{Op: "rename", Old: oldPath, New: newPath, Err: syscall.EXDEV}
+	})
+	if err != nil {
+		t.Fatalf("migrateLegacyState() error = %v", err)
+	}
+	if got, err := os.ReadFile(filepath.Join(destination, databaseFilename)); err != nil || string(got) != "database" {
+		t.Fatalf("ReadFile(current database) = %q, %v; want database, nil", got, err)
 	}
 }
