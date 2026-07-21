@@ -137,7 +137,8 @@ Windows:
 Install into `/usr/local/bin`:
 
 ```bash
-make install
+make build
+sudo make install
 ```
 
 On Windows, `install` writes a stable launcher into `%USERPROFILE%\.local\bin`
@@ -154,6 +155,7 @@ version recorded in `lib\waypost\active-version.json`.
 Install into a user-local prefix without needing root:
 
 ```bash
+make build
 make install PREFIX="$HOME/.local"
 ```
 
