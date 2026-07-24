@@ -12,7 +12,7 @@ It does not add or modify:
 - cross-repository configuration
 
 The goal is one small MCP surface for frequent agent work, with the complete
-Waypost capability surface available through CLI.
+durable-state Waypost capability surface available through CLI.
 
 ## Hard-Cut Decision
 
@@ -90,6 +90,10 @@ Before deletion:
 - add group subscriber add, remove, and list CLI commands
 - add structured JSON output to `undefer`
 - preserve acknowledged-message recovery through `read --latest --state acked`
+- make `waypost_status` report the exact executable and resolved state
+  directory used by the MCP process
+- prove an agent can call status and use those reported values to execute a
+  removed operation through CLI
 - freeze success, empty-result, ordering, error, exit-code, and stream behavior
   with integration tests
 - provide a relevant `waypost doc` topic
@@ -503,6 +507,9 @@ Automated checks cover:
 - status, bind, and debug bootstrap/repair behavior
 - send, forward, recv, claim history, and lease lifecycle through MCP
 - Agent Deck resolve/create/require behavior remains unchanged
+- one end-to-end replacement test calls `waypost_status`, invokes its reported
+  executable with its reported state directory, and completes a removed
+  operation
 - CLI JSON error codes, retryability, exit codes, stdout, and stderr
 - `recv` never emits `has_more`
 - `remaining_by_state` is sparse and excludes returned and acked deliveries
@@ -568,9 +575,10 @@ and human-oriented detail.
 
 1. complete missing subscriber and `undefer --json` CLI paths
 2. add the stable CLI JSON error contract and operation-matrix tests
-3. add concise embedded `waypost doc` topics and prompt tests
-4. hard-cut MCP registration to the fourteen retained typed tools
-5. delete `recv.has_more` and add exact personal/group receive results
-6. add remaining-state counts and post-claim rollback/recovery
-7. add executable and resolved state directory to `waypost_status`
-8. run the full CLI, MCP, concurrency, prompt, query-plan, and benchmark suite
+3. add executable and resolved state directory to `waypost_status`
+4. add the status-to-CLI end-to-end replacement test
+5. add concise embedded `waypost doc` topics and prompt tests
+6. hard-cut MCP registration to the fourteen retained typed tools
+7. delete `recv.has_more` and add exact personal/group receive results
+8. add remaining-state counts and post-claim rollback/recovery
+9. run the full CLI, MCP, concurrency, prompt, query-plan, and benchmark suite
