@@ -16,7 +16,7 @@ durable-state Waypost capability surface available through CLI.
 
 ## Hard-Cut Decision
 
-Waypost MCP exposes exactly fourteen tools after this change. There is no
+Waypost MCP exposes exactly twelve tools after this change. There is no
 `full` profile, `hybrid` profile, profile flag, legacy tool set, capability
 manifest, or runtime capability registry.
 
@@ -35,13 +35,11 @@ The retained tools are:
 - `waypost_bind`
 - `waypost_debug`
 - `waypost_send`
-- `waypost_forward`
 - `waypost_recv`
 - `waypost_claim_history`
 - `waypost_ack`
 - `waypost_release`
 - `waypost_defer`
-- `waypost_fail`
 - `agent_deck_resolve_session`
 - `agent_deck_create_session`
 - `agent_deck_require_session`
@@ -51,12 +49,9 @@ The retained tools are:
 `status`, `bind`, and `debug` own live state in the long-running MCP
 process. A separate CLI process cannot repair that MCP instance.
 
-`send`, `recv`, claim history, and the four lease lifecycle operations form
-the common message path. Receive and completion also interact with the MCP
-active-lease tracker and renewal loop.
-
-`forward` remains because the current MCP path includes target notification
-behavior not yet provided by CLI forward.
+`send`, `recv`, claim history, and `ack`/`release`/`defer` form the common
+message path. Receive and these common lease transitions also interact with
+the MCP active-lease tracker and renewal loop.
 
 The three Agent Deck session tools remain because they are frequent structured
 operations. Their implementation is unchanged and remains outside the rest of
@@ -69,10 +64,12 @@ operation.
 
 These MCP tools are deleted:
 
+- `waypost_forward`
 - `waypost_wait`
 - `waypost_list`
 - `waypost_read`
 - `waypost_undefer`
+- `waypost_fail`
 - `waypost_group_create`
 - `waypost_group_add_member`
 - `waypost_group_remove_member`
@@ -85,10 +82,17 @@ These MCP tools are deleted:
 They operate on durable Waypost state and do not need live MCP binding or lease
 tracker mutation when address, group, person, and state directory are explicit.
 
+The required `forward` behavior is durable forwarding. The MCP-only target
+notification side effect is not part of the replacement contract, and this
+design adds no notification compatibility layer. `fail` is an exceptional
+lease transition rather than a common agent operation. CLI owns it once its
+structured result is complete; MCP lease tracking is reconciled from durable
+delivery state rather than requiring `waypost_fail` to mutate the tracker.
+
 Before deletion:
 
 - add group subscriber add, remove, and list CLI commands
-- add structured JSON output to `undefer`
+- add structured JSON output to `undefer` and `fail`
 - preserve acknowledged-message recovery through `read --latest --state acked`
 - make `waypost_status` report the exact executable and resolved state
   directory used by the MCP process
@@ -142,10 +146,12 @@ Full record names below refer to the existing exported Waypost JSON records.
 
 | Removed MCP tool | Canonical CLI route | Success and ordering | Empty/error behavior | Doc topic |
 | --- | --- | --- | --- | --- |
+| `waypost_forward` | `forward (--message ID | --delivery ID) --to ADDRESS [--from ADDRESS] [--group] [--subject TEXT] --json` | Compact `ForwardResult`; exactly one source id | Missing source: `not_found`. Unknown explicit group: `not_found`. Conflicting source ids: `invalid_argument` | `mcp-cli-boundary` |
 | `waypost_wait` | `wait --for ADDRESS [--as PERSON] --timeout D --json` | Personal compact delivery or group compact message; oldest eligible first | No match: exit `2`, silent. Unknown group: `not_found` | `mcp-cli-boundary` |
 | `waypost_list` | `list --for ADDRESS [--state STATE | --as PERSON] --json` | Personal `ListedDelivery[]`, visible/created/id ascending; group summaries created/id ascending | Unknown personal address: `[]`. Unknown group: `not_found` | `history` |
 | `waypost_read` | `read (--delivery ID... | --message ID... | --latest --for ADDRESS... [--state STATE] [--limit N]) --json` | `{"items":[...]}`; direct reads preserve input order and latest reads are newest first | Missing direct id: atomic `not_found`. Unknown latest address: empty items. Blob mismatch: `integrity_error` | `recovery`, `history` |
 | `waypost_undefer` | `undefer --delivery ID --json` | `delivery_id`, `state`, `visible_at`, `attempt_count` | Missing: `not_found`. Non-deferred state: `invalid_state` | `recovery` |
+| `waypost_fail` | `fail --delivery ID --lease-token TOKEN --reason TEXT --json` | `delivery_id`, resulting `queued` or `dead_letter` state, `visible_at`, `attempt_count` | Missing delivery: `not_found`. Non-leased state or token mismatch: `invalid_state` | `recovery` |
 | `waypost_group_create` | `group create --group ADDRESS --json` | `GroupRecord` | Existing group: `already_exists`; endpoint-owned address: `invalid_state` | `groups` |
 | `waypost_group_add_member` | `group add-member --group ADDRESS --person PERSON --json` | `GroupMembershipRecord` | Missing group: `not_found`; active membership: `already_exists` | `groups` |
 | `waypost_group_remove_member` | `group remove-member --group ADDRESS --person PERSON --json` | Updated `GroupMembershipRecord` | Missing group: `not_found`; no active membership: `invalid_state` | `groups` |
@@ -171,7 +177,7 @@ func registerWaypostTools(server *mcp.Server) {
 }
 ```
 
-Tests assert the exact fourteen tool names. A removed tool appearing in the
+Tests assert the exact twelve tool names. A removed tool appearing in the
 MCP list is a test failure.
 
 `waypost_status` continues to report the live MCP information needed to use
@@ -191,6 +197,23 @@ An agent invoking CLI uses that executable and state directory and passes
 address, group, and person explicitly. It does not guess from `PATH` or an
 unrelated Waypost installation. How an MCP host executes a local process is
 outside this design.
+
+The MCP server instructions are themselves a concise agent prompt:
+
+```text
+The first tool call must be waypost_status; it auto-binds detectable agent
+session addresses and reports warnings. All other tools fail until it has run.
+MCP exposes only common operations. For complete Waypost functionality and
+workflow guidance, use the reported executable:
+  <executable> doc --list
+  <executable> doc <topic>
+Run stateful CLI operations with the reported resolved_state_dir. Do not guess
+another binary or state directory.
+```
+
+This adds no command catalog to the MCP instructions. `waypost doc` owns the
+complete workflow prompt, while MCP instructions only identify that entry
+point and the authoritative binary and state directory.
 
 ## Receive Contract
 
@@ -304,6 +327,27 @@ immediately.
 
 Use one grouped `COUNT(*)` query over resolved endpoint ids and unfinished
 states, excluding returned ids. It must not read message rows or body blobs.
+
+### Active-lease reconciliation
+
+The in-memory active-lease tracker is a cache; durable delivery state is
+authoritative.
+
+Before renewing a tracked lease, MCP reads the current delivery state and lease
+token. It calls `Renew` only when the delivery is still `leased` with the same
+token. A missing delivery, any non-leased state, or a changed token removes the
+entry from the active set, prevents claim history from reporting it as active,
+and is never renewed. An inspection error keeps the entry for a later retry but
+skips renewal; it must not be bypassed by renewing from stale memory. The atomic
+predicates in `Renew` remain necessary to close the race between inspection and
+update.
+
+Before `recv` returns `active_leases` from tracked entries, it performs the same
+reconciliation so a CLI `fail` or another external lease transition cannot
+leave a stale MCP gate. If inspection fails, `recv` reports that error instead
+of presenting the stale cache as authoritative. This is the root-cause fix that
+allows `waypost_fail` to be CLI-owned without an MCP-specific tracker mutation
+path.
 
 ### Post-claim count failure
 
@@ -453,9 +497,8 @@ It must not mention:
 - provider-specific addresses as authoritative examples
 - YAML, legacy payloads, migration history, Web UI, or demo setup
 
-It does not teach CLI `send`, `recv`, `ack`, `release`, `defer`, or
-`fail` as the normal agent path because those operations remain direct MCP
-tools.
+It does not teach CLI `send`, `recv`, `ack`, `release`, or `defer` as the
+normal agent path because those operations remain direct MCP tools.
 
 ### Prompt shape
 
@@ -501,12 +544,15 @@ Topic responsibilities:
 
 Automated checks cover:
 
-- MCP exposes exactly the fourteen retained tool names
+- MCP exposes exactly the twelve retained tool names
 - every deleted MCP tool is absent
 - every deleted tool's CLI route satisfies the operation matrix
 - status, bind, and debug bootstrap/repair behavior
-- send, forward, recv, claim history, and lease lifecycle through MCP
+- send, recv, claim history, and `ack`/`release`/`defer` through MCP
 - Agent Deck resolve/create/require behavior remains unchanged
+- MCP server instructions identify `waypost doc --list` and the per-topic
+  `waypost doc TOPIC` form as the complete CLI guidance entry points and require
+  the binary and state directory reported by `waypost_status`
 - one end-to-end replacement test calls `waypost_status`, invokes its reported
   executable with its reported state directory, and completes a removed
   operation
@@ -518,6 +564,10 @@ Automated checks cover:
 - complete count-failure rollback returns no hidden lease
 - incomplete rollback returns every unreleased id/token and MCP tracks exactly
   those claims
+- CLI `fail` followed by MCP reconciliation is not renewed, is removed from the
+  active set, and cannot cause a stale `active_leases` receive result
+- renewal never proceeds when durable-state inspection fails or reports a
+  non-leased delivery or changed token
 - concurrent and batch claims retain existing correctness
 - `read.has_more` appears only when true
 - every prompt stays within its word budget and contains no forbidden material
@@ -532,7 +582,7 @@ Automated checks cover:
   testing their commands keeps them version-matched.
 - Remaining-state counting adds receive-path work. The index, query-plan test,
   rollback invariant, and benchmark bound the risk.
-- Fourteen tools are not the theoretical minimum, but each retained tool is
+- Twelve tools are not the theoretical minimum, but each retained tool is
   justified by frequency or live MCP state.
 
 ## Rejected Alternatives
@@ -552,10 +602,11 @@ metadata, prove CLI completeness and the exact MCP surface.
 Rejected because uncommon schemas and choices consume agent context on every
 turn.
 
-### Move lease completion to CLI
+### Move every lease completion to CLI
 
-Rejected because the MCP active-lease tracker and renewal loop must observe
-completion.
+Rejected because `ack`, `release`, and `defer` are common message-path
+operations. Exceptional `fail` is CLI-owned; durable-state reconciliation keeps
+the MCP tracker and renewal loop correct without exposing it as a tool.
 
 ### Move Agent Deck session tools to CLI
 
@@ -573,12 +624,14 @@ and human-oriented detail.
 
 ## Implementation Order
 
-1. complete missing subscriber and `undefer --json` CLI paths
+1. complete missing subscriber, `undefer --json`, and `fail --json` CLI paths
 2. add the stable CLI JSON error contract and operation-matrix tests
 3. add executable and resolved state directory to `waypost_status`
 4. add the status-to-CLI end-to-end replacement test
 5. add concise embedded `waypost doc` topics and prompt tests
-6. hard-cut MCP registration to the fourteen retained typed tools
-7. delete `recv.has_more` and add exact personal/group receive results
-8. add remaining-state counts and post-claim rollback/recovery
-9. run the full CLI, MCP, concurrency, prompt, query-plan, and benchmark suite
+6. reconcile tracked leases from durable state before renewal and before the
+   `active_leases` receive gate
+7. hard-cut MCP registration to the twelve retained typed tools
+8. delete `recv.has_more` and add exact personal/group receive results
+9. add remaining-state counts and post-claim rollback/recovery
+10. run the full CLI, MCP, concurrency, prompt, query-plan, and benchmark suite
