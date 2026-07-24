@@ -70,6 +70,8 @@ The design therefore has two inseparable parts:
 - Replace repeated generic skill instructions with versioned CLI documentation.
 - Clearly separate Waypost concurrency semantics from workflow-level
   serialization policy.
+- Let one `recv` response reveal non-acknowledged work still in scope without a
+  follow-up inventory call.
 - Keep tool selection predictable enough that agents do not need exploratory
   `--help` calls during the normal path.
 
@@ -251,11 +253,10 @@ Extend `waypost_status` with a machine-readable CLI context:
   "server_version": "<build version>",
   "build_id": "<immutable build id>",
   "executable_sha256": "<startup executable digest>",
+  "mcp_instance_id": "<session-scoped instance id>",
   "tool_profile": "hybrid",
   "capability_manifest_version": 1,
-  "hybrid_preflight": "healthy",
   "active_lease_count": 0,
-  "profile_transition_allowed": true,
   "resolved_state_dir": "/absolute/path/to/waypost-state",
   "bound_addresses": ["agent-deck/<session-id>"],
   "default_sender": "agent-deck/<session-id>",
@@ -266,6 +267,25 @@ Extend `waypost_status` with a machine-readable CLI context:
     "build_id": "<same immutable build id>",
     "executable_sha256": "<same startup executable digest>",
     "argv_prefix": ["--state-dir", "/absolute/path/to/waypost-state"]
+  },
+  "hybrid_preflight": {
+    "waypost_local": {
+      "status": "healthy",
+      "capability_manifest_sha256": "<manifest digest>"
+    },
+    "agent_deck_adapter_attestation": {
+      "status": "attested",
+      "session_id": "<current-agent-deck-session-id>",
+      "mcp_instance_id": "<same session-scoped instance id>",
+      "tool_profile": "hybrid",
+      "agent_deck_executable": "/absolute/path/to/agent-deck",
+      "agent_deck_build_id": "<immutable build id>",
+      "agent_deck_executable_sha256": "<startup executable digest>",
+      "request_runtime_dir": "/private/agent-deck/runtime/session-id",
+      "waypost_executable_sha256": "<same Waypost digest>",
+      "capability_manifest_version": 1,
+      "capability_manifest_sha256": "<same manifest digest>"
+    }
   }
 }
 ```
@@ -276,13 +296,38 @@ Add:
 waypost version --json
 ```
 
-The hybrid CLI preflight is:
+Waypost owns the local half of hybrid preflight. It verifies:
+
+- its startup-cached executable digest and immutable build id
+- the currently resolved state directory
+- the selected tool profile
+- the capability manifest version and digest generated from its authoritative
+  registry
+
+Agent Deck owns the external adapter half. At Agent Deck session creation it
+chooses one immutable tool profile and one exact configured Agent Deck
+executable, assigns the MCP instance id, verifies that the configured adapter
+subcommand exists, and records the executable/build/digest and Waypost
+manifest identity in the session-start attestation above. The attestation is
+delivered once over an inherited read-only startup channel rather than a
+workspace file, then cached immutably for that Agent Deck session.
+
+`waypost_status` reports these two results separately. Waypost may validate
+that the supplied attestation is structurally bound to its session id, MCP
+instance id, profile, executable digest, and manifest identity, but it must not
+claim that it independently inspected or executed the external Agent Deck
+adapter.
+
+The per-command hybrid CLI preflight is:
 
 1. call `waypost_status`
-2. execute exactly `cli_context.executable`, not a fresh `PATH` lookup
-3. call that executable's `version --json`
-4. require version, immutable build id, and executable SHA-256 to equal the
-   values cached by the MCP process at startup
+2. require the Waypost-local result to be healthy and the Agent Deck
+   attestation to be present and consistent with the active session/profile
+3. invoke exactly the attested `agent_deck_executable`, not a fresh `PATH`
+   lookup
+4. let that adapter execute exactly `cli_context.executable` and verify its
+   `version --json`, immutable build id, executable SHA-256, and capability
+   manifest against both status and the session-start attestation
 5. prepend `cli_context.argv_prefix` to every stateful Waypost CLI command
 6. pass the operation's address, sender, and person identity explicitly
 
@@ -294,10 +339,12 @@ The MCP computes and caches its executable digest during process startup. It
 must not re-hash the path only when `status` is called, because the file at that
 path may have been replaced while the old process is still running.
 
-In `hybrid`, the first `waypost_status` performs executable/build/state-dir and
-host-adapter preflight before enabling message tools. If preflight fails, status
-returns the mismatch and all tools except status/bind/debug remain gated. This
-prevents a known-bad hybrid process from claiming work.
+In `hybrid`, the first `waypost_status` completes Waypost-local preflight and
+checks that a matching Agent Deck attestation was supplied before enabling
+message tools. If either side is unhealthy or inconsistent, status returns the
+separate results and all tools except status/bind/debug remain gated. This
+prevents a known-bad hybrid process from claiming work without overstating what
+Waypost verified about another executable.
 
 Bindings are candidates, not implicit CLI authority. A skill or workflow
 context still chooses the exact address. CLI-only commands must use explicit
@@ -324,7 +371,7 @@ added before removing the MCP tool.
 | `waypost_send` | MCP | `waypost send --to A --from S --body-file P --json` exists but is not the normal hybrid path | Store plus MCP bound sender and notifier | Delivery/group acknowledgement; validation or persistence failure | `quickstart` |
 | `waypost_forward` | MCP | `waypost forward (--message M \| --delivery D) --to A --from S --json` lacks MCP notify parity | Store plus MCP bound sender and notifier | Forward acknowledgement and notify result; source/target validation failure | `history` |
 | `waypost_wait` | CLI | `waypost --state-dir D wait --for A [--as P] [--timeout T] --json` | Store; address/person explicit | Compact metadata; exit `2` on timeout/no message; never claims | `history` |
-| `waypost_recv` | MCP | `waypost recv ... --json` remains available for non-MCP consumers | Store plus MCP bindings and active leases | Claimed message/lease or no-message result; MCP tracks personal leases | `delivery-lifecycle` |
+| `waypost_recv` | MCP | `waypost recv ... --json` remains available for non-MCP consumers | Store plus MCP bindings and active leases | Claimed message/lease or no-message result plus sparse remaining-work snapshot; MCP tracks personal leases | `delivery-lifecycle` |
 | `waypost_claim_history` | MCP | None | MCP active-lease history | Current/terminal tracked lease data; token disclosure remains explicit | `recovery` |
 | `waypost_list` | CLI | `waypost --state-dir D list --for A [--state S \| --as P] --json` | Store; address/person explicit | JSON array; empty list is success; invalid filter combination fails | `history` |
 | `waypost_read` | CLI after acknowledged-history parity test | Recovery uses `waypost --state-dir D read --latest --for A --state acked --limit 1 --json`; direct id modes remain `--message M` or `--delivery D` | Store; address/state/limit or identifiers explicit | `{items,has_more}` newest-first; each delivery item contains delivery/message ids and body; selector and integrity failures are errors | `recovery` |
@@ -419,65 +466,82 @@ Group receive has different semantics:
 
 The CLI documentation must name these distinctions explicitly.
 
-## Lease Quiescence And Profile Transitions
+### Remaining-work snapshot
 
-Tool profile is fixed for one MCP process. There is no in-place profile change.
-A profile transition means stopping that process and starting another one, so it
-must respect MCP-owned active leases.
-
-### Prevent bad claims
-
-In `hybrid`, `waypost_status` completes executable/build/state-dir/adapter
-preflight before `waypost_recv` is enabled. A known-bad hybrid context therefore
-cannot claim new personal work.
-
-### Controlled restart gate
-
-`waypost_status` reports `active_lease_count` and
-`profile_transition_allowed = active_lease_count == 0`.
-
-The Waypost MCP also atomically maintains a non-secret runtime guard record
-under its resolved state directory:
+Personal `recv` structured results add a sparse `remaining_by_state` object:
 
 ```json
 {
-  "mcp_instance_id": "<id>",
-  "agent_deck_session_id": "<id>",
-  "pid": 1234,
-  "tool_profile": "hybrid",
-  "accepting_work": true,
-  "active_lease_count": 0,
-  "updated_at": "<RFC3339>"
+  "status": "received",
+  "delivery": {"delivery_id": "dlv_..."},
+  "has_more": true,
+  "remaining_by_state": {
+    "queued": 2,
+    "leased": 1,
+    "dead_letter": 1
+  }
 }
 ```
 
-The record contains no lease tokens or message bodies. Waypost updates it on
-startup, every active-lease-set transition, quiescence, and clean shutdown.
-Agent Deck owns the public API for locating and reading the record; it must not
-depend on Waypost reading Agent Deck's private database.
+The contract is:
 
-Before Agent Deck restarts or reconfigures a Waypost MCP process, its session
-manager performs a two-phase controlled transition:
+- count the same resolved personal address scope used by the `recv`
+- exclude deliveries returned by the current call
+- exclude `acked`, because it is completed history rather than unfinished work
+- use persisted delivery states as keys; a deferred delivery remains `queued`
+  because defer changes `visible_at`, not the delivery state
+- omit zero-valued keys, and omit `remaining_by_state` entirely when every
+  unfinished-state count is zero
+- include the sparse map on `received`, `no_message`, and `active_leases`
+  results when any count is non-zero
+- return `has_more` on personal structured results and keep it narrowly defined
+  as work claimable now after the current call; a future-visible
+  queued delivery, an unexpired lease, or a dead-letter delivery may make
+  `remaining_by_state` non-empty while `has_more=false`
 
-1. pause new session input, wakeups, and tool turns for the target agent
-2. write an Agent Deck-owned drain request next to the runtime guard
-3. wait for Waypost MCP to observe that request, reject new `recv` calls, and
-   update its own guard to `accepting_work=false`
-4. wait for the guard update that confirms quiescence
-5. reject the controlled restart when `active_lease_count > 0`
-6. clear the drain request and resume the existing session so its agent can use
-   `waypost_claim_history` and
-   settle the named deliveries
-7. repeat quiescence after settlement
-8. restart only when the guard and `waypost_status` both report zero active
-   leases and `profile_transition_allowed=true`
+The store-level receive operation captures the count snapshot immediately after
+its claim decision, using the claim transaction where the receive path permits
+it. Under concurrent senders, receivers, and lifecycle transitions the object
+is informational at that instant, not a guarantee about a future call.
 
-The pause-before-drain rule closes the race where the count is checked at zero
-and the agent calls `recv` immediately before process termination.
+Group mode has no personal delivery states. Its structured result instead adds
+`remaining_unread` only when the post-read unread count for the same group and
+person is greater than zero; it omits the field at zero. Group mode does not
+emit `remaining_by_state`.
+
+## Session-Immutable Tool Profiles And Replacement
+
+Tool profile is immutable for one Agent Deck session, not merely one MCP
+process. Agent Deck rejects attempts to restart or reconfigure the same session
+with a different profile. A profile change creates or relaunches a replacement
+Agent Deck session under the desired profile after the old session ends.
+
+### Prevent bad claims
+
+In `hybrid`, `waypost_status` completes the separated local-preflight and
+session-attestation checks before `waypost_recv` is enabled. A known-bad hybrid
+context therefore cannot claim new personal work.
+
+### Clean session replacement
+
+`waypost_status` reports `active_lease_count`. A clean replacement requires the
+current agent to stop accepting new workflow work, settle or defer every
+claimed personal delivery, and observe `active_lease_count=0` before ending the
+session. It then sends the relevant blocker or replacement report and exits.
+
+Only after that clean end may the controller create or relaunch a replacement
+Agent Deck session under `full` or another configured profile. The replacement
+gets a new MCP instance id and a new session-start adapter attestation. It does
+not inherit bindings or active-lease memory from the old MCP instance.
+
+This session boundary removes the runtime guard, drain request, PID ownership,
+stale-record, and same-session restart protocol. The zero-active-lease
+invariant remains explicit without inventing a cross-process filesystem state
+machine.
 
 A force-kill remains possible at the operating-system level, but it is crash
-recovery, not a successful controlled profile transition. Renewal stops and
-normal lease expiry applies.
+recovery rather than a clean replacement. Renewal stops and normal lease expiry
+applies.
 
 ### Mid-action hybrid mismatch
 
@@ -499,8 +563,9 @@ explicit blocker report containing the delivery id, completed effects, unknown
 effects, and required recovery decision. It must not silently release or fail
 the delivery into an unsafe replay.
 
-After the lifecycle operation succeeds, call `waypost_status` again. Restart or
-switch profiles only when the active lease count reaches zero.
+After the lifecycle operation succeeds, call `waypost_status` again. End the
+session only when the active lease count reaches zero; create or relaunch the
+replacement under the required profile afterward.
 
 If the MCP is itself unavailable and cannot perform a lifecycle transition,
 treat the process as crashed. Do not report a clean rollback; wait for lease
@@ -509,13 +574,16 @@ expiry and use normal duplicate/partial-side-effect recovery rules.
 ### Required tests
 
 - hybrid bootstrap failure prevents `recv`
-- controlled restart with one or more active leases is rejected
-- pause/drain prevents a new `recv` between the zero-count check and restart
-- each lifecycle transition removes the lease and permits restart afterward
-- mid-action CLI mismatch settles or defers before restart
+- Agent Deck rejects an in-place profile change or different-profile restart
+  for an existing session
+- clean session replacement requires an observed zero active-lease count
+- each lifecycle transition removes the lease and permits clean session end
+- mid-action CLI mismatch settles or defers before the old session ends
+- replacement session receives a new MCP instance id and adapter attestation
 - forced process death stops renewal and makes the delivery claimable after
   expiry
-- structured transition logs include old/new profile and active-lease count
+- structured close/replacement logs include old/new session ids, profiles, and
+  the final active-lease count
 
 ## CLI Documentation Design
 
@@ -656,7 +724,8 @@ Agent Deck owns the argv-safe execution adapter required by hybrid mode.
 Add this Agent Deck command before Phase 2:
 
 ```text
-agent-deck waypost exec --request-file <absolute-json-path>
+<attested-agent-deck-executable> waypost exec \
+  --request-file <agent-deck-private-runtime-path>
 ```
 
 Request shape:
@@ -664,6 +733,11 @@ Request shape:
 ```json
 {
   "session_id": "<current-agent-deck-session-id>",
+  "mcp_instance_id": "<current-waypost-mcp-instance-id>",
+  "tool_profile": "hybrid",
+  "capability_manifest_version": 1,
+  "capability_manifest_sha256": "<manifest digest>",
+  "nonce": "<one-shot random nonce>",
   "cli_context": "<exact object returned by waypost_status>",
   "args": ["read", "--latest", "--for", "agent-deck/id", "--state", "acked", "--limit", "1", "--json"],
   "max_duration": "30s"
@@ -672,16 +746,35 @@ Request shape:
 
 The adapter:
 
-- reads a JSON request written through the host's file-writing facility
+- is invoked through the exact absolute Agent Deck executable in the
+  session-start attestation, never through `PATH`
+- accepts request files only from an Agent Deck-owned per-session runtime
+  directory with mode `0700`; request files must be owner-only regular files,
+  must not be symlinks, and have a bounded size such as 64 KiB
+- requires `session_id`, `mcp_instance_id`, profile, and manifest identity to
+  match the active Agent Deck session and attestation; the one-shot nonce must
+  match the request filename and must not have been consumed previously
+- opens with no-follow semantics, verifies metadata with the open descriptor,
+  unlinks before execution, and reads from that descriptor so every request is
+  consumed exactly once
+- removes unconsumed request files on normal completion, cancellation, and
+  session cleanup
 - cross-checks the executable against the Waypost MCP command recorded for the
   specified Agent Deck session
-- verifies build id and executable digest
+- verifies build id, executable digest, and capability manifest identity
+- runs the exact digest-matched Waypost binary's `capabilities --json`, maps the
+  requested argv to one canonical capability, and permits it only when the
+  active manifest marks that capability `hybrid_cli_allowed=true`
+- permits the inert `doc`, `version`, and `capabilities` routes explicitly
+- rejects every MCP-retained operation, MCP-server route, unknown command, and
+  unlisted route before spawning the requested Waypost operation
+- rejects caller-supplied context flags such as `--state-dir`, profile/config
+  selectors, and unlisted command aliases; the adapter alone supplies the
+  attested state-dir prefix
 - prepends the status-provided state-dir argv prefix
 - executes with Go/Rust-style argv spawning, never `sh -c`
 - captures stdout, stderr, exit status, duration, and cancellation as structured
   JSON
-- rejects MCP-server commands and any executable other than the verified
-  Waypost binary
 
 Skills access CLI-only Waypost operations through this fixed adapter. They do
 not invoke `waypost` through an arbitrary shell command.
@@ -733,13 +826,16 @@ Conceptually, each entry contains:
 
 ```go
 type Capability struct {
-    ToolName       string
-    MCPProfiles    []string
-    CLICommand     string
-    CLIPresent     bool
-    StateOwner     StateOwner
-    IdentityInputs []string
-    DocTopic       string
+    Name             string
+    ToolName         string
+    MCPProfiles      []string
+    CLICommand       string
+    CLIRoute         []string
+    CLIPresent       bool
+    HybridCLIAllowed bool
+    StateOwner       StateOwner
+    IdentityInputs   []string
+    DocTopic         string
 }
 ```
 
@@ -750,7 +846,18 @@ The registry drives:
 - the generated operation index in `waypost doc mcp-cli-boundary`
 - validation that every CLI-only capability has an existing structured CLI
   contract and a doc topic
+- the Agent Deck adapter allowlist for the exact active manifest
 - parity and profile-membership tests
+
+`HybridCLIAllowed` is false for every operation retained in the hybrid MCP
+surface even when a standalone CLI spelling exists. It becomes true for a
+CLI-owned operation only after structured-output, documentation, and parity
+gates pass. `doc`, `version`, and `capabilities` are inert manifest entries and
+are the only non-operation routes allowed by the adapter.
+
+`CLIRoute` is the canonical subcommand-token sequence, such as `["group",
+"add-member"]`. The manifest exports routes as arrays rather than asking the
+adapter to infer them from help text or a display string.
 
 Typed MCP input schemas and handlers remain explicit. The registry selects
 which typed handlers are registered; it does not replace them with generic
@@ -761,6 +868,8 @@ At startup, fail fast if:
 - a profile names a tool without a registered typed handler
 - a hybrid-removed tool lacks a CLI mapping or is marked `CLIPresent=false`
 - a CLI-only operation lacks a doc topic
+- an operation is both exposed in `hybrid` MCP and marked
+  `HybridCLIAllowed=true`
 - two capability entries claim the same tool name
 
 The three group-subscriber entries, `waypost_undefer`, and `waypost_read`
@@ -802,8 +911,9 @@ Rollout phases:
 - ship the capability registry, `version --json`, status CLI context, and doc
   topics
 - add the missing group-subscriber CLI commands and structured `undefer` output
-- add the Agent Deck `waypost exec` argv adapter and Waypost runtime lease guard
-- add Agent Deck pause/drain/restart enforcement
+- add the Agent Deck `waypost exec` argv adapter, private one-shot request
+  transport, session-start attestation, and manifest allowlist
+- make the selected MCP tool profile immutable for one Agent Deck session
 - ship both profiles with `full` as the raw `waypost mcp` default
 - keep existing host configurations unchanged
 - run the old-skill/new-binary and new-skill/new-binary compatibility suites
@@ -831,12 +941,14 @@ supporting MCP-only clients. Prompt migration alone is not sufficient.
 
 Rollback from hybrid is:
 
-1. request Agent Deck's controlled pause/drain transition
-2. settle every active lease and reach the quiescent zero-lease state
-3. change the MCP host command to `--tool-profile full`
-4. restart the affected agent session/MCP process
-5. call `waypost_status`
-6. verify `tool_profile=full` and the expected capability manifest version
+1. stop accepting new work in the current session
+2. settle or defer every active lease and verify `active_lease_count=0`
+3. send the blocker/rollback report and end the current session cleanly
+4. create or relaunch a replacement Agent Deck session configured with
+   `--tool-profile full`
+5. call `waypost_status` in the replacement
+6. verify the new session/MCP instance ids, `tool_profile=full`, and the expected
+   capability manifest and adapter attestation
 
 Hybrid becomes the Agent Deck default only when all gates pass:
 
@@ -887,13 +999,13 @@ or mutation. Report:
 - active tool profile
 
 If no personal delivery is claimed, the recovery path is to repair the
-installation or use the controlled quiescent restart into `full`.
+installation or replace the session cleanly under `full`.
 
-If a delivery is already claimed, first follow the Lease Quiescence And Profile
-Transitions section: settle or explicitly defer the delivery through the
-current MCP, reach zero active leases, then restart. Do not silently use another
-binary or state directory, and do not call a profile restart clean while a
-lease remains active.
+If a delivery is already claimed, first follow the Session-Immutable Tool
+Profiles And Replacement section: settle or explicitly defer the delivery
+through the current MCP, reach zero active leases, then end the session and
+create the replacement. Do not silently use another binary or state directory,
+and do not call a session replacement clean while a lease remains active.
 
 ### Removed MCP tool still referenced
 
@@ -919,8 +1031,9 @@ Required automated coverage:
   subscriber CLI parity lands
 - CLI-only tools are absent from the hybrid MCP surface
 - `full` exposes the previous twenty-six-tool list
-- `waypost_status` reports profile, manifest version, executable, version, and
-  resolved state directory
+- `waypost_status` reports profile, manifest identity, executable, version,
+  resolved state directory, Waypost-local checks, and Agent Deck attestation as
+  separate results
 - `waypost version --json` matches the running MCP binary in parity tests
 - startup-cached executable digest detects a binary replaced at the same path
 - capability registry validation covers every current tool exactly once
@@ -932,14 +1045,24 @@ Required automated coverage:
   practical
 - existing Waypost CLI command tests remain unchanged and passing
 - unsafe shell-string execution is rejected by the supported hybrid host adapter
-- controlled profile restart is rejected while the runtime guard reports active
-  leases
+- the adapter rejects every retained-MCP and unlisted Waypost command before
+  operation execution
+- request files outside the private runtime directory, symlinks, oversized
+  files, stale nonces, and mismatched session/instance/manifest bindings fail
+- a tool profile cannot change within one Agent Deck session
 - CLI `wait` cancellation reaps its child and distinguishes cancellation from
   Waypost exit `2`
 
 Required workflow verification:
 
 - direct send/receive/lease completion still works through MCP
+- personal `recv` returns sparse post-claim counts for queued, other leased, and
+  dead-letter deliveries; zero keys and an all-zero map are omitted
+- deliveries returned by the current `recv` are excluded from those counts, and
+  a no-message result still reports positive unfinished-state counts
+- `recv.has_more` remains claimable-now semantics when unfinished but currently
+  unclaimable work exists
+- group `recv` reports positive `remaining_unread` and omits it at zero
 - failed auto-bind can be inspected with `status`, repaired with `bind`, and
   diagnosed with `debug`
 - claim history still recovers MCP-owned lease information
@@ -1037,8 +1160,9 @@ and allows installed skills to drift from the installed binary.
 3. write the initial Waypost topics from current authoritative behavior
 4. add the three missing group-subscriber CLI commands, structured `undefer`
    output, and parity tests
-5. add the Agent Deck argv adapter plus Waypost lease guard and controlled
-   pause/drain/restart protocol
+5. add the Agent Deck argv adapter, private one-shot request transport,
+   session-start attestation, manifest allowlist, and immutable per-session
+   profile enforcement
 6. add or coordinate companion `agent-deck doc` topics and version identity
 7. update shared and action skills to reference doc topics instead of repeating
    command procedures
