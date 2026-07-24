@@ -163,11 +163,23 @@ Stable `error_code` values are:
 - `integrity_error`: stored body metadata does not match its blob; stop and
   report corruption
 - `busy`: transient SQLite contention; bounded retry is allowed
+- `receive_recovery_required`: receive bookkeeping failed after claim and at
+  least one new lease could not be rolled back; release every listed claim
+  before another receive
 - `internal`: unexpected storage or I/O failure; stop unless operator policy
   explicitly permits retry
 
 Only `busy` is `retryable: true`. Error messages may add detail, but clients
 branch only on `error_code` and `retryable`.
+
+Error schema `1` evolution rules:
+
+- consumers ignore unknown optional fields
+- new `error_code` values may be added only because consumers must treat an
+  unknown code as `internal` with `retryable: false`
+- existing code meaning and retryability never change within schema `1`
+- removing or renaming a field/code, changing a field type, or changing code
+  meaning/retryability requires `error_schema_version: 2`
 
 ### Per-operation parity matrix
 
@@ -289,6 +301,7 @@ Rules:
 - additive fields may be added within manifest schema `1`; removing, renaming,
   or changing the meaning or type of a field requires a new manifest schema
   version
+- manifest-schema-1 consumers ignore unknown additive fields
 - consumers reject an unsupported manifest schema version instead of guessing
 
 Typed MCP schemas and handlers remain explicit. The registry selects which
@@ -435,13 +448,85 @@ nothing is claimable now.
 - never infer claimable-now work from `queued`; only `recv` or `wait` answers
   availability
 
-The count is an informational snapshot taken immediately after the claim
-decision. Concurrent sends and transitions may change it immediately. It is not
-a lock, drain condition, or future-delivery guarantee.
+The count is an informational snapshot taken immediately after the receive-path
+decision and any successful claims. `no_message` and `active_leases` have no new
+claim; their count is taken immediately after that decision. Concurrent sends
+and transitions may change it immediately. It is not a lock, drain condition,
+or future-delivery guarantee.
 
 Implement one grouped `COUNT(*)` query over the resolved endpoint ids and
 unfinished states, excluding returned ids. It must not read message rows or
 body blobs.
+
+### Post-claim count failure invariant
+
+A receive call must never hide a newly claimed lease behind an ordinary error.
+After one or more successful claims:
+
+1. run the remaining-state query
+2. if it fails, release every newly claimed delivery back to `queued` at its
+   pre-claim `visible_at` using its lease token
+3. if every release succeeds, return the original count error; the caller
+   receives no claim and may follow that error's retry rule
+4. if any release fails, return a typed recovery result containing only the
+   unreleased claims; never return a plain error or silently omit the count
+
+The rollback helper returns per-delivery outcomes rather than only a joined
+error. Each unreleased claim contains `delivery_id`, `lease_token`,
+`recipient_address`, and `lease_expires_at`.
+
+MCP recognizes the typed recovery result, adds every unreleased claim to the
+active-lease tracker, starts lease renewal, and returns:
+
+```json
+{
+  "status": "receive_recovery_required",
+  "addresses": ["ADDRESS"],
+  "error_code": "receive_recovery_required",
+  "message": "remaining-state query failed and claim rollback was incomplete",
+  "remaining_by_state_status": "unavailable",
+  "claims": [
+    {
+      "delivery_id": "dlv_...",
+      "lease_token": "lease_...",
+      "recipient_address": "ADDRESS",
+      "lease_expires_at": "RFC3339"
+    }
+  ],
+  "claim_history_tool": "waypost_claim_history",
+  "release_tool": "waypost_release"
+}
+```
+
+CLI returns exit `1`, empty stdout, and this schema-1 error document on stderr:
+
+```json
+{
+  "error_schema_version": 1,
+  "status": "error",
+  "error_code": "receive_recovery_required",
+  "message": "remaining-state query failed and claim rollback was incomplete",
+  "retryable": false,
+  "details": {
+    "remaining_by_state_status": "unavailable",
+    "claims": [
+      {
+        "delivery_id": "dlv_...",
+        "lease_token": "lease_...",
+        "recipient_address": "ADDRESS",
+        "lease_expires_at": "RFC3339"
+      }
+    ]
+  }
+}
+```
+
+The caller must release every listed claim before calling receive again. It must
+not ack, defer, or fail a claim without the missing message context. MCP callers
+may recover current-process metadata through claim history if needed.
+`remaining_by_state` omission means zero only for normal `received`,
+`no_message`, and `active_leases` results; recovery results state
+`remaining_by_state_status: "unavailable"` explicitly.
 
 Performance validation has two gates:
 
@@ -644,6 +729,9 @@ Automated checks must cover:
 - personal and batch `recv` never emit `has_more`
 - queued remaining counts include future-visible deferred deliveries and are
   never documented as claimable-now counts
+- a post-claim count failure either rolls back every new lease before returning
+  an ordinary error or returns the exact recovery payload with all unreleased
+  ids and tokens; MCP tracks and renews those claims
 - `read` emits `has_more` only when true
 - concurrent and batch receive preserve existing claim correctness
 - the remaining-count query passes its query-plan assertion and reproducible
@@ -701,8 +789,8 @@ short.
 3. add the JSON error envelope and freeze each CLI-owned result contract
 4. add the embedded prompt-topic loader and concise initial topics
 5. add missing subscriber and undefer CLI parity
-6. add receive schema `2`, remaining-state counts, migrate in-repo consumers,
-   and delete receive schema `1`
+6. add receive schema `2`, remaining-state counts, post-claim rollback/recovery,
+   migrate in-repo consumers, and delete receive schema `1`
 7. complete read recovery parity and prompt examples
 8. remove tools from `hybrid` one capability at a time as gates pass
 9. publish the explicitly breaking receive-schema release
