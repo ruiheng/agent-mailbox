@@ -490,7 +490,6 @@ Personal `recv` structured results add a sparse `remaining_by_state` object:
 {
   "status": "received",
   "delivery": {"delivery_id": "dlv_..."},
-  "has_more": true,
   "remaining_by_state": {
     "queued": 2,
     "leased": 1,
@@ -510,16 +509,6 @@ The contract is:
   unfinished-state count is zero
 - include the sparse map on `received`, `no_message`, and `active_leases`
   results when any count is non-zero
-- return `has_more` on personal structured results and keep it narrowly defined
-  as work claimable now in the store after the current call, independent of the
-  current MCP instance's active-lease safety gate; a future-visible
-  queued delivery, an unexpired lease, or a dead-letter delivery may make
-  `remaining_by_state` non-empty while `has_more=false`
-
-On an `active_leases` result, `has_more=true` means another eligible receiver,
-or this caller after satisfying the known-delivery contract, could claim work
-from the store now. It does not mean an immediate retry without
-`known_delivery_ids` will bypass the MCP-owned active-lease check.
 
 The store-level receive operation captures the count snapshot immediately after
 its claim decision, using the claim transaction where the receive path permits
@@ -539,13 +528,10 @@ The personal count query must use the existing
 recipient endpoint ids and non-acked states, and avoid message/blob reads. Add
 a committed 100,000-delivery SQLite benchmark fixture; the grouped count may
 add at most 10 ms p95 to local `recv`. If it misses the budget, optimize the
-query or index before shipping rather than omitting counts silently. Group
-`remaining_unread` gets an equivalent indexed-query benchmark.
+query or index before shipping rather than omitting counts silently.
 
-Group mode has no personal delivery states. Its structured result instead adds
-`remaining_unread` only when the post-read unread count for the same group and
-person is greater than zero; it omits the field at zero. Group mode does not
-emit `remaining_by_state`.
+Group mode has no personal delivery states, so this design does not add
+`remaining_by_state` or another remaining-count field to group `recv`.
 
 ## Identity-Preserving MCP Profile Restart
 
@@ -1199,11 +1185,6 @@ Required workflow verification:
   dead-letter deliveries; zero keys and an all-zero map are omitted
 - deliveries returned by the current `recv` are excluded from those counts, and
   a no-message result still reports positive unfinished-state counts
-- `recv.has_more` remains claimable-now semantics when unfinished but currently
-  unclaimable work exists
-- an `active_leases` result distinguishes store claimability from the current
-  MCP caller's known-delivery gate
-- group `recv` reports positive `remaining_unread` and omits it at zero
 - the indexed remaining-work query stays within the committed 10 ms p95
   hot-path budget
 - the additive remaining-work fields preserve existing structured-result
