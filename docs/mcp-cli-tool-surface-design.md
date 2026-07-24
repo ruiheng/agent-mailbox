@@ -333,21 +333,38 @@ states, excluding returned ids. It must not read message rows or body blobs.
 The in-memory active-lease tracker is a cache; durable delivery state is
 authoritative.
 
-Before renewing a tracked lease, MCP reads the current delivery state and lease
-token. It calls `Renew` only when the delivery is still `leased` with the same
-token. A missing delivery, any non-leased state, or a changed token removes the
-entry from the active set, prevents claim history from reporting it as active,
-and is never renewed. An inspection error keeps the entry for a later retry but
-skips renewal; it must not be bypassed by renewing from stale memory. The atomic
-predicates in `Renew` remain necessary to close the race between inspection and
-update.
+One internal `reconcileTrackedLeases` operation owns this rule. Renewal, the
+`recv` active-lease gate, and `waypost_claim_history` all call it instead of
+re-implementing durable-state checks.
 
-Before `recv` returns `active_leases` from tracked entries, it performs the same
-reconciliation so a CLI `fail` or another external lease transition cannot
-leave a stale MCP gate. If inspection fails, `recv` reports that error instead
-of presenting the stale cache as authoritative. This is the root-cause fix that
-allows `waypost_fail` to be CLI-owned without an MCP-specific tracker mutation
-path.
+For each tracked lease it reads the current delivery state and lease token. The
+lease remains active only when the delivery is still `leased` with the same
+token. A missing delivery, any non-leased state, or a changed token removes the
+entry from the active set and clears the tracked token before any response is
+serialized. Renewal calls `Renew` only for entries that pass reconciliation.
+The atomic predicates in `Renew` remain necessary to close the race between
+inspection and update.
+
+Reconciliation updates the history entry as follows:
+
+- a non-leased delivery uses its exact durable state, such as `queued`, `acked`,
+  or `dead_letter`, as the terminal history status for that prior claim
+- `terminal_at` uses the durable state-transition event time when available;
+  otherwise it is the reconciliation observation time
+- a missing delivery uses `missing`; a still-leased delivery with a different
+  token uses `lease_replaced`
+- terminal and replaced entries never return the old lease token, including a
+  targeted `include_lease_token` request
+
+The reconciliation result and history snapshot are applied under the tracker
+lock, so a response cannot race with another local tracker update. An
+inspection error keeps the entry for a later retry but skips renewal. `recv` and
+claim history return the inspection error instead of presenting stale memory as
+authoritative.
+
+This is the root-cause fix that allows `waypost_fail` to be CLI-owned without an
+MCP-specific tracker mutation path. A CLI `fail` observed immediately by recv,
+claim history, or the renewal loop ends MCP ownership and is never renewed.
 
 ### Post-claim count failure
 
@@ -533,7 +550,8 @@ Rules:
 Topic responsibilities:
 
 - `mcp-cli-boundary`: retained Waypost MCP operations, CLI-owned operation
-  groups, and binary/state-directory mismatch stop rule
+  groups, binary/state-directory mismatch stop rule, and the fact that CLI
+  forward is durable-only and provides no notification or wakeup guarantee
 - `recovery`: acknowledged-input recovery, empty items, sparse read
   `has_more: true`
 - `history`: list/read history and message-id versus delivery-id
@@ -566,6 +584,10 @@ Automated checks cover:
   those claims
 - CLI `fail` followed by MCP reconciliation is not renewed, is removed from the
   active set, and cannot cause a stale `active_leases` receive result
+- CLI `fail` immediately followed by default or targeted claim history never
+  reports the delivery as active and never returns its old token
+- `include_terminal` claim history reports the exact observed durable state and
+  a defined terminal timestamp for externally transitioned deliveries
 - renewal never proceeds when durable-state inspection fails or reports a
   non-leased delivery or changed token
 - concurrent and batch claims retain existing correctness
@@ -629,8 +651,8 @@ and human-oriented detail.
 3. add executable and resolved state directory to `waypost_status`
 4. add the status-to-CLI end-to-end replacement test
 5. add concise embedded `waypost doc` topics and prompt tests
-6. reconcile tracked leases from durable state before renewal and before the
-   `active_leases` receive gate
+6. add one durable-state reconciliation path shared by renewal, the
+   `active_leases` receive gate, and claim history
 7. hard-cut MCP registration to the twelve retained typed tools
 8. delete `recv.has_more` and add exact personal/group receive results
 9. add remaining-state counts and post-claim rollback/recovery
