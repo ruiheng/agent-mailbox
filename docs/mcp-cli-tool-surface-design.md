@@ -261,6 +261,15 @@ Extend `waypost_status` with a machine-readable CLI context:
   "bound_addresses": ["agent-deck/<session-id>"],
   "default_sender": "agent-deck/<session-id>",
   "default_workdir": "/absolute/workspace",
+  "binding_bootstrap": {
+    "durable_workflow_address": "agent-deck/<session-id>",
+    "required_bound_addresses": ["agent-deck/<session-id>"],
+    "restored_bound_addresses": ["agent-deck/<session-id>"],
+    "transient_bound_addresses": ["codex/<current-tool-session-id>"],
+    "missing_required_addresses": [],
+    "configured_default_sender": "agent-deck/<session-id>",
+    "default_sender_matches": true
+  },
   "cli_context": {
     "executable": "/absolute/path/to/waypost",
     "version": "<same build version>",
@@ -549,6 +558,12 @@ Agent Deck `session restart <id>` that reloads MCPs under the same session id
 and mailbox address. It creates a new MCP instance id and attestation, but it
 must not create a new Agent Deck session row or Waypost address.
 
+`agent-deck/<session-id>` is the durable workflow address. Provider/tool-session
+addresses such as `codex/<id>`, `claude/<id>`, or `gemini/<id>` are transient
+detection results for the current execution process. Workflows must not persist
+or advertise them as cross-restart destinations unless a separate stable-
+address contract is introduced.
+
 ### Prevent bad claims
 
 In `hybrid`, `waypost_status` completes the separated local-preflight and
@@ -560,19 +575,31 @@ context therefore cannot claim new personal work.
 `waypost_status` reports `active_lease_count`. Agent Deck performs a clean
 profile restart only at an agent-turn boundary:
 
-1. the current agent stops calling `recv`, settles or defers every claimed
-   personal delivery, verifies `active_lease_count=0`, and sends a structured
-   `profile_restart_ready` report bound to the current session id, MCP instance
-   id, current profile, requested profile, and zero lease count; this report is
-   the final action of the turn
-2. the current turn ends; Agent Deck queues new wakeups/input for the same
-   session instead of starting another turn
-3. the controller rejects a stale report whose session or MCP instance id no
-   longer matches, updates only that session's MCP launch profile, and runs the
+1. the authorized Agent Deck controller creates one pending restart record with
+   a cryptographically random `restart_attempt_id`, session id, current MCP
+   instance id, current/requested profiles, and state `awaiting_ready`; the id
+   is supplied through Agent Deck-owned session control context, not a Waypost
+   message
+2. the current agent stops calling `recv`, settles or defers every claimed
+   personal delivery, verifies `active_lease_count=0`, and makes the final
+   action of the turn an Agent Deck-internal `profile_restart_ready` transition
+   bound to the restart attempt id, session id, MCP instance id, requested
+   profile, and final zero lease count
+3. Agent Deck atomically consumes readiness once, rejects ordinary Waypost
+   input, stale/repeated attempt ids, mismatched instances/profiles, or a
+   non-zero final lease count, and queues new wakeups/input for the same session
+   instead of starting another turn
+4. the controller updates only that session's MCP launch profile and runs the
    identity-preserving `agent-deck session restart <same-session-id>` primitive
-4. the restarted session calls `waypost_status`, verifies the same session id
-   and mailbox address, a new MCP instance id and attestation, and the requested
-   profile, then resumes queued wakeups
+5. the restarted session calls `waypost_status`, verifies the same session id
+   and mailbox address, a new MCP instance id and attestation, the requested
+   profile, required bindings, and default sender, then Agent Deck marks the
+   attempt complete and resumes queued wakeups
+
+The readiness transition is an Agent Deck lifecycle API/CLI operation described
+by `agent-deck doc session-lifecycle`; it is not a Waypost-routed workflow
+message and does not add an MCP tool. The restart record is the single state
+owner for authorization, idempotency, retry, and audit.
 
 No `recv` can occur between the zero-lease observation and process termination
 because the reporting turn has ended and Agent Deck has not started the next
@@ -584,6 +611,43 @@ This turn-boundary protocol removes the runtime guard, drain request, PID
 ownership, stale-record, mailbox migration, and forwarding machinery. The
 zero-active-lease invariant remains explicit without inventing a shared
 filesystem state machine.
+
+### Binding bootstrap after restart
+
+Bindings owned only by the old MCP instance are not serialized wholesale.
+Restart bootstrap classifies them explicitly:
+
+- the stable `agent-deck/<session-id>` address is required and re-derived from
+  the unchanged Agent Deck session identity
+- provider/tool-session addresses are transient and re-detected for the new
+  execution process; old values are discarded
+- manually added addresses and a non-default sender are MCP-instance-local by
+  default; any value required across restart must be declared in Agent
+  Deck-owned session configuration and re-applied during bootstrap
+
+The session-start attestation carries the required durable binding set and
+configured default sender. Before queued wakeups resume, `waypost_status`
+reports required, restored, transient, and missing bindings separately. Missing
+required addresses or a wrong default sender keep the restart attempt pending
+and message tools gated; the agent repairs live state through `waypost_bind`,
+then status must pass again. There is no silent fallback to a transient provider
+address as default sender.
+
+### Restart failure
+
+If the new MCP process, attestation, preflight, binding bootstrap, or status
+verification fails after the old turn ended, Agent Deck:
+
+- keeps the unchanged mailbox and all wakeups/input queued
+- records a structured failed stage and error on the same restart attempt
+- leaves the session in maintenance rather than silently stopped or resumed
+- permits an idempotent retry of the requested profile, or an explicit
+  controller rollback that restores the prior launch profile and starts a new
+  MCP instance under the same session id
+
+Wakeups resume only after one profile starts successfully and passes status and
+binding verification. If neither requested-profile retry nor explicit rollback
+succeeds, the attempt remains visibly blocked with exact manual recovery data.
 
 A force-kill remains possible at the operating-system level, but it is crash
 recovery rather than a clean restart. Renewal stops and normal lease expiry
@@ -610,9 +674,9 @@ effects, and required recovery decision. It must not silently release or fail
 the delivery into an unsafe replay.
 
 After the lifecycle operation succeeds, call `waypost_status` again. Emit the
-restart-ready report only when the active lease count reaches zero, end the
-turn, and let Agent Deck restart the same session identity under the required
-profile.
+Agent Deck-internal restart-ready transition only when the active lease count
+reaches zero, end the turn, and let Agent Deck restart the same session identity
+under the required profile.
 
 If the MCP is itself unavailable and cannot perform a lifecycle transition,
 treat the process as crashed. Do not report a clean rollback; wait for lease
@@ -623,15 +687,21 @@ expiry and use normal duplicate/partial-side-effect recovery rules.
 - hybrid bootstrap failure prevents `recv`
 - tool profile cannot change within one MCP instance
 - identity-preserving profile restart requires an observed zero active-lease
-  count and a matching turn-boundary restart-ready report
-- stale MCP-instance reports are rejected
+  count and a matching turn-boundary restart-ready control transition
+- restart readiness is accepted only through the authenticated Agent Deck
+  control record; stale, repeated, Waypost-routed, and mismatched attempts are
+  rejected
 - each lifecycle transition removes the lease and permits the restart-ready
-  report afterward
+  control transition afterward
 - mid-action CLI mismatch settles or defers before the reporting turn ends
 - restart preserves Agent Deck session id and Waypost address while producing a
   new MCP instance id and adapter attestation
+- stable/session-configured bindings and default sender are restored and
+  verified before wakeups resume; transient provider addresses are replaced
 - queued, future-visible, dead-letter, late-arriving, and crash-expiry
   deliveries remain reachable through the unchanged mailbox
+- restart failure keeps wakeups queued and supports idempotent retry or explicit
+  rollback to the prior profile under the same session id
 - forced process death stops renewal and makes the delivery claimable after
   expiry
 - structured restart logs include the stable session id, old/new MCP instance
@@ -996,16 +1066,18 @@ supporting MCP-only clients. Prompt migration alone is not sufficient.
 
 Rollback from hybrid is:
 
-1. stop calling `recv`, settle or defer every active lease, and verify
-   `active_lease_count=0`
-2. send `profile_restart_ready` for the current session/MCP instance and end the
-   turn
+1. create an Agent Deck restart attempt targeting `full`
+2. stop calling `recv`, settle or defer every active lease, verify
+   `active_lease_count=0`, consume readiness through the authenticated attempt,
+   and end the turn
 3. keep new wakeups queued, update that same session's MCP launch profile to
    `full`, and run `agent-deck session restart <same-session-id>`
 4. call `waypost_status` after restart
 5. verify the unchanged session id/address, new MCP instance id and attestation,
-   `tool_profile=full`, and expected capability manifest
-6. resume the queued wakeups
+   `tool_profile=full`, expected capability manifest, required bindings, and
+   default sender
+6. complete the attempt and resume queued wakeups; on failure, keep maintenance
+   state and retry `full` or explicitly restore the previous profile
 
 Hybrid becomes the Agent Deck default only when all gates pass:
 
@@ -1060,9 +1132,10 @@ installation or restart the same session identity cleanly under `full`.
 
 If a delivery is already claimed, first follow the Identity-Preserving MCP
 Profile Restart section: settle or explicitly defer the delivery through the
-current MCP, reach zero active leases, send the restart-ready report, and end
-the turn. Do not silently use another binary or state directory, and do not call
-a profile restart clean while a lease remains active.
+current MCP, reach zero active leases, consume readiness through the authorized
+Agent Deck restart attempt, and end the turn. Do not silently use another binary
+or state directory, and do not call a profile restart clean while a lease
+remains active.
 
 ### Removed MCP tool still referenced
 
@@ -1110,6 +1183,12 @@ Required automated coverage:
 - a tool profile cannot change within one MCP instance
 - an identity-preserving restart keeps the Agent Deck session id/address and
   changes the MCP instance id/profile only after the turn-boundary gate
+- restart readiness is authenticated, one-shot, idempotent, and bound to the
+  authorized controller's attempt id
+- required bindings/default sender are verified before wakeups resume, and
+  transient provider addresses are never treated as durable workflow targets
+- failed restart stages retain queued wakeups and cover requested-profile retry
+  plus explicit prior-profile rollback
 - CLI `wait` cancellation reaps its child and distinguishes cancellation from
   Waypost exit `2`
 
@@ -1127,6 +1206,8 @@ Required workflow verification:
 - group `recv` reports positive `remaining_unread` and omits it at zero
 - the indexed remaining-work query stays within the committed 10 ms p95
   hot-path budget
+- the additive remaining-work fields preserve existing structured-result
+  compatibility in both `full` and `hybrid`
 - failed auto-bind can be inspected with `status`, repaired with `bind`, and
   diagnosed with `debug`
 - claim history still recovers MCP-owned lease information
