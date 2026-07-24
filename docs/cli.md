@@ -468,7 +468,8 @@ Notes:
 - `--latest` requires at least one `--for`
 - `--latest` defaults to no state filter (`any`) and `--limit 1`
 - `--latest` searches the union of the requested queues and returns newest-first
-- structured output always returns an object with `items` and `has_more`
+- structured output always returns an object with `items`; it includes
+  `has_more: true` only when a latest read was truncated
 - returns the persisted body after verifying the blob size and sha256
 - plain-text output prints one item after another, separated by `---`
 - `--message` items return message metadata plus `body`

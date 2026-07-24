@@ -63,12 +63,12 @@ type ReceiveResultCompact struct {
 
 type readMessageResult struct {
 	Items   []ReadMessage `json:"items"`
-	HasMore bool          `json:"has_more"`
+	HasMore bool          `json:"has_more,omitempty"`
 }
 
 type readDeliveryResult struct {
 	Items   []ReadDelivery `json:"items"`
-	HasMore bool           `json:"has_more"`
+	HasMore bool           `json:"has_more,omitempty"`
 }
 
 type ListedDeliveryCompact struct {

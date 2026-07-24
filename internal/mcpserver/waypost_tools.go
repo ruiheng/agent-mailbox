@@ -833,7 +833,6 @@ func (s *Service) waypostRead(ctx context.Context, _ *mcp.CallToolRequest, input
 			return nil, nil, err
 		}
 		result["items"] = messages
-		result["has_more"] = false
 		return s.waypostToolResult(ctx, result)
 	default:
 		if len(input.Addresses) > 0 || input.State != "" || input.Limit != nil {
@@ -849,7 +848,6 @@ func (s *Service) waypostRead(ctx context.Context, _ *mcp.CallToolRequest, input
 			return nil, nil, err
 		}
 		result["items"] = deliveries
-		result["has_more"] = false
 		return s.waypostToolResult(ctx, result)
 	}
 
@@ -868,7 +866,9 @@ func (s *Service) waypostRead(ctx context.Context, _ *mcp.CallToolRequest, input
 		return nil, nil, err
 	}
 	result["items"] = latest.Items
-	result["has_more"] = latest.HasMore
+	if latest.HasMore {
+		result["has_more"] = true
+	}
 	return s.waypostToolResult(ctx, result)
 }
 

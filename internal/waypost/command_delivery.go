@@ -394,10 +394,7 @@ func (a *App) prepareReadCommand(args []string) (preparedCommand, error) {
 			if err != nil {
 				return err
 			}
-			result := readMessageResult{
-				Items:   messages,
-				HasMore: false,
-			}
+			result := readMessageResult{Items: messages}
 			if format != outputFormatText {
 				return a.writeStructuredOutput(format, result)
 			}
@@ -423,10 +420,7 @@ func (a *App) prepareReadCommand(args []string) (preparedCommand, error) {
 		if err != nil {
 			return err
 		}
-		result := readDeliveryResult{
-			Items:   deliveries,
-			HasMore: false,
-		}
+		result := readDeliveryResult{Items: deliveries}
 		if format != outputFormatText {
 			return a.writeStructuredOutput(format, result)
 		}

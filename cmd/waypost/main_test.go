@@ -107,6 +107,7 @@ func TestCLISendRecvAckFlow(t *testing.T) {
 	if stored.HasMore {
 		t.Fatal("read acked has_more = true, want false")
 	}
+	assertJSONHasMore(t, read.stdout, false)
 	if len(stored.Items) != 1 {
 		t.Fatalf("len(read acked items) = %d, want 1", len(stored.Items))
 	}
@@ -133,6 +134,7 @@ func TestCLISendRecvAckFlow(t *testing.T) {
 	if err := json.Unmarshal([]byte(readByMessage.stdout), &storedMessage); err != nil {
 		t.Fatalf("json.Unmarshal(read by message stdout) error = %v; stdout = %q", err, readByMessage.stdout)
 	}
+	assertJSONHasMore(t, readByMessage.stdout, false)
 	if len(storedMessage.Items) != 1 {
 		t.Fatalf("len(read by message items) = %d, want 1", len(storedMessage.Items))
 	}
@@ -142,6 +144,16 @@ func TestCLISendRecvAckFlow(t *testing.T) {
 	if storedMessage.Items[0]["body"] != "hello reviewer\n" {
 		t.Fatalf("read by message body = %v, want hello reviewer\\n", storedMessage.Items[0]["body"])
 	}
+
+	readByMessageYAML := runCLI(t, "", "--state-dir", stateDir,
+		"read",
+		"--message", deliveries[0]["message_id"].(string),
+		"--yaml",
+	)
+	if readByMessageYAML.exitCode != 0 {
+		t.Fatalf("read by message YAML exit code = %d, stderr = %q", readByMessageYAML.exitCode, readByMessageYAML.stderr)
+	}
+	assertYAMLHasMore(t, readByMessageYAML.stdout, false)
 
 	readLatest := runCLI(t, "", "--state-dir", stateDir,
 		"read",
@@ -157,6 +169,7 @@ func TestCLISendRecvAckFlow(t *testing.T) {
 	if err := json.Unmarshal([]byte(readLatest.stdout), &latest); err != nil {
 		t.Fatalf("json.Unmarshal(read latest acked stdout) error = %v; stdout = %q", err, readLatest.stdout)
 	}
+	assertJSONHasMore(t, readLatest.stdout, false)
 	if len(latest.Items) != 1 {
 		t.Fatalf("len(read latest acked items) = %d, want 1", len(latest.Items))
 	}
@@ -664,6 +677,7 @@ func TestCLIReadLatestDefaultsToAnyState(t *testing.T) {
 	if !latest.HasMore {
 		t.Fatal("read latest has_more = false, want true")
 	}
+	assertJSONHasMore(t, readLatest.stdout, true)
 	if len(latest.Items) != 1 {
 		t.Fatalf("len(read latest items) = %d, want 1", len(latest.Items))
 	}
@@ -726,6 +740,7 @@ func TestCLIReadLatestHonorsLimitAndReportsMoreAvailable(t *testing.T) {
 	if !result.HasMore {
 		t.Fatal("read latest limit has_more = false, want true")
 	}
+	assertJSONHasMore(t, readLatest.stdout, true)
 	if len(result.Items) != 2 {
 		t.Fatalf("len(read latest limit items) = %d, want 2", len(result.Items))
 	}
@@ -735,6 +750,30 @@ func TestCLIReadLatestHonorsLimitAndReportsMoreAvailable(t *testing.T) {
 	if result.Items[1]["body"] != "second body\n" {
 		t.Fatalf("read latest limit second body = %v, want second body\\n", result.Items[1]["body"])
 	}
+
+	readLatestYAML := runCLI(t, "", "--state-dir", stateDir,
+		"read",
+		"--latest",
+		"--for", "workflow/history-limit",
+		"--limit", "2",
+		"--yaml",
+	)
+	if readLatestYAML.exitCode != 0 {
+		t.Fatalf("read latest YAML exit code = %d, stderr = %q", readLatestYAML.exitCode, readLatestYAML.stderr)
+	}
+	assertYAMLHasMore(t, readLatestYAML.stdout, true)
+
+	readAllYAML := runCLI(t, "", "--state-dir", stateDir,
+		"read",
+		"--latest",
+		"--for", "workflow/history-limit",
+		"--limit", "3",
+		"--yaml",
+	)
+	if readAllYAML.exitCode != 0 {
+		t.Fatalf("read all YAML exit code = %d, stderr = %q", readAllYAML.exitCode, readAllYAML.stderr)
+	}
+	assertYAMLHasMore(t, readAllYAML.stdout, false)
 }
 
 func TestCLIRecvYAMLOutput(t *testing.T) {
@@ -1861,6 +1900,40 @@ func assertNoForwardedMessageID(t *testing.T, raw string) {
 		t.Fatalf("json.Unmarshal(payload) error = %v; raw = %q", err, raw)
 	}
 	assertMapOmitsForwardedMessageID(t, payload)
+}
+
+func assertJSONHasMore(t *testing.T, raw string, want bool) {
+	t.Helper()
+
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(raw), &payload); err != nil {
+		t.Fatalf("json.Unmarshal(payload) error = %v; raw = %q", err, raw)
+	}
+	got, found := payload["has_more"]
+	if want {
+		if !found || got != true {
+			t.Fatalf("payload has_more = %v (present=%t), want true: %v", got, found, payload)
+		}
+		return
+	}
+	if found {
+		t.Fatalf("payload unexpectedly exposes has_more: %v", payload)
+	}
+}
+
+func assertYAMLHasMore(t *testing.T, raw string, want bool) {
+	t.Helper()
+
+	found := strings.Contains(raw, "has_more:")
+	if want {
+		if !found || !strings.Contains(raw, "has_more: true") {
+			t.Fatalf("YAML has_more = absent or non-true, want true: %q", raw)
+		}
+		return
+	}
+	if found {
+		t.Fatalf("YAML unexpectedly exposes has_more: %q", raw)
+	}
 }
 
 func assertMapOmitsForwardedMessageID(t *testing.T, payload map[string]any) {

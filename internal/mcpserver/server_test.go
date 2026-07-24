@@ -3069,6 +3069,56 @@ func TestWaypostServiceUsesConfiguredStateDir(t *testing.T) {
 	}
 }
 
+func TestWaypostReadSparselyReportsHasMore(t *testing.T) {
+	t.Parallel()
+
+	hasMore := false
+	service := newService(Options{
+		WaypostServiceFactory: fakeWaypostServiceFactory{service: &fakeWaypostService{
+			t: t,
+			readMessagesFunc: func(context.Context, []string) ([]waypost.ReadMessage, error) {
+				return []waypost.ReadMessage{{MessageID: "msg_123", Body: "message body"}}, nil
+			},
+			readDeliveriesFunc: func(context.Context, []string) ([]waypost.ReadDelivery, error) {
+				return []waypost.ReadDelivery{{DeliveryID: "dlv_123", Body: "delivery body"}}, nil
+			},
+			readLatestFunc: func(context.Context, []string, string, int) ([]waypost.ReadDelivery, bool, error) {
+				return []waypost.ReadDelivery{{DeliveryID: "dlv_latest", Body: "latest body"}}, hasMore, nil
+			},
+		}},
+	})
+	service.state.boundAddresses = []string{"agent-deck/self"}
+	service.state.defaultSender = "agent-deck/self"
+	service.state.autoBindAttempted = true
+
+	byMessage := callServiceTool(t, service, "waypost_read", map[string]any{
+		"message_ids": []string{"msg_123"},
+	})
+	assertMapOmitsHasMore(t, byMessage)
+
+	byDelivery := callServiceTool(t, service, "waypost_read", map[string]any{
+		"delivery_ids": []string{"dlv_123"},
+	})
+	assertMapOmitsHasMore(t, byDelivery)
+
+	latest := callServiceTool(t, service, "waypost_read", map[string]any{
+		"addresses": []string{"agent-deck/self"},
+		"latest":    true,
+		"limit":     1,
+	})
+	assertMapOmitsHasMore(t, latest)
+
+	hasMore = true
+	latest = callServiceTool(t, service, "waypost_read", map[string]any{
+		"addresses": []string{"agent-deck/self"},
+		"latest":    true,
+		"limit":     1,
+	})
+	if got := latest["has_more"]; got != true {
+		t.Fatalf("latest has_more = %v, want true", got)
+	}
+}
+
 func TestWaypostLifecycleToolsUseDirectWaypostService(t *testing.T) {
 	t.Parallel()
 
@@ -6515,6 +6565,14 @@ func assertMCPMapOmitsForwardedMessageID(t *testing.T, payload map[string]any) {
 
 	if _, ok := payload["forwarded_message_id"]; ok {
 		t.Fatalf("payload unexpectedly exposes forwarded_message_id: %v", payload)
+	}
+}
+
+func assertMapOmitsHasMore(t *testing.T, payload map[string]any) {
+	t.Helper()
+
+	if _, ok := payload["has_more"]; ok {
+		t.Fatalf("payload unexpectedly exposes has_more: %v", payload)
 	}
 }
 
