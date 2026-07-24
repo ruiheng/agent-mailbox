@@ -11,12 +11,13 @@ commands so an agent can load the workflow, invariants, and recovery guidance
 for an uncommon operation on demand instead of carrying that guidance and
 every command schema in its prompt at all times.
 
-The target default MCP surface is thirteen tools:
+The target hybrid MCP surface is fourteen tools:
 
 - `waypost_status`
 - `waypost_bind`
 - `waypost_debug`
 - `waypost_send`
+- `waypost_forward`
 - `waypost_recv`
 - `waypost_claim_history`
 - `waypost_ack`
@@ -59,7 +60,8 @@ The design therefore has two inseparable parts:
 
 ## Goals
 
-- Reduce the default MCP tool surface without removing Waypost capabilities.
+- Reduce the Agent Deck hybrid MCP tool surface without removing Waypost
+  capabilities.
 - Keep high-frequency workflow operations directly callable through MCP.
 - Keep operations that read or mutate live MCP process state in MCP.
 - Preserve the Agent Deck session tools used by normal dispatch and reply
@@ -103,7 +105,7 @@ fast path, not a second copy of every CLI command.
 
 ## Tool Classification
 
-### Keep In The Default MCP Surface
+### Keep In The Hybrid MCP Surface
 
 #### MCP bootstrap and binding state
 
@@ -131,6 +133,12 @@ the model to inspect and repair correctly.
   - the normal outbound workflow operation
   - consumes bound sender context and participates in MCP-owned notification
     behavior
+- `waypost_forward`
+  - reuses the MCP send path after loading stored content
+  - preserves bound default-sender handling and the same best-effort target
+    notification behavior as `waypost_send`
+  - does not currently have CLI parity because CLI `forward` persists the
+    forwarded message without using the MCP notification/session path
 - `waypost_recv`
   - the normal inbound workflow operation
   - consumes bound queue context and registers personal delivery leases in the
@@ -170,7 +178,7 @@ and roundtable workflows. They also provide structured, race-aware session
 resolution, explicit workdir verification, launch, parent linkage, and group
 placement.
 
-They remain in the default MCP surface even though they are not Waypost store
+They remain in the hybrid MCP surface even though they are not Waypost store
 operations. The useful boundary is the common agent workflow, not the Go
 package that owns the durable state.
 
@@ -179,7 +187,6 @@ package that owns the durable state.
 The following tools operate on durable shared state, are uncommon in normal
 turns, or are primarily administration and inspection operations:
 
-- `waypost_forward`
 - `waypost_wait`
 - `waypost_list`
 - `waypost_read`
@@ -196,13 +203,138 @@ turns, or are primarily administration and inspection operations:
 Their CLI commands already support structured output or can be extended to do
 so. They do not require a model-facing MCP schema in every agent session.
 
-Removing these names from the default MCP tool list does not remove the
+Removing these names from the hybrid MCP tool list does not remove the
 capability. It changes discovery and execution to:
 
 ```text
 read the relevant CLI doc topic -> run the documented CLI command with
 structured output -> continue the workflow
 ```
+
+## Supported Runtime Profiles
+
+The reduced surface is not valid for every MCP client.
+
+Define two explicit runtime profiles:
+
+- `hybrid`
+  - exposes the fourteen-tool MCP surface in this design
+  - requires a host with an argv-safe local process execution facility
+  - requires permission to execute the exact Waypost CLI binary reported by the
+    MCP process
+  - requires the CLI process to access the same resolved state directory
+- `full`
+  - exposes the existing twenty-six-tool surface
+  - supports MCP-only clients that do not have shell/process execution or a
+    matching local CLI
+  - remains the compatibility and rollback profile
+
+The product must not claim that a capability was relocated to CLI for a client
+that cannot execute the CLI. Such a client must use `full`, or it is explicitly
+unsupported.
+
+Agent Deck-managed coding agents are the initial target for `hybrid`, but their
+host adapter must first demonstrate argv-safe execution; a generic shell-string
+tool does not satisfy that prerequisite by itself. Raw third-party MCP clients
+remain on `full` until their host prerequisites are known.
+
+## MCP-To-CLI Context Contract
+
+A CLI subprocess does not inherit the live MCP process's bindings or tracked
+leases. It must not guess the executable, version, store, address, sender, or
+person identity.
+
+Extend `waypost_status` with a machine-readable CLI context:
+
+```json
+{
+  "server_version": "<build version>",
+  "tool_profile": "hybrid",
+  "capability_manifest_version": 1,
+  "resolved_state_dir": "/absolute/path/to/waypost-state",
+  "bound_addresses": ["agent-deck/<session-id>"],
+  "default_sender": "agent-deck/<session-id>",
+  "default_workdir": "/absolute/workspace",
+  "cli_context": {
+    "executable": "/absolute/path/to/waypost",
+    "version": "<same build version>",
+    "argv_prefix": ["--state-dir", "/absolute/path/to/waypost-state"]
+  }
+}
+```
+
+Add:
+
+```text
+waypost version --json
+```
+
+The hybrid CLI preflight is:
+
+1. call `waypost_status`
+2. execute exactly `cli_context.executable`, not a fresh `PATH` lookup
+3. call that executable's `version --json`
+4. require its version to equal `cli_context.version`
+5. prepend `cli_context.argv_prefix` to every stateful Waypost CLI command
+6. pass the operation's address, sender, and person identity explicitly
+
+If the executable cannot run, the versions differ, or the resolved state
+directory is inaccessible, stop with a `hybrid_context_mismatch` error. Do not
+fall back to another `waypost` found on `PATH`.
+
+Bindings are candidates, not implicit CLI authority. A skill or workflow
+context still chooses the exact address. CLI-only commands must use explicit
+arguments such as `--for`, `--from`, `--group`, and `--as`; they must not infer
+an identity from environment variables.
+
+`as_person` is per group operation, not a global MCP default. The workflow must
+carry it explicitly into the CLI invocation.
+
+The MCP active-lease set never crosses this boundary. That is why claim-history
+and personal lease completion remain MCP tools.
+
+## Current Capability Matrix
+
+This matrix is the required parity decision for every currently registered
+tool. `CLI contract` names the exact current command or the command that must be
+added before removing the MCP tool.
+
+| Tool | Hybrid exposure | CLI contract | State/identity owner | Structured result and failure contract | Doc topic |
+|---|---|---|---|---|---|
+| `waypost_status` | MCP | None | Live MCP bindings, detected sessions, profile and CLI context | Object above; warnings are data, bootstrap failure is an error | `mcp-cli-boundary` |
+| `waypost_bind` | MCP | None | Live MCP bindings/default sender | Updated binding object; invalid/colliding addresses fail | `mcp-cli-boundary` |
+| `waypost_debug` | MCP | None | Live MCP detection and binding diagnostics | Diagnostic object; no durable mutation | `diagnostics` |
+| `waypost_send` | MCP | `waypost send --to A --from S --body-file P --json` exists but is not the normal hybrid path | Store plus MCP bound sender and notifier | Delivery/group acknowledgement; validation or persistence failure | `quickstart` |
+| `waypost_forward` | MCP | `waypost forward (--message M \| --delivery D) --to A --from S --json` lacks MCP notify parity | Store plus MCP bound sender and notifier | Forward acknowledgement and notify result; source/target validation failure | `history` |
+| `waypost_wait` | CLI | `waypost --state-dir D wait --for A [--as P] [--timeout T] --json` | Store; address/person explicit | Compact metadata; exit `2` on timeout/no message; never claims | `history` |
+| `waypost_recv` | MCP | `waypost recv ... --json` remains available for non-MCP consumers | Store plus MCP bindings and active leases | Claimed message/lease or no-message result; MCP tracks personal leases | `delivery-lifecycle` |
+| `waypost_claim_history` | MCP | None | MCP active-lease history | Current/terminal tracked lease data; token disclosure remains explicit | `recovery` |
+| `waypost_list` | CLI | `waypost --state-dir D list --for A [--state S \| --as P] --json` | Store; address/person explicit | JSON array; empty list is success; invalid filter combination fails | `history` |
+| `waypost_read` | CLI | `waypost --state-dir D read (--message M \| --delivery D \| --latest --for A) --json` | Store; identifiers explicit | `{items,has_more}`; selector and integrity failures are errors | `recovery` |
+| `waypost_ack` | MCP | CLI exists for non-MCP leases | Store plus MCP active lease | Ack result; stale/unowned lease fails and local tracker is updated only on success | `delivery-lifecycle` |
+| `waypost_release` | MCP | CLI exists for non-MCP leases | Store plus MCP active lease | Requeue result; stale/unowned lease fails | `delivery-lifecycle` |
+| `waypost_defer` | MCP | CLI exists for non-MCP leases | Store plus MCP active lease | Deferred visibility result; invalid time or stale lease fails | `delivery-lifecycle` |
+| `waypost_undefer` | CLI after structured parity addition | Extend to `waypost --state-dir D undefer --delivery D --json` | Store; delivery id explicit; no active lease | Delivery-transition object; missing, wrong-state, or already-visible delivery fails | `recovery` |
+| `waypost_fail` | MCP | CLI exists for non-MCP leases | Store plus MCP active lease | Requeue/dead-letter result; reason required; stale lease fails | `delivery-lifecycle` |
+| `waypost_group_create` | CLI | `waypost --state-dir D group create --group G --json` | Store; group explicit | Group object; address collision fails | `groups` |
+| `waypost_group_add_member` | CLI | `waypost --state-dir D group add-member --group G --person P --json` | Store; group/person explicit | Membership object; duplicate active membership fails | `groups` |
+| `waypost_group_remove_member` | CLI | `waypost --state-dir D group remove-member --group G --person P --json` | Store; group/person explicit | Closed membership object; absent active membership fails | `groups` |
+| `waypost_group_members` | CLI | `waypost --state-dir D group members --group G --json` | Store; group explicit | JSON array of active/history records; unknown group fails | `groups` |
+| `waypost_group_add_subscriber` | CLI after parity addition | Add `waypost group add-subscriber --group G --notify-address A --person P --json` | Store; all identities explicit | Subscriber object; invalid membership/address or duplicate fails | `groups` |
+| `waypost_group_remove_subscriber` | CLI after parity addition | Add `waypost group remove-subscriber --group G --notify-address A --json` | Store; group/notify address explicit | Removed subscriber object; absent active subscriber fails | `groups` |
+| `waypost_group_subscribers` | CLI after parity addition | Add `waypost group subscribers --group G --json` | Store; group explicit | JSON array; unknown group fails | `groups` |
+| `waypost_address_inspect` | CLI | `waypost --state-dir D address inspect --address A --json` | Store; address explicit | `{address,kind,...}` including `unbound`; invalid address fails | `diagnostics` |
+| `agent_deck_resolve_session` | MCP | `agent-deck session show REF --json` is diagnostic but not the workflow contract | Agent Deck session registry | `found/not_found/error` structured result, including batch resolution | `agent-deck:session-lifecycle` |
+| `agent_deck_create_session` | MCP | `agent-deck launch ...` exists but the MCP tool owns the normal structured parent/group/workdir contract | Agent Deck session registry and launcher | Created session with authoritative id; existing target/workdir/group failure | `agent-deck:session-lifecycle` |
+| `agent_deck_require_session` | MCP | No single current CLI command with equivalent verify-and-start semantics | Agent Deck session registry and launcher | Required/started session or explicit workdir/not-found error | `agent-deck:session-lifecycle` |
+
+The three subscriber CLI commands and structured `undefer --json` output are
+implementation prerequisites. Their MCP tools cannot be removed from any
+profile until the commands and structured contracts exist and pass parity
+tests.
+
+`waypost_forward` remains in the hybrid MCP profile because current CLI forward
+does not use the MCP notifier and therefore is not behaviorally equivalent.
 
 ## Why `waypost_read` Moves To CLI
 
@@ -335,6 +467,13 @@ Recommended implementation:
 The binary-owned document is authoritative for command mechanics. Skills should
 not duplicate it.
 
+Agent Deck documentation follows the same ownership rule in the Agent Deck
+binary. Add `agent-deck version --json`; any skill that leaves the retained MCP
+session path for an Agent Deck CLI administration command must resolve one
+configured executable, verify its version, and read documentation from that same
+binary. Waypost does not duplicate Agent Deck command documentation or claim
+cross-binary version equality.
+
 ### Structured Output
 
 The document body is intended to be read as text, so Markdown is the default
@@ -375,33 +514,71 @@ The shared workflow prompt still owns its deliberate one-at-a-time personal
 message policy, because that policy belongs to Agent Deck workflow rather than
 the Waypost CLI.
 
+## Safe CLI Invocation
+
+Hybrid mode requires argv-safe execution. Workflow code must not concatenate
+message-derived values into `sh -c`, shell substitutions, or unquoted command
+strings.
+
+Rules:
+
+- invoke `cli_context.executable` with an argument array
+- add `cli_context.argv_prefix` as separate arguments
+- pass addresses, group names, persons, delivery ids, message ids, durations,
+  and paths as individual argv elements
+- pass message bodies through `--body-file` or stdin, never as shell syntax
+- let Waypost's command parser and normalization functions remain the final
+  validation owner for addresses, ids, states, and times
+- treat a host that exposes only unsafe string interpolation as unsupported for
+  `hybrid`
+
+Skills may validate expected workflow shape before execution, but they must not
+replace CLI validation or construct a second address grammar.
+
 ## MCP Tool Registration
 
-Define one explicit default registration list rather than registering every
-handler automatically.
+Use one authoritative operation-capability registry instead of maintaining an
+MCP list, CLI mapping, doc index, and parity expectations separately.
 
-Conceptually:
+Conceptually, each entry contains:
 
 ```go
-var defaultMCPTools = []string{
-    "waypost_status",
-    "waypost_bind",
-    "waypost_debug",
-    "waypost_send",
-    "waypost_recv",
-    "waypost_claim_history",
-    "waypost_ack",
-    "waypost_release",
-    "waypost_defer",
-    "waypost_fail",
-    "agent_deck_resolve_session",
-    "agent_deck_create_session",
-    "agent_deck_require_session",
+type Capability struct {
+    ToolName       string
+    MCPProfiles    []string
+    CLICommand     string
+    CLIPresent     bool
+    StateOwner     StateOwner
+    IdentityInputs []string
+    DocTopic       string
 }
 ```
 
-Handlers for CLI-only operations may remain reusable internally, but they are
-not registered in the default MCP `tools/list` response.
+The registry drives:
+
+- MCP tool registration for `hybrid` and `full`
+- `waypost capabilities --json`
+- the generated operation index in `waypost doc mcp-cli-boundary`
+- validation that every CLI-only capability has an existing structured CLI
+  contract and a doc topic
+- parity and profile-membership tests
+
+Typed MCP input schemas and handlers remain explicit. The registry selects
+which typed handlers are registered; it does not replace them with generic
+dispatch.
+
+At startup, fail fast if:
+
+- a profile names a tool without a registered typed handler
+- a hybrid-removed tool lacks a CLI mapping or is marked `CLIPresent=false`
+- a CLI-only operation lacks a doc topic
+- two capability entries claim the same tool name
+
+The three group-subscriber entries remain in `hybrid` until their CLI commands
+exist. Once parity is implemented, changing their registry membership is the
+single source change that removes them from `tools/list` and enables the
+corresponding tests. The target fourteen-tool surface is reached only after
+that prerequisite.
 
 Avoid a generic `waypost_command` MCP tool. That would hide the large command
 surface behind one schema while preserving the same model-selection problem
@@ -409,33 +586,77 @@ and weakening argument validation.
 
 ## Compatibility And Rollout
 
-The CLI is the compatibility surface and remains unchanged except for additive
-`doc` commands.
+The relevant installation units update independently:
 
-The MCP tool-list change affects existing prompts and clients that directly
-call a removed MCP tool. Roll it out as one coordinated change:
+- Waypost binary and MCP server
+- Agent Deck binary
+- MCP host configuration
+- installed `config_files` skills and shared prompts
 
-1. add `waypost doc` topics and any missing structured CLI output
-2. add companion `agent-deck doc` topics in the Agent Deck repository
-3. update skills to use CLI-only paths for removed MCP operations
-4. update MCP registration to expose the thirteen-tool default set
-5. verify every workflow skill against the new tool list
+The design therefore requires profiles; they are not an optional mitigation.
 
-If installations can update the binary and prompts independently, provide a
-temporary explicit compatibility profile:
+Add:
 
 ```text
-waypost mcp --tool-profile full
+waypost mcp --tool-profile full|hybrid
 ```
 
-Rules for that profile:
+Profile selection is an MCP process startup decision because MCP clients cache
+or discover `tools/list` per server instance. Changing it requires restarting
+the MCP session.
 
-- `core` is the intended default after prompt migration
-- `full` exposes the previous tool list only during the compatibility window
-- the profile is explicit and observable in `waypost_status`
-- remove `full` after installed prompts and binaries are known to move together
+Rollout phases:
 
-Do not keep two permanent tool surfaces without a real compatibility need.
+### Phase 1: parity release
+
+- ship the capability registry, `version --json`, status CLI context, and doc
+  topics
+- add the missing group-subscriber CLI commands and structured `undefer` output
+- ship both profiles with `full` as the raw `waypost mcp` default
+- keep existing host configurations unchanged
+- run the old-skill/new-binary and new-skill/new-binary compatibility suites
+
+### Phase 2: Agent Deck hybrid opt-in
+
+- update Agent Deck-managed MCP configuration to pass
+  `--tool-profile hybrid`
+- update installed skills in the same configuration release to use documented
+  CLI paths
+- leave raw third-party `waypost mcp` on `full`
+- record the active profile and manifest version in `waypost_status` and
+  structured startup logs
+
+### Phase 3: broader default decision
+
+Do not automatically change the raw binary default.
+
+Changing the default to `hybrid` requires evidence that every supported MCP
+host provides argv-safe local execution and exact CLI-context parity. If
+MCP-only clients remain supported, `full` remains a supported explicit profile.
+
+Deleting `full` is allowed only after an explicit product decision to stop
+supporting MCP-only clients. Prompt migration alone is not sufficient.
+
+Rollback from hybrid is:
+
+1. change the MCP host command to `--tool-profile full`
+2. restart the affected agent session/MCP process
+3. call `waypost_status`
+4. verify `tool_profile=full` and the expected capability manifest version
+
+Hybrid becomes the Agent Deck default only when all gates pass:
+
+- all twelve removed tools have capability-matrix entries and parity tests
+- all required structured CLI commands exist
+- all supported Agent Deck workflow skills pass an automated removed-tool
+  reference audit
+- all hybrid CLI calls pass exact executable/version/state-dir preflight tests
+- old prompts continue to work under `full`
+- new prompts complete the workflow integration suite under `hybrid`
+- rollback to `full` is covered by an end-to-end test
+
+The CLI remains the stable complete capability surface. MCP profile membership
+is an agent-interface compatibility decision.
 
 ## Required Prompt Updates
 
@@ -459,6 +680,21 @@ If `waypost doc <topic>` is unavailable while a skill expects the new CLI path,
 the agent must report a binary/prompt version mismatch instead of guessing from
 `--help` or improvising a destructive command.
 
+### Hybrid context mismatch
+
+If the exact executable, version, state directory, or argv-safe execution
+contract cannot be established, fail before the CLI command performs any read
+or mutation. Report:
+
+- MCP server version
+- expected CLI executable and version
+- observed CLI version or execution error
+- resolved state directory
+- active tool profile
+
+The recovery path is to repair the installation or restart the MCP using the
+`full` profile. Do not silently use another binary or state directory.
+
 ### Removed MCP tool still referenced
 
 An unknown-tool failure after migration indicates prompt drift. The recovery
@@ -479,16 +715,22 @@ before removing its MCP tool.
 
 Required automated coverage:
 
-- default MCP `tools/list` contains exactly the intended thirteen tools
-- CLI-only tools are absent from the default MCP surface
-- compatibility profile, if shipped, exposes the previous list
-- `waypost_status` reports the active tool profile
+- hybrid MCP `tools/list` contains exactly the intended fourteen tools after
+  subscriber CLI parity lands
+- CLI-only tools are absent from the hybrid MCP surface
+- `full` exposes the previous twenty-six-tool list
+- `waypost_status` reports profile, manifest version, executable, version, and
+  resolved state directory
+- `waypost version --json` matches the running MCP binary in parity tests
+- capability registry validation covers every current tool exactly once
+- every hybrid-removed tool has a structured CLI parity test and doc topic
 - every `waypost doc` topic is embedded and readable
 - `waypost doc --list` includes every shipped topic
 - unknown topics fail with a useful topic list
 - examples in documentation are covered by focused CLI integration tests where
   practical
 - existing Waypost CLI command tests remain unchanged and passing
+- unsafe shell-string execution is rejected by the supported hybrid host adapter
 
 Required workflow verification:
 
@@ -499,9 +741,24 @@ Required workflow verification:
 - Agent Deck resolve/create/require workflows still work through MCP
 - history recovery works through `waypost doc recovery` and CLI
 - roundtable group setup works through `waypost doc groups` and CLI
+- group subscriber creation, removal, and inspection work through CLI
 - concurrent CLI receivers and batch `recv --max` retain existing behavior
 - Agent Deck personal workflow continues to process one delivery at a time by
   policy
+
+Measured rollout acceptance:
+
+- visible tool count drops from twenty-six to fourteen for hybrid sessions
+- serialized `tools/list` schema bytes drop by at least 35 percent from the
+  committed twenty-six-tool baseline fixture
+- automated skill audit finds zero executable references to hybrid-removed MCP
+  tools
+- the supported old/new binary and prompt matrix produces zero unknown-tool or
+  wrong-state-directory mutations
+- non-blocking CLI-only operations complete within a 500 ms p95 local process
+  overhead budget in the integration benchmark
+- profile selection, context mismatch, and rollback events are emitted as
+  structured logs
 
 ## Risks And Tradeoffs
 
@@ -513,7 +770,7 @@ Required workflow verification:
   directly.
 - Embedded documentation can still drift from behavior unless examples and
   topic registration are tested.
-- Thirteen tools are more than an aggressively minimal MCP, but each remaining
+- Fourteen tools are more than an aggressively minimal MCP, but each remaining
   tool has either high workflow frequency or a live MCP-state justification.
 
 These costs are preferable to globally exposing every administrative and
@@ -567,16 +824,18 @@ and allows installed skills to drift from the installed binary.
 
 ## Suggested Rollout
 
-1. add the `waypost doc` topic registry and embedded Markdown loader
-2. write the initial Waypost topics from the current authoritative CLI and MCP
-   behavior
-3. add or coordinate companion `agent-deck doc` topics
-4. audit CLI-only commands for stable structured output
-5. update shared and action skills to reference doc topics instead of repeating
+1. add the capability registry, `version --json`, and expanded status context
+2. add the `waypost doc` topic registry and embedded Markdown loader
+3. write the initial Waypost topics from current authoritative behavior
+4. add the three missing group-subscriber CLI commands, structured `undefer`
+   output, and parity tests
+5. add or coordinate companion `agent-deck doc` topics and version identity
+6. update shared and action skills to reference doc topics instead of repeating
    command procedures
-6. add explicit MCP tool-profile registration and status reporting
-7. switch the default MCP surface to the thirteen-tool set
-8. run MCP, CLI, prompt-reference, and workflow integration verification
-9. remove any temporary full compatibility profile after the migration window
+7. ship `full` and `hybrid` profiles with raw MCP defaulting to `full`
+8. run the binary/prompt/profile compatibility matrix and measure schema size
+9. opt Agent Deck-managed configurations into `hybrid`
+10. retain `full` for rollback and MCP-only clients unless product support scope
+    explicitly changes
 
 This sequence fixes discoverability before shrinking the tool surface.
