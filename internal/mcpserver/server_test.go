@@ -4853,7 +4853,7 @@ func TestReadToolRequiresWaypostStatusFirst(t *testing.T) {
 	}
 }
 
-func TestAllNonStatusToolsRequireWaypostStatus(t *testing.T) {
+func TestOnlyWaypostToolsRequireWaypostStatus(t *testing.T) {
 	service := newService(Options{
 		WaypostServiceFactory: fakeWaypostServiceFactory{service: &fakeWaypostService{t: t}},
 		CommandRunner:         &fakeRunner{t: t},
@@ -4882,9 +4882,16 @@ func TestAllNonStatusToolsRequireWaypostStatus(t *testing.T) {
 		t.Fatalf("ListTools() error = %v", err)
 	}
 	registered := map[string]bool{}
+	statusExempt := map[string]bool{
+		"waypost_status":             true,
+		"waypost_debug":              true,
+		"agent_deck_resolve_session": true,
+		"agent_deck_create_session":  true,
+		"agent_deck_require_session": true,
+	}
 	for _, tool := range tools.Tools {
 		registered[tool.Name] = true
-		if tool.Name == "waypost_status" || tool.Name == "waypost_debug" {
+		if statusExempt[tool.Name] {
 			continue
 		}
 		if !requiresWaypostStatusToolName(tool.Name) {
@@ -4918,6 +4925,20 @@ func TestAllNonStatusToolsRequireWaypostStatus(t *testing.T) {
 	}
 	if !reflect.DeepEqual(registered, want) {
 		t.Fatalf("registered MCP tools = %v, want exactly %v", registered, want)
+	}
+}
+
+func TestServerInstructionsScopeStatusGateToWaypostTools(t *testing.T) {
+	for _, want := range []string{
+		"before any other waypost_* tool except waypost_debug",
+		"Agent Deck session tools do not require this bootstrap",
+	} {
+		if !strings.Contains(serverInstructions, want) {
+			t.Fatalf("serverInstructions = %q, want %q", serverInstructions, want)
+		}
+	}
+	if strings.Contains(serverInstructions, "All other tools fail") {
+		t.Fatalf("serverInstructions retains the global status gate: %q", serverInstructions)
 	}
 }
 
@@ -6798,9 +6819,6 @@ func requiresWaypostStatusToolNames() []string {
 		"waypost_ack",
 		"waypost_release",
 		"waypost_defer",
-		"agent_deck_resolve_session",
-		"agent_deck_create_session",
-		"agent_deck_require_session",
 	}
 }
 

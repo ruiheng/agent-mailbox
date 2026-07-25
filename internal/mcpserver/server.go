@@ -37,7 +37,7 @@ const (
 	defaultNotifyMessage         = "NOTICE: There might be new delivery in waypost."
 	agentDeckBindRecoveryHint    = "agent-deck address auto-bind did not find your current session; run `agent-deck session current --json` to find your `agent-deck/<session-id>` address, then call `waypost_bind` with that address."
 	toolSessionBindRecoveryHint  = "AI tool session auto-bind did not find codex/..., claude/..., gemini/..., or opencode/...; expose CODEX_THREAD_ID, CLAUDE_CODE_SESSION_ID, GEMINI_SESSION_ID, or OPENCODE_SESSION_ID, wait for agent-deck state sync for the current session, then call `waypost_status` again or call `waypost_bind` manually."
-	serverInstructions           = "The first tool call must be waypost_status; it auto-binds detectable agent session addresses and reports warnings. All other tools fail until it has run.\nMCP exposes only common operations. For complete Waypost functionality and workflow guidance, use the reported executable:\n  <executable> doc --list\n  <executable> doc <topic>\nRun stateful CLI operations with the reported resolved_state_dir. Do not guess another binary or state directory."
+	serverInstructions           = "Call waypost_status before any other waypost_* tool except waypost_debug; it auto-binds detectable agent session addresses and reports warnings. Agent Deck session tools do not require this bootstrap.\nMCP exposes only common operations. For complete Waypost functionality and workflow guidance, use the reported executable:\n  <executable> doc --list\n  <executable> doc <topic>\nRun stateful CLI operations with the reported resolved_state_dir. Do not guess another binary or state directory."
 	unsetValue                   = "<unset>"
 )
 

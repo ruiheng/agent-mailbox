@@ -201,8 +201,9 @@ outside this design.
 The MCP server instructions are themselves a concise agent prompt:
 
 ```text
-The first tool call must be waypost_status; it auto-binds detectable agent
-session addresses and reports warnings. All other tools fail until it has run.
+Call waypost_status before any other waypost_* tool except waypost_debug; it
+auto-binds detectable agent session addresses and reports warnings. Agent Deck
+session tools do not require this bootstrap.
 MCP exposes only common operations. For complete Waypost functionality and
 workflow guidance, use the reported executable:
   <executable> doc --list
@@ -568,6 +569,7 @@ Automated checks cover:
 - status, bind, and debug bootstrap/repair behavior
 - send, recv, claim history, and `ack`/`release`/`defer` through MCP
 - Agent Deck resolve/create/require behavior remains unchanged
+- Agent Deck resolve/create/require can run before `waypost_status`
 - MCP server instructions identify `waypost doc --list` and the per-topic
   `waypost doc TOPIC` form as the complete CLI guidance entry points and require
   the binary and state directory reported by `waypost_status`
