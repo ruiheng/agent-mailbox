@@ -171,6 +171,40 @@ func TestCLIJSONErrorsAndEmbeddedDocs(t *testing.T) {
 		t.Fatalf("wait no-message result = %+v, want silent exit 2", wait)
 	}
 
+	overview := runCLI(t, "", "doc")
+	if overview.exitCode != 0 || overview.stderr != "" {
+		t.Fatalf("doc overview result = %+v, want prompt on stdout", overview)
+	}
+	if len(strings.Fields(overview.stdout)) > 300 {
+		t.Fatalf("doc overview has %d words, want at most 300", len(strings.Fields(overview.stdout)))
+	}
+	for _, required := range []string{
+		"# Waypost workflow",
+		"waypost_status",
+		"waypost_recv",
+		"settle its lease exactly once",
+		"release for immediate retry without recording failure",
+		"CLI fail for a processing failure that increments attempts and may dead-letter",
+		`MCP waypost_recv no message: successful result with status: "no_message"`,
+		`CLI recv no message: exit 2 with status: "no_message" JSON on stdout`,
+		"CLI wait no message: exit 2 with no output",
+		"CLI --json",
+		"WAYPOST doc --list",
+		"error_code",
+	} {
+		if !strings.Contains(overview.stdout, required) {
+			t.Fatalf("doc overview = %q, missing %q", overview.stdout, required)
+		}
+	}
+	if strings.Contains(overview.stdout, "Usage:") {
+		t.Fatalf("doc overview regressed to command help: %q", overview.stdout)
+	}
+	for _, forbidden := range []string{"Agent Deck", "planner", "reviewer", "coder", "YAML", "git branch"} {
+		if strings.Contains(overview.stdout, forbidden) {
+			t.Fatalf("doc overview contains forbidden %q: %q", forbidden, overview.stdout)
+		}
+	}
+
 	list := runCLI(t, "", "doc", "--list")
 	if list.exitCode != 0 {
 		t.Fatalf("doc --list exit code = %d, stderr = %q", list.exitCode, list.stderr)

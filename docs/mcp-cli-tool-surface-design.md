@@ -491,6 +491,10 @@ Initial topics:
 - `groups`
 - `diagnostics`
 
+Bare `waypost doc` prints an overall prompt covering the basic MCP/CLI routing,
+personal receive-and-settle lifecycle, structured CLI result contract, topic
+discovery, and stop rules. It is the starting prompt, not another listed topic.
+
 Do not create one topic per command. Topics exist only when workflow guidance
 beyond `--help` is needed.
 
@@ -595,6 +599,7 @@ Automated checks cover:
 - concurrent and batch claims retain existing correctness
 - `read.has_more` appears only when true
 - every prompt stays within its word budget and contains no forbidden material
+- bare `waypost doc` returns the overall workflow prompt rather than usage help
 - `docs/cli.md` remains outside embedded prompt resources
 - the count query passes query-plan and benchmark checks
 

@@ -8,6 +8,34 @@ import (
 	"sort"
 )
 
+const cliDocOverview = `# Waypost workflow
+Use when: you need to exchange durable messages or inspect or change Waypost state.
+
+## Required context
+- If MCP is available, call waypost_status before other waypost_* tools except waypost_debug.
+- Use the executable and resolved state directory it reports for every stateful CLI command.
+- Use exact ADDRESS, GROUP_ADDRESS, PERSON, ids, and lease tokens; do not infer them.
+
+## Do
+1. Use MCP for the common live flow: waypost_send, waypost_recv, waypost_claim_history, waypost_ack, waypost_release, and waypost_defer.
+2. After a personal recv, settle its lease exactly once: ack after success; release for immediate retry without recording failure; defer until a known time; or CLI fail for a processing failure that increments attempts and may dead-letter.
+3. Use CLI --json for wait, list, read, forward, fail, undefer, group, and address inspection. A successful CLI forward is durable-only; it does not guarantee notification or wakeup.
+4. Run WAYPOST doc --list, then WAYPOST doc TOPIC when a task needs specific recovery, history, group, or diagnostic guidance.
+
+## Interpret
+- CLI success: exit 0 and one JSON document on stdout.
+- MCP waypost_recv no message: successful result with status: "no_message".
+- CLI recv no message: exit 2 with status: "no_message" JSON on stdout.
+- CLI wait no message: exit 2 with no output.
+- Failure: exit 1 and one JSON error on stderr. Branch on error_code; retry only when retryable is true.
+- Personal recv returns a lease token and must be settled. Group recv marks one message read and has no lease lifecycle.
+
+## Stop
+- Do not use a different binary or state directory than waypost_status reports.
+- Do not settle a delivery without its message context.
+- Do not guess missing identities, delivery ids, or lease tokens.
+`
+
 var cliDocTopics = map[string]string{
 	"mcp-cli-boundary": `# MCP/CLI boundary
 Use when: you need a Waypost operation that is not exposed as a common MCP tool.
@@ -135,8 +163,8 @@ func (a *App) runDocCommand(args []string) error {
 		return a.writeDocTopics()
 	}
 	if len(remaining) == 0 {
-		a.writeDocHelp()
-		return ErrHelpRequested
+		_, err := fmt.Fprint(a.stdout, cliDocOverview)
+		return err
 	}
 	if len(remaining) != 1 {
 		return errors.New("doc accepts exactly one topic")
@@ -166,6 +194,7 @@ func (a *App) writeDocTopics() error {
 func (a *App) writeDocHelp() {
 	writeHelp(a.stdout, []string{
 		"Usage:",
+		"  waypost doc",
 		"  waypost doc --list",
 		"  waypost doc TOPIC",
 	})

@@ -4932,6 +4932,7 @@ func TestServerInstructionsScopeStatusGateToWaypostTools(t *testing.T) {
 	for _, want := range []string{
 		"before any other waypost_* tool except waypost_debug",
 		"Agent Deck session tools do not require this bootstrap",
+		"<executable> doc\n",
 	} {
 		if !strings.Contains(serverInstructions, want) {
 			t.Fatalf("serverInstructions = %q, want %q", serverInstructions, want)
