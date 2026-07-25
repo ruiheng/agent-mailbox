@@ -26,15 +26,16 @@ const (
 )
 
 var (
-	ErrNoMessage          = errors.New("no message available")
-	ErrClaimContention    = errors.New("receive claim contention")
-	ErrBodyIntegrity      = errors.New("body blob failed integrity check")
-	ErrLeaseExpired       = errors.New("lease expired")
-	ErrLeaseNotFound      = errors.New("lease delivery not found")
-	ErrLeaseNotLeased     = errors.New("delivery is not leased")
-	ErrLeaseRenewChanged  = errors.New("lease changed while renewing")
-	ErrLeaseTokenMismatch = errors.New("lease token does not match current lease")
-	ErrReceiveRecovery    = errors.New("receive recovery failed")
+	ErrNoMessage               = errors.New("no message available")
+	ErrClaimContention         = errors.New("receive claim contention")
+	ErrBodyIntegrity           = errors.New("body blob failed integrity check")
+	ErrLeaseExpired            = errors.New("lease expired")
+	ErrLeaseNotFound           = errors.New("lease delivery not found")
+	ErrLeaseNotLeased          = errors.New("delivery is not leased")
+	ErrLeaseRenewChanged       = errors.New("lease changed while renewing")
+	ErrLeaseTokenMismatch      = errors.New("lease token does not match current lease")
+	ErrReceiveRecovery         = errors.New("receive recovery failed")
+	ErrReceiveRecoveryRequired = errors.New("receive recovery required")
 )
 
 type leaseSentinelError struct {
@@ -71,6 +72,22 @@ type ReceiveRecoveryError struct {
 	DeliveryID  string
 	ReceiveErr  error
 	RecoveryErr error
+}
+
+// ReceiveRecoveryRequiredError reports the only receive failure that can leave
+// a newly claimed delivery leased. Callers must settle every claim before
+// attempting another receive.
+type ReceiveRecoveryRequiredError struct {
+	Cause  error
+	Claims []ReceivedMessage
+}
+
+func (e *ReceiveRecoveryRequiredError) Error() string {
+	return "remaining-state query failed and claim rollback was incomplete"
+}
+
+func (e *ReceiveRecoveryRequiredError) Unwrap() []error {
+	return []error{ErrReceiveRecoveryRequired, e.Cause}
 }
 
 func (e *ReceiveRecoveryError) Error() string {
@@ -146,8 +163,17 @@ type GroupReceivedMessage struct {
 }
 
 type ReceiveResult struct {
-	Messages []ReceivedMessage `json:"messages"`
-	HasMore  bool              `json:"has_more"`
+	Messages         []ReceivedMessage `json:"messages"`
+	RemainingByState map[string]int    `json:"remaining_by_state,omitempty"`
+}
+
+// DeliveryLeaseState is the durable delivery state used to reconcile a live
+// MCP lease cache. A missing delivery has Found set to false.
+type DeliveryLeaseState struct {
+	Found        bool
+	State        string
+	LeaseToken   string
+	TransitionAt string
 }
 
 type DeliveryTransitionResult struct {
@@ -213,6 +239,10 @@ func (s *Store) ReceiveBatch(ctx context.Context, params ReceiveBatchParams) (Re
 }
 
 func (s *Store) receiveBatchWithLeasePolicy(ctx context.Context, addresses []string, maxMessages int, policy receiveLeasePolicy) (ReceiveResult, error) {
+	return s.receiveBatchWithLeasePolicyAndRemainingCounter(ctx, addresses, maxMessages, policy, s.RemainingByState)
+}
+
+func (s *Store) receiveBatchWithLeasePolicyAndRemainingCounter(ctx context.Context, addresses []string, maxMessages int, policy receiveLeasePolicy, remainingCounter func(context.Context, []string, []string) (map[string]int, error)) (ReceiveResult, error) {
 	messages := make([]ReceivedMessage, 0, maxMessages)
 	for len(messages) < maxMessages {
 		message, err := s.receiveOnceWithLeasePolicy(ctx, addresses, policy)
@@ -224,7 +254,7 @@ func (s *Store) receiveBatchWithLeasePolicy(ctx context.Context, addresses []str
 			break
 		}
 		if errors.Is(err, ErrReceiveRecovery) || errors.Is(err, ErrClaimContention) {
-			if releaseErr := s.rollbackReceivedBatchMessages(ctx, messages); releaseErr != nil {
+			if _, releaseErr := s.rollbackReceivedBatchMessages(ctx, messages); releaseErr != nil {
 				return ReceiveResult{}, errors.Join(err, releaseErr)
 			}
 			return ReceiveResult{}, err
@@ -235,23 +265,26 @@ func (s *Store) receiveBatchWithLeasePolicy(ctx context.Context, addresses []str
 		return ReceiveResult{}, err
 	}
 
-	if len(messages) == 0 {
-		return ReceiveResult{}, ErrNoMessage
-	}
-
-	hasMore := false
-	if len(messages) == maxMessages {
-		var err error
-		hasMore, err = s.hasClaimableDelivery(ctx, addresses)
-		if err != nil {
-			return ReceiveResult{}, err
+	remainingByState, err := remainingCounter(ctx, addresses, receivedDeliveryIDs(messages))
+	if err != nil {
+		unreleased, rollbackErr := s.rollbackReceivedBatchMessages(ctx, messages)
+		if len(unreleased) > 0 {
+			return ReceiveResult{}, &ReceiveRecoveryRequiredError{
+				Cause:  errors.Join(err, rollbackErr),
+				Claims: unreleased,
+			}
 		}
+		return ReceiveResult{}, err
 	}
 
-	return ReceiveResult{
-		Messages: messages,
-		HasMore:  hasMore,
-	}, nil
+	result := ReceiveResult{
+		Messages:         messages,
+		RemainingByState: remainingByState,
+	}
+	if len(messages) == 0 {
+		return result, ErrNoMessage
+	}
+	return result, nil
 }
 
 func (s *Store) Ack(ctx context.Context, deliveryID, leaseToken string) (DeliveryTransitionResult, error) {
@@ -477,6 +510,50 @@ WHERE delivery_id = ?
 	}, nil
 }
 
+// InspectDeliveryLease reads the durable authority for one tracked lease. It
+// intentionally does not infer ownership from in-memory state.
+func (s *Store) InspectDeliveryLease(ctx context.Context, deliveryID string) (DeliveryLeaseState, error) {
+	var state string
+	var leaseToken sql.NullString
+	err := s.readDB.QueryRowContext(ctx, `
+SELECT state, lease_token
+FROM deliveries
+WHERE delivery_id = ?
+`, deliveryID).Scan(&state, &leaseToken)
+	if errors.Is(err, sql.ErrNoRows) {
+		return DeliveryLeaseState{}, nil
+	}
+	if err != nil {
+		return DeliveryLeaseState{}, fmt.Errorf("inspect delivery lease %q: %w", deliveryID, err)
+	}
+
+	result := DeliveryLeaseState{
+		Found: true,
+		State: state,
+	}
+	if leaseToken.Valid {
+		result.LeaseToken = leaseToken.String
+	}
+
+	// The latest delivery event is the durable state-transition timestamp for
+	// a terminal or replacement observation. If an older database lacks that
+	// event, reconciliation records its observation time instead.
+	var transitionAt string
+	err = s.readDB.QueryRowContext(ctx, `
+SELECT created_at
+FROM events
+WHERE delivery_id = ?
+ORDER BY created_at DESC, event_id DESC
+LIMIT 1
+`, deliveryID).Scan(&transitionAt)
+	if err == nil {
+		result.TransitionAt = transitionAt
+	} else if !errors.Is(err, sql.ErrNoRows) {
+		return DeliveryLeaseState{}, fmt.Errorf("inspect delivery lease event %q: %w", deliveryID, err)
+	}
+	return result, nil
+}
+
 func (s *Store) receiveOnceWithLeasePolicy(ctx context.Context, addresses []string, policy receiveLeasePolicy) (ReceivedMessage, error) {
 	policy, err := normalizeReceiveLeasePolicy(policy)
 	if err != nil {
@@ -674,8 +751,17 @@ func waitForClaimRetry(ctx context.Context) error {
 	}
 }
 
-func (s *Store) rollbackReceivedBatchMessages(ctx context.Context, messages []ReceivedMessage) error {
+func receivedDeliveryIDs(messages []ReceivedMessage) []string {
+	ids := make([]string, 0, len(messages))
+	for _, message := range messages {
+		ids = append(ids, message.DeliveryID)
+	}
+	return ids
+}
+
+func (s *Store) rollbackReceivedBatchMessages(ctx context.Context, messages []ReceivedMessage) ([]ReceivedMessage, error) {
 	var rollbackErrs []error
+	unreleased := make([]ReceivedMessage, 0)
 	for i := len(messages) - 1; i >= 0; i-- {
 		message := messages[i]
 		if _, err := s.transitionLeasedDelivery(ctx, message.DeliveryID, message.LeaseToken, func(_ time.Time, delivery leasedDeliveryRecord) (deliveryTransitionSpec, error) {
@@ -694,12 +780,13 @@ func (s *Store) rollbackReceivedBatchMessages(ctx context.Context, messages []Re
 			}, nil
 		}); err != nil {
 			rollbackErrs = append(rollbackErrs, fmt.Errorf("rollback received batch delivery %q: %w", message.DeliveryID, err))
+			unreleased = append(unreleased, message)
 		}
 	}
 	if len(rollbackErrs) == 0 {
-		return nil
+		return nil, nil
 	}
-	return errors.Join(rollbackErrs...)
+	return unreleased, errors.Join(rollbackErrs...)
 }
 
 func (s *Store) recoverReceiveFailure(ctx context.Context, deliveryID, leaseToken string, readErr error) error {

@@ -52,7 +52,7 @@ func TestSharedWaypostProjectionShapes(t *testing.T) {
 					ContentType:      "text/plain",
 					Body:             "body",
 				}},
-				HasMore: true,
+				RemainingByState: map[string]int{"queued": 1},
 			}),
 			want: map[string]any{
 				"messages": []any{
@@ -65,7 +65,7 @@ func TestSharedWaypostProjectionShapes(t *testing.T) {
 						"body":              "body",
 					},
 				},
-				"has_more": true,
+				"remaining_by_state": map[string]any{"queued": float64(1)},
 			},
 		},
 		{

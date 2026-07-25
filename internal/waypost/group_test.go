@@ -1986,19 +1986,23 @@ func TestGroupReadCLIShapesStayExplicitWithAs(t *testing.T) {
 	if err := json.Unmarshal(recvStdout.Bytes(), &recvPayload); err != nil {
 		t.Fatalf("json.Unmarshal(group recv) error = %v", err)
 	}
-	if recvPayload["group_address"] != "group/cli" || recvPayload["person"] != "alice" {
+	if recvPayload["status"] != "received" || recvPayload["as_person"] != "alice" {
 		t.Fatalf("group recv payload = %v, want group metadata", recvPayload)
 	}
-	if _, ok := recvPayload["read_count"]; !ok {
+	recvMessage, ok := recvPayload["message"].(map[string]any)
+	if !ok || recvMessage["group_address"] != "group/cli" || recvMessage["person"] != "alice" {
+		t.Fatalf("group recv payload = %v, want nested group message", recvPayload)
+	}
+	if _, ok := recvMessage["read_count"]; !ok {
 		t.Fatalf("group recv payload = %v, want read_count", recvPayload)
 	}
-	if _, ok := recvPayload["eligible_count"]; !ok {
+	if _, ok := recvMessage["eligible_count"]; !ok {
 		t.Fatalf("group recv payload = %v, want eligible_count", recvPayload)
 	}
-	if _, ok := recvPayload["delivery_id"]; ok {
+	if _, ok := recvMessage["delivery_id"]; ok {
 		t.Fatalf("group recv payload = %v, want no delivery_id", recvPayload)
 	}
-	if _, ok := recvPayload["lease_token"]; ok {
+	if _, ok := recvMessage["lease_token"]; ok {
 		t.Fatalf("group recv payload = %v, want no lease_token", recvPayload)
 	}
 }

@@ -1,7 +1,9 @@
 package mcpserver
 
 import (
+	"context"
 	"errors"
+	"sort"
 	"sync"
 
 	"github.com/ruiheng/waypost/internal/waypost"
@@ -103,8 +105,64 @@ func (m *activeLeaseManager) markTerminal(deliveryID, status, terminalAt string)
 	if history, ok := m.history[deliveryID]; ok {
 		history.Status = status
 		history.TerminalAt = terminalAt
+		history.LeaseToken = ""
 		m.history[deliveryID] = history
 	}
+}
+
+// reconcileTrackedLeases makes durable delivery state the single authority for
+// MCP lease ownership. The caller supplies the storage inspection so this
+// cache stays independent of any particular runtime implementation.
+func (m *activeLeaseManager) reconcileTrackedLeases(ctx context.Context, observedAt string, inspect func(context.Context, string) (waypost.DeliveryLeaseState, error)) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	deliveryIDs := make([]string, 0, len(m.leases))
+	for deliveryID := range m.leases {
+		deliveryIDs = append(deliveryIDs, deliveryID)
+	}
+	sort.Strings(deliveryIDs)
+	for _, deliveryID := range deliveryIDs {
+		lease, ok := m.leases[deliveryID]
+		if !ok {
+			continue
+		}
+		durable, err := inspect(ctx, deliveryID)
+		if err != nil {
+			// Keep this entry for a later retry. Presenting cached state as
+			// authoritative after an inspection error would be worse.
+			return err
+		}
+		if durable.Found && durable.State == "leased" && durable.LeaseToken == lease.LeaseToken {
+			continue
+		}
+
+		status := "missing"
+		terminalAt := observedAt
+		if durable.Found {
+			if durable.State == "leased" {
+				status = "lease_replaced"
+			} else {
+				status = durable.State
+			}
+			if durable.TransitionAt != "" {
+				terminalAt = durable.TransitionAt
+			}
+		}
+
+		delete(m.leases, deliveryID)
+		delete(m.failures, deliveryID)
+		if history, ok := m.history[deliveryID]; ok {
+			history.Status = status
+			history.TerminalAt = terminalAt
+			history.LeaseToken = ""
+			m.history[deliveryID] = history
+		}
+	}
+	if len(m.failures) == 0 {
+		m.lastError = nil
+	}
+	return nil
 }
 
 func (m *activeLeaseManager) snapshot() []activeLease {
@@ -143,17 +201,16 @@ func (m *activeLeaseManager) markRenewalFailure(lease activeLease, cause error) 
 	defer m.mu.Unlock()
 
 	definitive := renewalFailureDefinitive(cause)
-	if definitive {
-		delete(m.leases, lease.DeliveryID)
-		if history, ok := m.history[lease.DeliveryID]; ok {
-			history.Status = "renewal_failed"
-			m.history[lease.DeliveryID] = history
-		}
-	}
 	failure := &leaseRenewalFailure{
 		DeliveryID: lease.DeliveryID,
 		Cause:      cause,
 		Definitive: definitive,
+	}
+	// A definitive renewal response is reconciled against durable state by the
+	// caller before this method runs. Do not overwrite that exact terminal
+	// history with a cache-only "renewal_failed" label.
+	if _, tracked := m.leases[lease.DeliveryID]; !tracked {
+		return failure
 	}
 	m.failures[lease.DeliveryID] = *failure
 	m.lastError = failure

@@ -57,8 +57,23 @@ type ReceivedMessageCompact struct {
 }
 
 type ReceiveResultCompact struct {
-	Messages []ReceivedMessageCompact `json:"messages"`
-	HasMore  bool                     `json:"has_more"`
+	Messages         []ReceivedMessageCompact `json:"messages"`
+	RemainingByState map[string]int           `json:"remaining_by_state,omitempty"`
+}
+
+type personalReceiveOutput struct {
+	Status           string                   `json:"status"`
+	Addresses        []string                 `json:"addresses"`
+	Delivery         *ReceivedMessageCompact  `json:"delivery,omitempty"`
+	Deliveries       []ReceivedMessageCompact `json:"deliveries,omitempty"`
+	RemainingByState map[string]int           `json:"remaining_by_state,omitempty"`
+}
+
+type groupReceiveOutput struct {
+	Status    string                       `json:"status"`
+	Addresses []string                     `json:"addresses"`
+	AsPerson  string                       `json:"as_person"`
+	Message   *GroupReceivedMessageCompact `json:"message,omitempty"`
 }
 
 type readMessageResult struct {
@@ -194,8 +209,8 @@ func CompactReceiveResult(result ReceiveResult) ReceiveResultCompact {
 		messages = append(messages, CompactReceivedMessage(message))
 	}
 	return ReceiveResultCompact{
-		Messages: messages,
-		HasMore:  result.HasMore,
+		Messages:         messages,
+		RemainingByState: result.RemainingByState,
 	}
 }
 

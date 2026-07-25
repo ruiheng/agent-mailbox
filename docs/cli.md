@@ -115,12 +115,11 @@ waypost recv \
   --json
 ```
 
-Without `--max`, `recv` returns one leased message in the legacy single-message
-shape only when `--full` is set. By default it returns a compact single-message
-view with just the fields needed for normal processing. With `--max`, the
-receive result becomes an object with `messages` and `has_more`. Each message
-entry includes its own `delivery_id` and `lease_token`. Keep those for
-follow-up actions.
+Without `--max`, structured `recv` returns a `status`, `addresses`, and one
+compact `delivery`. With `--max`, it returns ordered `deliveries`. Both shapes
+include sparse `remaining_by_state` counts when unfinished deliveries remain;
+the current call's returned deliveries are excluded. Each delivery includes its
+own `delivery_id` and `lease_token`. Keep those for follow-up actions.
 
 Observe deliveries without claiming them:
 
@@ -208,6 +207,7 @@ Group waypost quick start:
 ```bash
 waypost group create --group group/eng
 waypost group add-member --group group/eng --person alice
+waypost group add-subscriber --group group/eng --notify-address agent/eng-notice --person alice
 printf 'team sync\n' | waypost send --to group/eng --group --body-file -
 waypost list --for group/eng --as alice --json
 waypost recv --for group/eng --as alice --json
@@ -221,6 +221,8 @@ Rules:
 
 - create and reserve a group address with `group create`
 - add or remove members with `group add-member` and `group remove-member`
+- add or remove durable notification subscribers with `group add-subscriber`
+  and `group remove-subscriber`
 - use `send --to <group-address> --group` for group messages
 - use `list|wait|recv --for <group-address> --as <person>` for group reads
 - `watch`, `ack`, `renew`, `release`, `defer`, `undefer`, and `fail` stay personal-waypost-only
@@ -249,7 +251,10 @@ Rules:
 - selection is global oldest-first by `visible_at`, then `message_created_at`,
   then `delivery_id`
 - unseen addresses behave like empty queues
-- `has_more=true` means the batch hit the requested max and more claimable delivery remains
+- `remaining_by_state` is an informational post-receive snapshot of unfinished
+  `queued`, `leased`, and `dead_letter` deliveries; zero counts are omitted
+- future-visible deferred deliveries remain in the `queued` count but are not
+  necessarily claimable now
 
 ## Wait
 
@@ -319,6 +324,19 @@ Notes:
 - use the main `waypost` binary in MCP configs and pass `mcp` as the first argument
 - `--state-dir` remains a global option on the main binary, but the MCP server manages waypost state through its own tool calls rather than per-command CLI flags
 
+### `doc`
+
+Show concise workflow guidance for agent CLI operations.
+
+```bash
+waypost doc --list
+waypost doc <topic>
+```
+
+Use this after `waypost_status` reports the authoritative executable and state
+directory for an MCP process. Initial topics are `mcp-cli-boundary`,
+`recovery`, `history`, `groups`, and `diagnostics`.
+
 ### `send`
 
 Queue one message for a recipient address, or append one message to a known group
@@ -374,14 +392,13 @@ Notes:
 - repeat `--for` to search multiple queues with one batch claim
 - `--max <n>` limits how many deliveries one invocation can lease and may not exceed `10`
 - duplicate `--for` values are ignored after the first occurrence
-- without `--max`, default plain-text and structured output return a compact
-  single-message view with `delivery_id`, `recipient_address`, `lease_token`,
+- without `--max`, structured output returns `status`, `addresses`, and a
+  compact `delivery` with `delivery_id`, `recipient_address`, `lease_token`,
   `subject`, `content_type`, and `body`
 - add `--full` to return the full legacy single-message payload
-- with `--max`, plain-text output prints each claimed message and appends
-  `notice=more_messages_available` when additional claimable delivery remains
-- with `--max`, `--json` and `--yaml` emit a result object with `messages` and `has_more`
-- with `--max --full`, each `messages[]` entry uses the full legacy payload
+- with `--max`, structured output returns `status`, `addresses`, ordered
+  `deliveries`, and sparse `remaining_by_state`; it never emits `has_more`
+- with `--max --full`, each returned delivery uses the full payload
 - unseen addresses are ignored until a matching delivery exists
 - `recv` does not wait; use `wait` if you need to block until work appears
 - group mode requires `--as <person>` and exactly one `--for`
@@ -523,7 +540,7 @@ waypost defer \
 Make a deferred queued delivery visible immediately.
 
 ```bash
-waypost undefer --delivery <delivery_id>
+waypost undefer --delivery <delivery_id> [--json | --yaml]
 ```
 
 Notes:
@@ -540,7 +557,8 @@ Record a processing failure.
 waypost fail \
   --delivery <delivery_id> \
   --lease-token <lease_token> \
-  --reason "tool crashed"
+  --reason "tool crashed" \
+  --json
 ```
 
 Retry behavior in v1:
@@ -656,6 +674,32 @@ Notes:
 - each entry includes `membership_id`, `group_id`, `group_address`, `person_id`,
   `person`, `joined_at`, optional `left_at`, and `active`
 
+### `group add-subscriber`
+
+Add one durable notification subscriber to a group.
+
+```bash
+waypost group add-subscriber --group <address> --notify-address <address> --person <person> [--json | --yaml]
+```
+
+The group must exist. Adding the same active subscriber again fails explicitly.
+
+### `group remove-subscriber`
+
+Remove one active group notification subscriber.
+
+```bash
+waypost group remove-subscriber --group <address> --notify-address <address> [--json | --yaml]
+```
+
+### `group subscribers`
+
+List active group notification subscribers in creation order.
+
+```bash
+waypost group subscribers --group <address> [--json | --yaml]
+```
+
 ### `address inspect`
 
 Inspect whether an address is currently unbound, a personal endpoint, or a
@@ -676,4 +720,6 @@ Notes:
 - `0`: success
 - `2`: `recv` found no message, or `wait --timeout ...` found no matching
   delivery
+- `1`: CLI-owned `--json` operations emit one JSON error document on stderr
+  and leave stdout empty
 - other non-zero: usage error or operational failure

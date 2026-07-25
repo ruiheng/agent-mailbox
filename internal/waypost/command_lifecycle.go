@@ -141,7 +141,9 @@ func (a *App) prepareUndeferCommand(args []string) (preparedCommand, error) {
 	fs.SetOutput(io.Discard)
 
 	var deliveryID string
+	var formats outputFlags
 	fs.StringVar(&deliveryID, "delivery", "", "delivery id")
+	formats.register(fs, "emit JSON", "emit YAML")
 
 	if err := a.parseCommandFlags(fs, args, a.writeUndeferHelp); err != nil {
 		return nil, err
@@ -149,11 +151,18 @@ func (a *App) prepareUndeferCommand(args []string) (preparedCommand, error) {
 	if err := requireFlag(deliveryID, "--delivery"); err != nil {
 		return nil, err
 	}
+	format, err := formats.resolve()
+	if err != nil {
+		return nil, err
+	}
 
 	return func(ctx context.Context, store *Store) error {
 		result, err := store.Undefer(ctx, deliveryID)
 		if err != nil {
 			return err
+		}
+		if format != outputFormatText {
+			return a.writeStructuredOutput(format, result)
 		}
 		return a.writeDeliveryTransitionResultText(result)
 	}, nil
@@ -166,9 +175,11 @@ func (a *App) prepareFailCommand(args []string) (preparedCommand, error) {
 	var deliveryID string
 	var leaseToken string
 	var reason string
+	var formats outputFlags
 	fs.StringVar(&deliveryID, "delivery", "", "delivery id")
 	fs.StringVar(&leaseToken, "lease-token", "", "lease token")
 	fs.StringVar(&reason, "reason", "", "failure reason")
+	formats.register(fs, "emit JSON", "emit YAML")
 
 	if err := a.parseCommandFlags(fs, args, a.writeFailHelp); err != nil {
 		return nil, err
@@ -182,11 +193,18 @@ func (a *App) prepareFailCommand(args []string) (preparedCommand, error) {
 	if err := requireFlag(reason, "--reason"); err != nil {
 		return nil, err
 	}
+	format, err := formats.resolve()
+	if err != nil {
+		return nil, err
+	}
 
 	return func(ctx context.Context, store *Store) error {
 		result, err := store.Fail(ctx, deliveryID, leaseToken, reason)
 		if err != nil {
 			return err
+		}
+		if format != outputFormatText {
+			return a.writeStructuredOutput(format, result)
 		}
 		return a.writeDeliveryTransitionResultText(result)
 	}, nil
@@ -223,13 +241,21 @@ func (a *App) writeDeferHelp() {
 func (a *App) writeUndeferHelp() {
 	writeHelp(a.stdout, []string{
 		"Usage:",
-		"  waypost undefer --delivery ID",
+		"  waypost undefer --delivery ID [--json | --yaml]",
+		"",
+		"Options:",
+		"  --json              Emit JSON",
+		"  --yaml              Emit YAML",
 	})
 }
 
 func (a *App) writeFailHelp() {
 	writeHelp(a.stdout, []string{
 		"Usage:",
-		"  waypost fail --delivery ID --lease-token TOKEN --reason TEXT",
+		"  waypost fail --delivery ID --lease-token TOKEN --reason TEXT [--json | --yaml]",
+		"",
+		"Options:",
+		"  --json              Emit JSON",
+		"  --yaml              Emit YAML",
 	})
 }

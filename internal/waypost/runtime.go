@@ -142,6 +142,12 @@ func resolveStateDir(override string) (string, error) {
 	return filepath.Join(homeDir, ".local", "state", defaultStateDirSuffix), nil
 }
 
+// ResolveStateDir reports the same state directory OpenRuntime will use for a
+// given override without opening the database.
+func ResolveStateDir(override string) (string, error) {
+	return resolveStateDir(override)
+}
+
 func ensureDir(path string) error {
 	if err := os.MkdirAll(path, 0o700); err != nil {
 		return fmt.Errorf("create directory %q: %w", path, err)

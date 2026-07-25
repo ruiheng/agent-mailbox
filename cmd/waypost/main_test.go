@@ -520,10 +520,13 @@ func TestCLIForwardToGroupInboxPreservesGroupMode(t *testing.T) {
 		t.Fatalf("group recv exit code = %d, stderr = %q", recv.exitCode, recv.stderr)
 	}
 
-	var message map[string]any
-	if err := json.Unmarshal([]byte(recv.stdout), &message); err != nil {
+	var recvEnvelope struct {
+		Message map[string]any `json:"message"`
+	}
+	if err := json.Unmarshal([]byte(recv.stdout), &recvEnvelope); err != nil {
 		t.Fatalf("json.Unmarshal(group recv stdout) error = %v; stdout = %q", err, recv.stdout)
 	}
+	message := recvEnvelope.Message
 	if message["body"] != "forward to group\n" {
 		t.Fatalf("group forwarded body = %v, want forward to group\\n", message["body"])
 	}
@@ -1002,7 +1005,7 @@ func TestCLIRecvMultipleAddressesPlainTextIncludesRecipientAddress(t *testing.T)
 	}
 }
 
-func TestCLIRecvHonorsMaxAndReportsMoreAvailable(t *testing.T) {
+func TestCLIRecvHonorsMaxAndReportsRemainingState(t *testing.T) {
 	stateDir := filepath.Join(t.TempDir(), "waypost-state")
 
 	for _, waypostName := range []string{"workflow/one", "workflow/two", "workflow/three"} {
@@ -1034,8 +1037,8 @@ func TestCLIRecvHonorsMaxAndReportsMoreAvailable(t *testing.T) {
 	if len(result.Messages) != 2 {
 		t.Fatalf("len(recv messages) = %d, want 2", len(result.Messages))
 	}
-	if !result.HasMore {
-		t.Fatal("recv has_more = false, want true")
+	if got := result.RemainingByState["queued"]; got != 1 {
+		t.Fatalf("recv remaining_by_state[queued] = %d, want 1", got)
 	}
 	if result.Messages[0].RecipientAddress != "workflow/one" {
 		t.Fatalf("recv messages[0].recipient_address = %q, want workflow/one", result.Messages[0].RecipientAddress)
@@ -1863,8 +1866,8 @@ type receivedMessageSummary struct {
 }
 
 type receiveResultSummary struct {
-	Messages []receivedMessageSummary `json:"messages"`
-	HasMore  bool                     `json:"has_more"`
+	Messages         []receivedMessageSummary `json:"deliveries"`
+	RemainingByState map[string]int           `json:"remaining_by_state"`
 }
 
 type readResult struct {
@@ -1884,6 +1887,13 @@ func decodeReceiveResult(t *testing.T, raw string) receiveResultSummary {
 
 func decodeReceivedMessage(t *testing.T, raw string) receivedMessageSummary {
 	t.Helper()
+
+	var envelope struct {
+		Delivery *receivedMessageSummary `json:"delivery"`
+	}
+	if err := json.Unmarshal([]byte(raw), &envelope); err == nil && envelope.Delivery != nil {
+		return *envelope.Delivery
+	}
 
 	var message receivedMessageSummary
 	if err := json.Unmarshal([]byte(raw), &message); err != nil {

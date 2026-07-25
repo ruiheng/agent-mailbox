@@ -19,7 +19,9 @@ func main() {
 		if errors.Is(err, waypost.ErrNoMessage) {
 			os.Exit(2)
 		}
-		fmt.Fprintln(os.Stderr, err)
+		if !waypost.WriteCLIJSONError(os.Stderr, os.Args[1:], err) {
+			fmt.Fprintln(os.Stderr, err)
+		}
 		os.Exit(1)
 	}
 }

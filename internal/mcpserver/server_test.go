@@ -50,6 +50,10 @@ type fakeWaypostService struct {
 	deferFunc                 func(context.Context, string, string, time.Time) (waypost.DeliveryTransitionResult, error)
 	undeferFunc               func(context.Context, string) (waypost.DeliveryTransitionResult, error)
 	failFunc                  func(context.Context, string, string, string) (waypost.DeliveryTransitionResult, error)
+	inspectLeaseFunc          func(context.Context, string) (waypost.DeliveryLeaseState, error)
+	remainingByStateFunc      func(context.Context, []string, []string) (map[string]int, error)
+	leaseMu                   sync.Mutex
+	leaseStates               map[string]waypost.DeliveryLeaseState
 }
 
 func TestAgentDeckCreateSessionSchemaRequiresWorkdir(t *testing.T) {
@@ -279,13 +283,20 @@ func (f *fakeWaypostService) ListClaimableAddresses(ctx context.Context, address
 }
 
 func (f *fakeWaypostService) ReceiveBatchWithLeaseTTL(ctx context.Context, params waypost.ReceiveBatchParams, ttl time.Duration) (waypost.ReceiveResult, error) {
+	var result waypost.ReceiveResult
+	var err error
 	if f.receiveBatchWithTTLFunc != nil {
-		return f.receiveBatchWithTTLFunc(ctx, params, ttl)
+		result, err = f.receiveBatchWithTTLFunc(ctx, params, ttl)
+	} else {
+		if f.receiveBatchFunc == nil {
+			f.t.Fatalf("unexpected ReceiveBatchWithLeaseTTL call: %+v ttl=%s", params, ttl)
+		}
+		result, err = f.receiveBatchFunc(ctx, params)
 	}
-	if f.receiveBatchFunc == nil {
-		f.t.Fatalf("unexpected ReceiveBatchWithLeaseTTL call: %+v ttl=%s", params, ttl)
+	if err == nil {
+		f.recordLeases(result.Messages)
 	}
-	return f.receiveBatchFunc(ctx, params)
+	return result, err
 }
 
 func (f *fakeWaypostService) Wait(ctx context.Context, params waypost.WaitParams) (waypost.ListedDelivery, error) {
@@ -334,7 +345,53 @@ func (f *fakeWaypostService) Renew(ctx context.Context, deliveryID, leaseToken s
 	if f.renewFunc == nil {
 		f.t.Fatalf("unexpected Renew call: delivery=%q lease=%q extendBy=%s", deliveryID, leaseToken, extendBy)
 	}
-	return f.renewFunc(ctx, deliveryID, leaseToken, extendBy)
+	result, err := f.renewFunc(ctx, deliveryID, leaseToken, extendBy)
+	if err == nil {
+		f.recordLeases([]waypost.ReceivedMessage{{
+			DeliveryID:     result.DeliveryID,
+			LeaseToken:     result.LeaseToken,
+			LeaseExpiresAt: result.LeaseExpiresAt,
+		}})
+	}
+	return result, err
+}
+
+func (f *fakeWaypostService) RemainingByState(ctx context.Context, addresses, excludedDeliveryIDs []string) (map[string]int, error) {
+	if f.remainingByStateFunc != nil {
+		return f.remainingByStateFunc(ctx, addresses, excludedDeliveryIDs)
+	}
+	return nil, nil
+}
+
+func (f *fakeWaypostService) InspectDeliveryLease(ctx context.Context, deliveryID string) (waypost.DeliveryLeaseState, error) {
+	if f.inspectLeaseFunc != nil {
+		return f.inspectLeaseFunc(ctx, deliveryID)
+	}
+	f.leaseMu.Lock()
+	defer f.leaseMu.Unlock()
+	return f.leaseStates[deliveryID], nil
+}
+
+func (f *fakeWaypostService) recordLeases(messages []waypost.ReceivedMessage) {
+	f.leaseMu.Lock()
+	defer f.leaseMu.Unlock()
+	if f.leaseStates == nil {
+		f.leaseStates = make(map[string]waypost.DeliveryLeaseState)
+	}
+	for _, message := range messages {
+		if message.DeliveryID == "" {
+			continue
+		}
+		state := f.leaseStates[message.DeliveryID]
+		if state.State == "" {
+			state.State = "leased"
+			state.Found = true
+		}
+		if message.LeaseToken != "" {
+			state.LeaseToken = message.LeaseToken
+		}
+		f.leaseStates[message.DeliveryID] = state
+	}
 }
 
 func (f *fakeWaypostService) Release(ctx context.Context, deliveryID, leaseToken string) (waypost.DeliveryTransitionResult, error) {
@@ -1089,6 +1146,7 @@ func TestWaypostSendGroupModeKeepsReceiptWhenSubscriberNotifyFails(t *testing.T)
 }
 
 func TestWaypostForwardByMessageIDPreservesPayloadAndPrefixesSubject(t *testing.T) {
+	t.Skip("waypost_forward is CLI-owned after the MCP hard cut")
 	sourceSenderAddress := "agent/source"
 	waypostService := &fakeWaypostService{t: t}
 	openCount := 0
@@ -1162,6 +1220,7 @@ func TestWaypostForwardByMessageIDPreservesPayloadAndPrefixesSubject(t *testing.
 }
 
 func TestWaypostForwardByDeliveryIDAllowsSubjectOverride(t *testing.T) {
+	t.Skip("waypost_forward is CLI-owned after the MCP hard cut")
 	sourceSenderAddress := "agent/source"
 	waypostService := &fakeWaypostService{t: t}
 	waypostService.readDeliveriesFunc = func(_ context.Context, deliveryIDs []string) ([]waypost.ReadDelivery, error) {
@@ -1215,6 +1274,7 @@ func TestWaypostForwardByDeliveryIDAllowsSubjectOverride(t *testing.T) {
 }
 
 func TestWaypostForwardToGroupInboxPreservesGroupMode(t *testing.T) {
+	t.Skip("waypost_forward is CLI-owned after the MCP hard cut")
 	sourceSenderAddress := "agent/source"
 	waypostService := &fakeWaypostService{t: t}
 	waypostService.readMessagesFunc = func(_ context.Context, messageIDs []string) ([]waypost.ReadMessage, error) {
@@ -1288,6 +1348,7 @@ func TestWaypostForwardToGroupInboxPreservesGroupMode(t *testing.T) {
 }
 
 func TestWaypostForwardRequiresExactlyOneSourceID(t *testing.T) {
+	t.Skip("waypost_forward is CLI-owned after the MCP hard cut")
 	service := newService(Options{
 		WaypostServiceFactory: fakeWaypostServiceFactory{service: &fakeWaypostService{t: t}},
 		CommandRunner: &fakeRunner{t: t, handler: func(args []string, input string) (RunResult, error) {
@@ -3070,6 +3131,7 @@ func TestWaypostServiceUsesConfiguredStateDir(t *testing.T) {
 }
 
 func TestWaypostReadSparselyReportsHasMore(t *testing.T) {
+	t.Skip("waypost_read is CLI-owned after the MCP hard cut")
 	t.Parallel()
 
 	hasMore := false
@@ -3120,6 +3182,7 @@ func TestWaypostReadSparselyReportsHasMore(t *testing.T) {
 }
 
 func TestWaypostLifecycleToolsUseDirectWaypostService(t *testing.T) {
+	t.Skip("wait, list, and read are CLI-owned after the MCP hard cut")
 	t.Parallel()
 
 	stateDir := filepath.Join(t.TempDir(), "waypost-state")
@@ -3268,15 +3331,15 @@ func TestWaypostRecvDoesNotWaitForLaterMessage(t *testing.T) {
 	})
 	deliveryID := send["delivery_id"].(string)
 
-	wait := callServiceTool(t, service, "waypost_wait", map[string]any{
+	secondRecv := callServiceTool(t, service, "waypost_recv", map[string]any{
 		"addresses": []string{"agent-deck/self"},
 	})
-	if got := wait["status"]; got != "message_available" {
-		t.Fatalf("wait status = %v, want message_available", got)
+	if got := secondRecv["status"]; got != "received" {
+		t.Fatalf("second recv status = %v, want received", got)
 	}
-	delivery := wait["delivery"].(map[string]any)
+	delivery := secondRecv["delivery"].(map[string]any)
 	if got := delivery["delivery_id"]; got != deliveryID {
-		t.Fatalf("wait delivery_id = %v, want %s", got, deliveryID)
+		t.Fatalf("second recv delivery_id = %v, want %s", got, deliveryID)
 	}
 }
 
@@ -3306,7 +3369,7 @@ func TestWaypostRecvReportsActiveLeaseImmediately(t *testing.T) {
 	firstRecv := callServiceTool(t, service, "waypost_recv", map[string]any{
 		"addresses": []string{"agent-deck/self"},
 	})
-	firstMessage := firstRecv["delivery"].(map[string]any)["messages"].([]any)[0].(map[string]any)
+	firstMessage := firstRecv["delivery"].(map[string]any)
 	leaseToken := firstMessage["lease_token"].(string)
 
 	startedAt := time.Now()
@@ -3539,6 +3602,7 @@ func TestWaypostRecvWithoutTimeoutRemainsImmediate(t *testing.T) {
 }
 
 func TestWaypostGroupMCPRuntimeFlow(t *testing.T) {
+	t.Skip("group control and history are CLI-owned after the MCP hard cut")
 	t.Parallel()
 
 	stateDir := filepath.Join(t.TempDir(), "waypost-state")
@@ -3647,6 +3711,7 @@ func TestWaypostGroupMCPRuntimeFlow(t *testing.T) {
 }
 
 func TestWaypostGroupSendRuntimeKeepsMessageWhenSubscriberNotifyFails(t *testing.T) {
+	t.Skip("group control is CLI-owned after the MCP hard cut")
 	t.Parallel()
 
 	stateDir := filepath.Join(t.TempDir(), "waypost-state")
@@ -3764,8 +3829,7 @@ func TestWaypostRecvExposesForwardedFromAddressInCompactPayload(t *testing.T) {
 	recv := callServiceTool(t, service, "waypost_recv", map[string]any{
 		"addresses": []string{"agent-deck/self"},
 	})
-	delivery := recv["delivery"].(map[string]any)
-	message := delivery["messages"].([]any)[0].(map[string]any)
+	message := recv["delivery"].(map[string]any)
 	if got := message["forwarded_from_address"]; got != "agent/source" {
 		t.Fatalf("forwarded_from_address = %v, want agent/source", got)
 	}
@@ -3773,6 +3837,7 @@ func TestWaypostRecvExposesForwardedFromAddressInCompactPayload(t *testing.T) {
 }
 
 func TestWaypostWaitExposesForwardedFromAddressInCompactPayload(t *testing.T) {
+	t.Skip("waypost_wait is CLI-owned after the MCP hard cut")
 	forwardedFromAddress := "agent/source"
 	waypostService := &fakeWaypostService{t: t}
 	waypostService.waitFunc = func(_ context.Context, params waypost.WaitParams) (waypost.ListedDelivery, error) {
@@ -3809,6 +3874,7 @@ func TestWaypostWaitExposesForwardedFromAddressInCompactPayload(t *testing.T) {
 }
 
 func TestWaypostListAsPersonExposesForwardedFromAddress(t *testing.T) {
+	t.Skip("waypost_list is CLI-owned after the MCP hard cut")
 	forwardedFromAddress := "agent/source"
 	waypostService := &fakeWaypostService{t: t}
 	waypostService.listGroupMessagesFunc = func(_ context.Context, params waypost.GroupListParams) ([]waypost.GroupListedMessage, error) {
@@ -3859,6 +3925,7 @@ func TestWaypostListAsPersonExposesForwardedFromAddress(t *testing.T) {
 }
 
 func TestWaypostWaitAsPersonUsesGroupWaitWithoutDeliveryLease(t *testing.T) {
+	t.Skip("waypost_wait is CLI-owned after the MCP hard cut")
 	waypostService := &fakeWaypostService{t: t}
 	waypostService.waitGroupMessageFunc = func(_ context.Context, params waypost.GroupWaitParams) (waypost.GroupListedMessage, error) {
 		if params.Address != "group/review" || params.Person != "alice" || params.Timeout != 25*time.Millisecond {
@@ -4028,6 +4095,7 @@ func TestWaypostRecvAsPersonUsesImmediateGroupReceive(t *testing.T) {
 }
 
 func TestWaypostGroupReadRequiresSingleGroupAddress(t *testing.T) {
+	t.Skip("waypost_wait is CLI-owned after the MCP hard cut")
 	service := newService(Options{
 		WaypostServiceFactory: fakeWaypostServiceFactory{service: &fakeWaypostService{t: t}},
 		CommandRunner: &fakeRunner{t: t, handler: func(args []string, input string) (RunResult, error) {
@@ -4056,6 +4124,7 @@ func TestWaypostGroupReadRequiresSingleGroupAddress(t *testing.T) {
 }
 
 func TestWaypostGroupControlToolsUseWaypostService(t *testing.T) {
+	t.Skip("group control is CLI-owned after the MCP hard cut")
 	waypostService := &fakeWaypostService{t: t}
 	waypostService.createGroupFunc = func(_ context.Context, groupAddress string) (waypost.GroupRecord, error) {
 		if groupAddress != "group/review" {
@@ -4320,6 +4389,12 @@ func TestWaypostRecvStartsLeaseRenewLoopWithShortTTL(t *testing.T) {
 func TestServiceCloseStopsLeaseRenewLoop(t *testing.T) {
 	current := time.Date(2026, 4, 3, 6, 10, 0, 0, time.UTC)
 	waypostService := &fakeWaypostService{t: t}
+	waypostService.inspectLeaseFunc = func(_ context.Context, deliveryID string) (waypost.DeliveryLeaseState, error) {
+		if deliveryID != "dlv_close" {
+			t.Fatalf("InspectDeliveryLease delivery_id = %q, want dlv_close", deliveryID)
+		}
+		return waypost.DeliveryLeaseState{Found: true, State: "leased", LeaseToken: "lease_close"}, nil
+	}
 	entered := make(chan struct{})
 	canceled := make(chan struct{})
 	var closeEntered sync.Once
@@ -4621,8 +4696,7 @@ func TestWaypostAckStopsTrackingActiveLease(t *testing.T) {
 	recv := callServiceTool(t, service, "waypost_recv", map[string]any{
 		"addresses": []string{"agent-deck/self"},
 	})
-	delivery := recv["delivery"].(map[string]any)
-	message := delivery["messages"].([]any)[0].(map[string]any)
+	message := recv["delivery"].(map[string]any)
 
 	callServiceTool(t, service, "waypost_ack", map[string]any{
 		"delivery_id": "dlv_acked",
@@ -4638,6 +4712,7 @@ func TestWaypostAckStopsTrackingActiveLease(t *testing.T) {
 }
 
 func TestWaypostReleaseDeferAndFailUseDirectWaypostService(t *testing.T) {
+	t.Skip("undefer and fail are CLI-owned after the MCP hard cut")
 	t.Parallel()
 
 	stateDir := filepath.Join(t.TempDir(), "waypost-state")
@@ -4761,6 +4836,7 @@ func TestWriteToolRequiresWaypostStatusFirst(t *testing.T) {
 }
 
 func TestReadToolRequiresWaypostStatusFirst(t *testing.T) {
+	t.Skip("waypost_wait is not registered after the MCP hard cut")
 	service := newService(Options{
 		WaypostServiceFactory: fakeWaypostServiceFactory{service: &fakeWaypostService{t: t}},
 		CommandRunner:         &fakeRunner{t: t},
@@ -4825,6 +4901,23 @@ func TestAllNonStatusToolsRequireWaypostStatus(t *testing.T) {
 	}
 	if !registered["waypost_debug"] {
 		t.Fatalf("waypost_debug is not registered")
+	}
+	want := map[string]bool{
+		"waypost_status":             true,
+		"waypost_bind":               true,
+		"waypost_debug":              true,
+		"waypost_send":               true,
+		"waypost_recv":               true,
+		"waypost_claim_history":      true,
+		"waypost_ack":                true,
+		"waypost_release":            true,
+		"waypost_defer":              true,
+		"agent_deck_resolve_session": true,
+		"agent_deck_create_session":  true,
+		"agent_deck_require_session": true,
+	}
+	if !reflect.DeepEqual(registered, want) {
+		t.Fatalf("registered MCP tools = %v, want exactly %v", registered, want)
 	}
 }
 
@@ -6699,26 +6792,12 @@ func requiresWaypostStatusToolName(name string) bool {
 func requiresWaypostStatusToolNames() []string {
 	return []string{
 		"waypost_bind",
-		"waypost_wait",
 		"waypost_send",
-		"waypost_forward",
 		"waypost_recv",
 		"waypost_claim_history",
-		"waypost_list",
-		"waypost_read",
 		"waypost_ack",
 		"waypost_release",
 		"waypost_defer",
-		"waypost_undefer",
-		"waypost_fail",
-		"waypost_group_create",
-		"waypost_group_add_member",
-		"waypost_group_remove_member",
-		"waypost_group_members",
-		"waypost_group_add_subscriber",
-		"waypost_group_remove_subscriber",
-		"waypost_group_subscribers",
-		"waypost_address_inspect",
 		"agent_deck_resolve_session",
 		"agent_deck_create_session",
 		"agent_deck_require_session",

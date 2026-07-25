@@ -678,7 +678,7 @@ func TestReceiveMultipleAddressesOrdersUnionOldestFirst(t *testing.T) {
 	}
 }
 
-func TestReceiveBatchClaimsUpToMaxAndReportsHasMore(t *testing.T) {
+func TestReceiveBatchClaimsUpToMaxAndReportsRemainingState(t *testing.T) {
 	t.Parallel()
 
 	runtime, store := newLeaseTestStore(t)
@@ -705,8 +705,8 @@ func TestReceiveBatchClaimsUpToMaxAndReportsHasMore(t *testing.T) {
 	if len(result.Messages) != 2 {
 		t.Fatalf("len(ReceiveBatch(first).Messages) = %d, want 2", len(result.Messages))
 	}
-	if !result.HasMore {
-		t.Fatal("ReceiveBatch(first).HasMore = false, want true")
+	if got := result.RemainingByState["queued"]; got != 1 {
+		t.Fatalf("ReceiveBatch(first).remaining_by_state[queued] = %d, want 1", got)
 	}
 	if result.Messages[0].DeliveryID != firstSent.DeliveryID {
 		t.Fatalf("ReceiveBatch(first).Messages[0].delivery_id = %q, want %q", result.Messages[0].DeliveryID, firstSent.DeliveryID)
@@ -725,11 +725,163 @@ func TestReceiveBatchClaimsUpToMaxAndReportsHasMore(t *testing.T) {
 	if len(last.Messages) != 1 {
 		t.Fatalf("len(ReceiveBatch(second).Messages) = %d, want 1", len(last.Messages))
 	}
-	if last.HasMore {
-		t.Fatal("ReceiveBatch(second).HasMore = true, want false")
+	if got := last.RemainingByState["leased"]; got != 2 {
+		t.Fatalf("ReceiveBatch(second).remaining_by_state[leased] = %d, want 2", got)
 	}
 	if last.Messages[0].DeliveryID != thirdSent.DeliveryID {
 		t.Fatalf("ReceiveBatch(second).Messages[0].delivery_id = %q, want %q", last.Messages[0].DeliveryID, thirdSent.DeliveryID)
+	}
+}
+
+func TestReceiveBatchNoMessageCountsDeferredButOmitsAcked(t *testing.T) {
+	t.Parallel()
+
+	runtime, store := newLeaseTestStore(t)
+	defer runtime.Close()
+
+	current := time.Date(2026, 7, 25, 8, 0, 0, 0, time.UTC)
+	store.now = func() time.Time { return current }
+
+	deferred := mustSendMessage(t, store, "workflow/remaining", "agent/sender", "deferred", "body")
+	claimed, err := store.ReceiveBatch(context.Background(), ReceiveBatchParams{Address: "workflow/remaining", Max: 1})
+	if err != nil {
+		t.Fatalf("ReceiveBatch(claim deferred) error = %v", err)
+	}
+	if _, err := store.Defer(context.Background(), deferred.DeliveryID, claimed.Messages[0].LeaseToken, current.Add(time.Hour)); err != nil {
+		t.Fatalf("Defer() error = %v", err)
+	}
+
+	noMessage, err := store.ReceiveBatch(context.Background(), ReceiveBatchParams{Address: "workflow/remaining", Max: 1})
+	if !errors.Is(err, ErrNoMessage) {
+		t.Fatalf("ReceiveBatch(deferred) error = %v, want ErrNoMessage", err)
+	}
+	if got := noMessage.RemainingByState["queued"]; got != 1 {
+		t.Fatalf("deferred remaining_by_state[queued] = %d, want 1", got)
+	}
+	if _, found := noMessage.RemainingByState["leased"]; found {
+		t.Fatalf("deferred remaining_by_state = %v, do not want leased", noMessage.RemainingByState)
+	}
+
+	acked := mustSendMessage(t, store, "workflow/acked-only", "agent/sender", "acked", "body")
+	ackedClaim, err := store.ReceiveBatch(context.Background(), ReceiveBatchParams{Address: "workflow/acked-only", Max: 1})
+	if err != nil {
+		t.Fatalf("ReceiveBatch(claim acked) error = %v", err)
+	}
+	if _, err := store.Ack(context.Background(), acked.DeliveryID, ackedClaim.Messages[0].LeaseToken); err != nil {
+		t.Fatalf("Ack() error = %v", err)
+	}
+	remaining, err := store.RemainingByState(context.Background(), []string{"workflow/acked-only"}, nil)
+	if err != nil {
+		t.Fatalf("RemainingByState() error = %v", err)
+	}
+	if len(remaining) != 0 {
+		t.Fatalf("acked remaining_by_state = %v, want omitted/empty", remaining)
+	}
+}
+
+func TestReceiveBatchRollsBackClaimsWhenRemainingStateCountFails(t *testing.T) {
+	t.Parallel()
+
+	runtime, store := newLeaseTestStore(t)
+	defer runtime.Close()
+
+	current := time.Date(2026, 7, 25, 8, 10, 0, 0, time.UTC)
+	store.now = func() time.Time { return current }
+	sent := mustSendMessage(t, store, "workflow/count-rollback", "agent/sender", "rollback", "body")
+	countErr := errors.New("remaining-state count failed")
+
+	_, err := store.receiveBatchWithLeasePolicyAndRemainingCounter(
+		context.Background(),
+		[]string{"workflow/count-rollback"},
+		1,
+		legacyReceiveLeasePolicy,
+		func(context.Context, []string, []string) (map[string]int, error) {
+			return nil, countErr
+		},
+	)
+	if !errors.Is(err, countErr) {
+		t.Fatalf("ReceiveBatch(count failure) error = %v, want %v", err, countErr)
+	}
+	var recovery *ReceiveRecoveryRequiredError
+	if errors.As(err, &recovery) {
+		t.Fatalf("ReceiveBatch(count failure) returned recovery claims = %+v, want complete rollback", recovery.Claims)
+	}
+
+	listed, err := store.List(context.Background(), ListParams{Address: "workflow/count-rollback", State: "queued"})
+	if err != nil {
+		t.Fatalf("List(queued after rollback) error = %v", err)
+	}
+	if len(listed) != 1 || listed[0].DeliveryID != sent.DeliveryID || listed[0].VisibleAt != sent.VisibleAtUTC {
+		t.Fatalf("queued delivery after rollback = %+v, want original queued delivery %q at %q", listed, sent.DeliveryID, sent.VisibleAtUTC)
+	}
+
+	received, err := store.Receive(context.Background(), ReceiveParams{Address: "workflow/count-rollback"})
+	if err != nil {
+		t.Fatalf("Receive(after complete rollback) error = %v", err)
+	}
+	if received.DeliveryID != sent.DeliveryID {
+		t.Fatalf("Receive(after complete rollback) delivery_id = %q, want %q", received.DeliveryID, sent.DeliveryID)
+	}
+}
+
+func TestReceiveBatchReturnsOnlyUnreleasedClaimsWhenCountRollbackFails(t *testing.T) {
+	t.Parallel()
+
+	runtime, store := newLeaseTestStore(t)
+	defer runtime.Close()
+
+	current := time.Date(2026, 7, 25, 8, 20, 0, 0, time.UTC)
+	store.now = func() time.Time { return current }
+	sent := mustSendMessage(t, store, "workflow/count-recovery", "agent/sender", "recovery", "body")
+	countErr := errors.New("remaining-state count failed")
+
+	_, err := store.receiveBatchWithLeasePolicyAndRemainingCounter(
+		context.Background(),
+		[]string{"workflow/count-recovery"},
+		1,
+		legacyReceiveLeasePolicy,
+		func(context.Context, []string, []string) (map[string]int, error) {
+			if _, err := runtime.DB().Exec(`
+CREATE TRIGGER reject_count_rollback
+BEFORE UPDATE OF state ON deliveries
+WHEN OLD.state = 'leased' AND NEW.state = 'queued'
+BEGIN
+  SELECT RAISE(ABORT, 'reject count rollback');
+END;
+`); err != nil {
+				t.Fatalf("create rollback trigger: %v", err)
+			}
+			return nil, countErr
+		},
+	)
+	var recovery *ReceiveRecoveryRequiredError
+	if !errors.As(err, &recovery) {
+		t.Fatalf("ReceiveBatch(incomplete rollback) error = %v, want ReceiveRecoveryRequiredError", err)
+	}
+	if !errors.Is(err, countErr) {
+		t.Fatalf("ReceiveBatch(incomplete rollback) error = %v, want count failure", err)
+	}
+	if len(recovery.Claims) != 1 {
+		t.Fatalf("recovery claims = %+v, want one", recovery.Claims)
+	}
+	claim := recovery.Claims[0]
+	if claim.DeliveryID != sent.DeliveryID || claim.LeaseToken == "" || claim.RecipientAddress != "workflow/count-recovery" {
+		t.Fatalf("recovery claim = %+v, want leased delivery %q", claim, sent.DeliveryID)
+	}
+
+	var state, leaseToken string
+	if err := runtime.DB().QueryRow(`SELECT state, lease_token FROM deliveries WHERE delivery_id = ?`, sent.DeliveryID).Scan(&state, &leaseToken); err != nil {
+		t.Fatalf("query recovery delivery: %v", err)
+	}
+	if state != "leased" || leaseToken != claim.LeaseToken {
+		t.Fatalf("recovery delivery state/token = %q/%q, want leased/%q", state, leaseToken, claim.LeaseToken)
+	}
+
+	if _, err := runtime.DB().Exec(`DROP TRIGGER reject_count_rollback`); err != nil {
+		t.Fatalf("drop rollback trigger: %v", err)
+	}
+	if _, err := store.Release(context.Background(), claim.DeliveryID, claim.LeaseToken); err != nil {
+		t.Fatalf("Release(recovery claim) error = %v", err)
 	}
 }
 

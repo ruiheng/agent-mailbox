@@ -147,32 +147,16 @@ func (s *Service) registerWaypostTools(server *mcp.Server) {
 		Description: "Send one waypost message and automatically push-notify a non-local target when the address scheme supports it. Set disable_notify_message=true to skip notify for that send.",
 	}, s.waypostSend)
 	addToolRequiringWaypostStatus(server, s, &mcp.Tool{
-		Name:        "waypost_forward",
-		Description: "Forward one stored waypost message to a new recipient. Provide exactly one of message_id or delivery_id. The forward reuses the original body, content_type, and schema_version, and sends through the normal waypost_send path.",
-	}, s.waypostForward)
-	addToolRequiringWaypostStatus(server, s, &mcp.Tool{
-		Name:        "waypost_wait",
-		Description: "Observe whether delivery is available without claiming it. Agent-managed session queue addresses typically look like agent-deck/<session-id>, codex/<session-id>, claude/<session-id>, gemini/<session-id>, or opencode/<session-id>. Optional timeout is a duration string such as 30s, 5m, 120ms, or 1m30s.",
-	}, s.waypostWait)
-	addToolRequiringWaypostStatus(server, s, &mcp.Tool{
 		Name:        "waypost_recv",
-		Description: "Receive currently available delivery immediately and claim it; recv never blocks. Use waypost_wait to wait for availability without claiming. If this MCP process already holds unacknowledged leases, recv returns a hint immediately; pass known_delivery_ids to suppress leases the caller already knows about. If addresses is omitted, receive from all bound addresses; pass addresses only to override that queue set for this call. After ack, use waypost_read to reread persisted deliveries when context is lost.",
+		Description: "Receive currently available delivery immediately and claim it; recv never blocks. If this MCP process already holds unacknowledged leases, recv returns a hint immediately; pass known_delivery_ids to suppress leases the caller already knows about. If addresses is omitted, receive from all bound addresses; pass addresses only to override that queue set for this call. After ack, use the reported Waypost CLI to reread persisted deliveries when context is lost.",
 	}, s.waypostRecv)
 	addToolRequiringWaypostStatus(server, s, &mcp.Tool{
 		Name:        "waypost_claim_history",
 		Description: "List deliveries this MCP process has claimed during its current lifetime. By default returns active claims without lease tokens; pass delivery_id and include_lease_token=true to recover a token the agent lost.",
 	}, s.waypostClaimHistory)
 	addToolRequiringWaypostStatus(server, s, &mcp.Tool{
-		Name:        "waypost_list",
-		Description: "List persisted deliveries for one queue. Use state='acked' to find deliveries that were already received and acknowledged before rereading them with waypost_read.",
-	}, s.waypostList)
-	addToolRequiringWaypostStatus(server, s, &mcp.Tool{
-		Name:        "waypost_read",
-		Description: "Read persisted waypost messages or deliveries. Use latest=true with state='acked' to reread recently acknowledged delivery after context loss.",
-	}, s.waypostRead)
-	addToolRequiringWaypostStatus(server, s, &mcp.Tool{
 		Name:        "waypost_ack",
-		Description: "Acknowledge a claimed waypost delivery. Acked deliveries remain readable later through waypost_read.",
+		Description: "Acknowledge a claimed waypost delivery. Acked deliveries remain readable later through the reported Waypost CLI.",
 	}, s.waypostAck)
 	addToolRequiringWaypostStatus(server, s, &mcp.Tool{
 		Name:        "waypost_release",
@@ -182,46 +166,6 @@ func (s *Service) registerWaypostTools(server *mcp.Server) {
 		Name:        "waypost_defer",
 		Description: "Defer a claimed waypost delivery until a later RFC3339 time.",
 	}, s.waypostDefer)
-	addToolRequiringWaypostStatus(server, s, &mcp.Tool{
-		Name:        "waypost_undefer",
-		Description: "Make a deferred queued delivery visible immediately; call waypost_recv again to claim it before acking.",
-	}, s.waypostUndefer)
-	addToolRequiringWaypostStatus(server, s, &mcp.Tool{
-		Name:        "waypost_fail",
-		Description: "Fail a claimed waypost delivery with a reason.",
-	}, s.waypostFail)
-	addToolRequiringWaypostStatus(server, s, &mcp.Tool{
-		Name:        "waypost_group_create",
-		Description: "Create a group waypost address.",
-	}, s.waypostGroupCreate)
-	addToolRequiringWaypostStatus(server, s, &mcp.Tool{
-		Name:        "waypost_group_add_member",
-		Description: "Add a person to a group waypost.",
-	}, s.waypostGroupAddMember)
-	addToolRequiringWaypostStatus(server, s, &mcp.Tool{
-		Name:        "waypost_group_remove_member",
-		Description: "Remove a person from a group waypost.",
-	}, s.waypostGroupRemoveMember)
-	addToolRequiringWaypostStatus(server, s, &mcp.Tool{
-		Name:        "waypost_group_members",
-		Description: "List group waypost memberships.",
-	}, s.waypostGroupMembers)
-	addToolRequiringWaypostStatus(server, s, &mcp.Tool{
-		Name:        "waypost_group_add_subscriber",
-		Description: "Add a best-effort notification target for group messages.",
-	}, s.waypostGroupAddSubscriber)
-	addToolRequiringWaypostStatus(server, s, &mcp.Tool{
-		Name:        "waypost_group_remove_subscriber",
-		Description: "Remove a group notification target.",
-	}, s.waypostGroupRemoveSubscriber)
-	addToolRequiringWaypostStatus(server, s, &mcp.Tool{
-		Name:        "waypost_group_subscribers",
-		Description: "List active group notification targets.",
-	}, s.waypostGroupSubscribers)
-	addToolRequiringWaypostStatus(server, s, &mcp.Tool{
-		Name:        "waypost_address_inspect",
-		Description: "Inspect whether an address is an endpoint, group, or unbound.",
-	}, s.waypostAddressInspect)
 }
 
 func (s *Service) waypostBind(ctx context.Context, _ *mcp.CallToolRequest, input waypostBindInput) (*mcp.CallToolResult, map[string]any, error) {
@@ -239,8 +183,15 @@ func (s *Service) waypostStatus(ctx context.Context, _ *mcp.CallToolRequest, _ w
 	if err != nil {
 		return nil, nil, err
 	}
+	executable, stateDir, err := s.executableAndStateDir()
+	if err != nil {
+		return nil, nil, err
+	}
 	s.markWaypostStatusCalled()
 	out := boundStateMap(bound)
+	out["server_version"] = serverVersion
+	out["executable"] = executable
+	out["resolved_state_dir"] = stateDir
 	out["default_sender"] = orUnset(bound.DefaultSender)
 	out["default_workdir"] = orUnset(bound.DefaultWorkdir)
 	return s.waypostToolResult(ctx, out)
@@ -508,10 +459,17 @@ func (s *Service) waypostRecv(ctx context.Context, _ *mcp.CallToolRequest, input
 	if person := strings.TrimSpace(input.AsPerson); person != "" {
 		return s.waypostRecvGroup(ctx, addresses, person)
 	}
+	if err := s.reconcileTrackedLeases(ctx); err != nil {
+		return nil, nil, err
+	}
 	warnings := s.waypostReceiveWarnings(ctx, len(input.Addresses) > 0)
 	activeLeaseIDs := s.activeLeaseHintDeliveryIDs(addresses, input.KnownDeliveryIDs)
 	if len(activeLeaseIDs) > 0 {
-		return s.waypostToolResult(ctx, map[string]any{
+		remainingByState, err := s.remainingByState(ctx, addresses, nil)
+		if err != nil {
+			return nil, nil, err
+		}
+		out := map[string]any{
 			"status":                 "active_leases",
 			"addresses":              addresses,
 			"active_lease_count":     len(activeLeaseIDs),
@@ -520,15 +478,47 @@ func (s *Service) waypostRecv(ctx context.Context, _ *mcp.CallToolRequest, input
 			"claim_history_tool":     "waypost_claim_history",
 			"known_delivery_id_hint": "If you are already handling these deliveries, retry waypost_recv with known_delivery_ids set to claimed_delivery_ids. If you lost the lease token, call waypost_claim_history with delivery_id and include_lease_token=true.",
 			"warnings":               warnings,
-		})
+		}
+		if len(remainingByState) > 0 {
+			out["remaining_by_state"] = remainingByState
+		}
+		return s.waypostToolResult(ctx, out)
 	}
 
 	delivery, err := s.receivePersonalNow(ctx, addresses)
 	if errors.Is(err, waypost.ErrNoMessage) {
-		return s.waypostToolResult(ctx, map[string]any{
+		out := map[string]any{
 			"status":    "no_message",
 			"addresses": addresses,
 			"warnings":  warnings,
+		}
+		if len(delivery.RemainingByState) > 0 {
+			out["remaining_by_state"] = delivery.RemainingByState
+		}
+		return s.waypostToolResult(ctx, out)
+	}
+	var recovery *waypost.ReceiveRecoveryRequiredError
+	if errors.As(err, &recovery) {
+		s.activeLeases.trackReceive(waypost.ReceiveResult{Messages: recovery.Claims}, s.now().Format(time.RFC3339Nano))
+		s.startLeaseRenewLoop()
+		claims := make([]map[string]any, 0, len(recovery.Claims))
+		for _, claim := range recovery.Claims {
+			claims = append(claims, map[string]any{
+				"delivery_id":       claim.DeliveryID,
+				"lease_token":       claim.LeaseToken,
+				"recipient_address": claim.RecipientAddress,
+				"lease_expires_at":  claim.LeaseExpiresAt,
+			})
+		}
+		return s.waypostMutationToolResult(ctx, map[string]any{
+			"status":                    "receive_recovery_required",
+			"addresses":                 addresses,
+			"error_code":                "receive_recovery_required",
+			"message":                   recovery.Error(),
+			"remaining_by_state_status": "unavailable",
+			"claims":                    claims,
+			"claim_history_tool":        "waypost_claim_history",
+			"release_tool":              "waypost_release",
 		})
 	}
 	if err != nil {
@@ -536,12 +526,19 @@ func (s *Service) waypostRecv(ctx context.Context, _ *mcp.CallToolRequest, input
 	}
 	s.activeLeases.trackReceive(delivery, s.now().Format(time.RFC3339Nano))
 	s.startLeaseRenewLoop()
-	return s.waypostMutationToolResult(ctx, map[string]any{
+	if len(delivery.Messages) != 1 {
+		return nil, nil, errors.New("receive returned an unexpected delivery count")
+	}
+	out := map[string]any{
 		"status":    "received",
 		"addresses": addresses,
-		"delivery":  waypost.CompactReceiveResult(delivery),
+		"delivery":  waypost.CompactReceivedMessage(delivery.Messages[0]),
 		"warnings":  warnings,
-	})
+	}
+	if len(delivery.RemainingByState) > 0 {
+		out["remaining_by_state"] = delivery.RemainingByState
+	}
+	return s.waypostMutationToolResult(ctx, out)
 }
 
 func (s *Service) activeLeaseHintDeliveryIDs(addresses []string, knownDeliveryIDs []string) []string {
@@ -597,6 +594,9 @@ func (s *Service) waypostClaimHistory(ctx context.Context, _ *mcp.CallToolReques
 	if input.IncludeLeaseToken && deliveryID == "" {
 		return nil, nil, errors.New("include_lease_token requires delivery_id")
 	}
+	if err := s.reconcileTrackedLeases(ctx); err != nil {
+		return nil, nil, err
+	}
 	leases := s.activeLeases.historySnapshot(input.IncludeTerminal || deliveryID != "")
 	sort.Slice(leases, func(i, j int) bool {
 		return leases[i].DeliveryID < leases[j].DeliveryID
@@ -618,7 +618,7 @@ func (s *Service) waypostClaimHistory(ctx context.Context, _ *mcp.CallToolReques
 			"status":            lease.Status,
 			"terminal_at":       nilIfEmpty(lease.TerminalAt),
 		}
-		if input.IncludeLeaseToken {
+		if input.IncludeLeaseToken && lease.LeaseToken != "" {
 			item["lease_token"] = lease.LeaseToken
 		}
 		items = append(items, item)
@@ -674,6 +674,12 @@ func (s *Service) receivePersonalNow(ctx context.Context, addresses []string) (w
 			Addresses: addresses,
 			Max:       1,
 		}, s.mcpLeaseTTL)
+	})
+}
+
+func (s *Service) remainingByState(ctx context.Context, addresses, excludedDeliveryIDs []string) (map[string]int, error) {
+	return withWaypostService(ctx, s.waypostServices, func(service waypostRemainingCounter) (map[string]int, error) {
+		return service.RemainingByState(ctx, addresses, excludedDeliveryIDs)
 	})
 }
 
@@ -876,13 +882,13 @@ func (s *Service) waypostAck(ctx context.Context, _ *mcp.CallToolRequest, input 
 	if err := s.activeLeases.terminalMutationAllowed(input.DeliveryID); err != nil {
 		return nil, nil, err
 	}
-	_, err := withWaypostService(ctx, s.waypostServices, func(service waypostDeliveryTransitioner) (waypost.DeliveryTransitionResult, error) {
+	result, err := withWaypostService(ctx, s.waypostServices, func(service waypostDeliveryTransitioner) (waypost.DeliveryTransitionResult, error) {
 		return service.Ack(ctx, input.DeliveryID, input.LeaseToken)
 	})
 	if err != nil {
 		return nil, nil, err
 	}
-	s.activeLeases.markTerminal(input.DeliveryID, "acked", s.now().Format(time.RFC3339Nano))
+	s.activeLeases.markTerminal(input.DeliveryID, result.State, s.now().Format(time.RFC3339Nano))
 	return s.waypostMutationToolResult(ctx, map[string]any{"status": "acked", "delivery_id": input.DeliveryID})
 }
 
@@ -890,13 +896,13 @@ func (s *Service) waypostRelease(ctx context.Context, _ *mcp.CallToolRequest, in
 	if err := s.activeLeases.terminalMutationAllowed(input.DeliveryID); err != nil {
 		return nil, nil, err
 	}
-	_, err := withWaypostService(ctx, s.waypostServices, func(service waypostDeliveryTransitioner) (waypost.DeliveryTransitionResult, error) {
+	result, err := withWaypostService(ctx, s.waypostServices, func(service waypostDeliveryTransitioner) (waypost.DeliveryTransitionResult, error) {
 		return service.Release(ctx, input.DeliveryID, input.LeaseToken)
 	})
 	if err != nil {
 		return nil, nil, err
 	}
-	s.activeLeases.markTerminal(input.DeliveryID, "released", s.now().Format(time.RFC3339Nano))
+	s.activeLeases.markTerminal(input.DeliveryID, result.State, s.now().Format(time.RFC3339Nano))
 	return s.waypostMutationToolResult(ctx, map[string]any{"status": "released", "delivery_id": input.DeliveryID})
 }
 
@@ -908,13 +914,13 @@ func (s *Service) waypostDefer(ctx context.Context, _ *mcp.CallToolRequest, inpu
 	if err != nil {
 		return nil, nil, fmt.Errorf("parse until: %w", err)
 	}
-	_, err = withWaypostService(ctx, s.waypostServices, func(service waypostDeliveryTransitioner) (waypost.DeliveryTransitionResult, error) {
+	result, err := withWaypostService(ctx, s.waypostServices, func(service waypostDeliveryTransitioner) (waypost.DeliveryTransitionResult, error) {
 		return service.Defer(ctx, input.DeliveryID, input.LeaseToken, until)
 	})
 	if err != nil {
 		return nil, nil, err
 	}
-	s.activeLeases.markTerminal(input.DeliveryID, "deferred", s.now().Format(time.RFC3339Nano))
+	s.activeLeases.markTerminal(input.DeliveryID, result.State, s.now().Format(time.RFC3339Nano))
 	return s.waypostMutationToolResult(ctx, map[string]any{"status": "deferred", "delivery_id": input.DeliveryID, "until": input.Until})
 }
 

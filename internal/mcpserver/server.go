@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -36,7 +37,7 @@ const (
 	defaultNotifyMessage         = "NOTICE: There might be new delivery in waypost."
 	agentDeckBindRecoveryHint    = "agent-deck address auto-bind did not find your current session; run `agent-deck session current --json` to find your `agent-deck/<session-id>` address, then call `waypost_bind` with that address."
 	toolSessionBindRecoveryHint  = "AI tool session auto-bind did not find codex/..., claude/..., gemini/..., or opencode/...; expose CODEX_THREAD_ID, CLAUDE_CODE_SESSION_ID, GEMINI_SESSION_ID, or OPENCODE_SESSION_ID, wait for agent-deck state sync for the current session, then call `waypost_status` again or call `waypost_bind` manually."
-	serverInstructions           = "Bootstrap this MCP process once per agent-managed session. The first tool call must be `waypost_status`; it auto-binds any detectable agent-deck/codex/claude/gemini/opencode address and reports warnings. All other tools fail until `waypost_status` has been called."
+	serverInstructions           = "The first tool call must be waypost_status; it auto-binds detectable agent session addresses and reports warnings. All other tools fail until it has run.\nMCP exposes only common operations. For complete Waypost functionality and workflow guidance, use the reported executable:\n  <executable> doc --list\n  <executable> doc <topic>\nRun stateful CLI operations with the reported resolved_state_dir. Do not guess another binary or state directory."
 	unsetValue                   = "<unset>"
 )
 
@@ -127,6 +128,14 @@ type waypostLeaseRenewer interface {
 	Renew(context.Context, string, string, time.Duration) (waypost.LeaseRenewResult, error)
 }
 
+type waypostLeaseInspector interface {
+	InspectDeliveryLease(context.Context, string) (waypost.DeliveryLeaseState, error)
+}
+
+type waypostRemainingCounter interface {
+	RemainingByState(context.Context, []string, []string) (map[string]int, error)
+}
+
 type runtimeWaypostServiceFactory struct {
 	stateDir     string
 	openRuntime  func(context.Context, string) (*waypost.Runtime, error)
@@ -182,6 +191,7 @@ type Options struct {
 	WaypostServiceFactory waypostServiceFactory
 	CommandRunner         Runner
 	StateDir              string
+	Executable            string
 	Now                   func() time.Time
 	MCPLeaseTTL           time.Duration
 	LeaseRenewInterval    time.Duration
@@ -211,6 +221,8 @@ type Service struct {
 	wakeSchedulerState     *wakeSchedulerState
 	overviewSubscriptions  *resourceSubscriptionState
 	waypostOverviewEmitter func(context.Context) notificationOutcome
+	configuredStateDir     string
+	executable             string
 	leaseRenewLoopOnce     sync.Once
 	wakeSchedulerLoopOnce  sync.Once
 	backgroundMu           sync.Mutex
@@ -294,6 +306,8 @@ func newService(opts Options) *Service {
 		wakePollInterval:      opts.WakePollInterval,
 		notifyDelay:           opts.NotifyDelay,
 		disableWakeScheduler:  opts.DisableWakeScheduler,
+		configuredStateDir:    opts.StateDir,
+		executable:            opts.Executable,
 	}
 	if service.now == nil {
 		service.now = func() time.Time {
@@ -318,6 +332,30 @@ func newService(opts Options) *Service {
 	service.overviewSubscriptions = newResourceSubscriptionState()
 	service.waypostOverviewEmitter = service.emitWaypostOverviewUpdated
 	return service
+}
+
+func (s *Service) executableAndStateDir() (string, string, error) {
+	executable := s.executable
+	if executable == "" {
+		var err error
+		executable, err = os.Executable()
+		if err != nil {
+			return "", "", fmt.Errorf("resolve waypost executable: %w", err)
+		}
+	}
+	executable, err := filepath.Abs(executable)
+	if err != nil {
+		return "", "", fmt.Errorf("resolve absolute waypost executable: %w", err)
+	}
+	stateDir, err := waypost.ResolveStateDir(s.configuredStateDir)
+	if err != nil {
+		return "", "", fmt.Errorf("resolve waypost state directory: %w", err)
+	}
+	stateDir, err = filepath.Abs(stateDir)
+	if err != nil {
+		return "", "", fmt.Errorf("resolve absolute waypost state directory: %w", err)
+	}
+	return executable, stateDir, nil
 }
 
 // Close stops service-owned background loops and closes the service-owned

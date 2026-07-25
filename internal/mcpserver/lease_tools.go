@@ -37,6 +37,9 @@ func (s *Service) runLeaseRenewLoop() {
 }
 
 func (s *Service) processLeaseRenewals(ctx context.Context) error {
+	if err := s.reconcileTrackedLeases(ctx); err != nil {
+		return err
+	}
 	leases := s.activeLeases.snapshot()
 	if len(leases) == 0 {
 		return nil
@@ -46,6 +49,11 @@ func (s *Service) processLeaseRenewals(ctx context.Context) error {
 	for _, lease := range leases {
 		renewed, err := s.renewLeaseWithRetry(ctx, lease)
 		if err != nil {
+			if renewalFailureDefinitive(err) {
+				if reconcileErr := s.reconcileTrackedLeases(ctx); reconcileErr != nil && firstErr == nil {
+					firstErr = reconcileErr
+				}
+			}
 			recorded := s.activeLeases.markRenewalFailure(lease, err)
 			if firstErr == nil {
 				firstErr = recorded
@@ -55,6 +63,13 @@ func (s *Service) processLeaseRenewals(ctx context.Context) error {
 		s.activeLeases.updateRenewed(renewed, s.now().Format(time.RFC3339Nano))
 	}
 	return firstErr
+}
+
+func (s *Service) reconcileTrackedLeases(ctx context.Context) error {
+	_, err := withWaypostService(ctx, s.waypostServices, func(service waypostLeaseInspector) (struct{}, error) {
+		return struct{}{}, s.activeLeases.reconcileTrackedLeases(ctx, s.now().Format(time.RFC3339Nano), service.InspectDeliveryLease)
+	})
+	return err
 }
 
 func (s *Service) renewLeaseWithRetry(ctx context.Context, lease activeLease) (waypost.LeaseRenewResult, error) {

@@ -46,7 +46,7 @@ func (a *App) Run(ctx context.Context, args []string) error {
 		return waypost.ErrHelpRequested
 	}
 	if len(rest) == 0 {
-		return errors.New("expected a command: mcp, migrate, send, forward, recv, wait, watch, read, ack, renew, release, defer, undefer, fail, list, stale, group, or address")
+		return errors.New("expected a command: mcp, migrate, doc, send, forward, recv, wait, watch, read, ack, renew, release, defer, undefer, fail, list, stale, group, or address")
 	}
 	if rest[0] == "migrate" {
 		return a.runMigrateCommand(stateDir, rest[1:])
@@ -177,6 +177,7 @@ func (a *App) writeRootHelp() {
 		"Commands:",
 		"  mcp                 Run the built-in stdio MCP server",
 		"  migrate             Move state from the previous default directory",
+		"  doc                 Show concise agent workflow guidance",
 		"  send                Send a message to an address",
 		"  forward             Forward a stored message or delivery",
 		"  recv                Claim the next delivery",

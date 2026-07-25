@@ -187,8 +187,29 @@ func (a *App) prepareRecvCommand(args []string) (preparedCommand, error) {
 				Address: normalizedAddresses[0],
 				Person:  person,
 			})
+			if errors.Is(err, ErrNoMessage) {
+				if format != outputFormatText {
+					if writeErr := a.writeStructuredOutput(format, groupReceiveOutput{
+						Status:    "no_message",
+						Addresses: []string{normalizedAddresses[0]},
+						AsPerson:  person,
+					}); writeErr != nil {
+						return writeErr
+					}
+				}
+				return ErrNoMessage
+			}
 			if err != nil {
 				return err
+			}
+			if format != outputFormatText && !full {
+				compact := CompactGroupReceivedMessage(message)
+				return a.writeStructuredOutput(format, groupReceiveOutput{
+					Status:    "received",
+					Addresses: []string{normalizedAddresses[0]},
+					AsPerson:  person,
+					Message:   &compact,
+				})
 			}
 			return a.writeGroupReceiveOutput(format, full, message)
 		}
@@ -198,17 +219,48 @@ func (a *App) prepareRecvCommand(args []string) (preparedCommand, error) {
 			Tool:           "waypost recv",
 			BoundAddresses: normalizedAddresses,
 		})
-		if !maxProvided {
-			message, err := store.Receive(claimCtx, ReceiveParams{Addresses: normalizedAddresses})
-			if err != nil {
-				return err
-			}
-			return a.writeReceiveOutput(format, full, message)
-		}
-
 		result, err := store.ReceiveBatch(claimCtx, params)
+		if errors.Is(err, ErrNoMessage) {
+			if format != outputFormatText {
+				if writeErr := a.writeStructuredOutput(format, personalReceiveOutput{
+					Status:           "no_message",
+					Addresses:        normalizedAddresses,
+					RemainingByState: result.RemainingByState,
+				}); writeErr != nil {
+					return writeErr
+				}
+			}
+			return ErrNoMessage
+		}
 		if err != nil {
 			return err
+		}
+		if !maxProvided {
+			if len(result.Messages) != 1 {
+				return errors.New("receive returned an unexpected delivery count")
+			}
+			if format != outputFormatText && !full {
+				compact := CompactReceivedMessage(result.Messages[0])
+				return a.writeStructuredOutput(format, personalReceiveOutput{
+					Status:           "received",
+					Addresses:        normalizedAddresses,
+					Delivery:         &compact,
+					RemainingByState: result.RemainingByState,
+				})
+			}
+			return a.writeReceiveOutput(format, full, result.Messages[0])
+		}
+		if format != outputFormatText && !full {
+			deliveries := make([]ReceivedMessageCompact, 0, len(result.Messages))
+			for _, message := range result.Messages {
+				deliveries = append(deliveries, CompactReceivedMessage(message))
+			}
+			return a.writeStructuredOutput(format, personalReceiveOutput{
+				Status:           "received",
+				Addresses:        normalizedAddresses,
+				Deliveries:       deliveries,
+				RemainingByState: result.RemainingByState,
+			})
 		}
 		return a.writeReceiveBatchOutput(format, full, result)
 	}, nil

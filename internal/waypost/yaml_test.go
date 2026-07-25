@@ -130,7 +130,7 @@ func TestWriteYAMLFormatsReceiveResult(t *testing.T) {
 				Body:                "hello\n",
 			},
 		},
-		HasMore: true,
+		RemainingByState: map[string]int{"queued": 1},
 	}
 
 	var stdout bytes.Buffer
@@ -158,7 +158,8 @@ func TestWriteYAMLFormatsReceiveResult(t *testing.T) {
 		"    body_size: 6\n" +
 		"    body_sha256: \"abc123\"\n" +
 		"    body: \"hello\\n\"\n" +
-		"has_more: true\n"
+		"remaining_by_state:\n" +
+		"  queued: 1\n"
 	if stdout.String() != want {
 		t.Fatalf("writeYAML(receive result) = %q, want %q", stdout.String(), want)
 	}

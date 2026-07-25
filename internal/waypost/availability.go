@@ -131,6 +131,65 @@ func (scope personalAvailabilityScope) empty() bool {
 	return len(scope.recipientEndpointIDs) == 0
 }
 
+// RemainingByState returns the unfinished-delivery snapshot for exactly the
+// personal address scope supplied by a receive call. It deliberately reads
+// only the deliveries index: bodies and message rows are irrelevant here.
+func (s *Store) RemainingByState(ctx context.Context, addresses, excludedDeliveryIDs []string) (map[string]int, error) {
+	scope, err := s.resolvePersonal(ctx, s.readDB, addresses)
+	if err != nil {
+		return nil, err
+	}
+	if scope.empty() {
+		return nil, nil
+	}
+
+	endpointPlaceholders := strings.TrimSuffix(strings.Repeat("?,", len(scope.recipientEndpointIDs)), ",")
+	args := make([]any, 0, len(scope.recipientEndpointIDs)+len(excludedDeliveryIDs))
+	for _, endpointID := range scope.recipientEndpointIDs {
+		args = append(args, endpointID)
+	}
+
+	exclusion := ""
+	if len(excludedDeliveryIDs) > 0 {
+		exclusionPlaceholders := strings.TrimSuffix(strings.Repeat("?,", len(excludedDeliveryIDs)), ",")
+		exclusion = fmt.Sprintf("\n  AND d.delivery_id NOT IN (%s)", exclusionPlaceholders)
+		for _, deliveryID := range excludedDeliveryIDs {
+			args = append(args, deliveryID)
+		}
+	}
+
+	rows, err := s.readDB.QueryContext(ctx, fmt.Sprintf(`
+SELECT d.state, COUNT(*)
+FROM deliveries AS d
+WHERE d.recipient_endpoint_id IN (%s)
+  AND d.state IN ('queued', 'leased', 'dead_letter')%s
+GROUP BY d.state
+`, endpointPlaceholders, exclusion), args...)
+	if err != nil {
+		return nil, fmt.Errorf("count remaining deliveries: %w", err)
+	}
+	defer rows.Close()
+
+	remaining := make(map[string]int)
+	for rows.Next() {
+		var state string
+		var count int
+		if err := rows.Scan(&state, &count); err != nil {
+			return nil, fmt.Errorf("scan remaining delivery count: %w", err)
+		}
+		if count > 0 {
+			remaining[state] = count
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate remaining delivery counts: %w", err)
+	}
+	if len(remaining) == 0 {
+		return nil, nil
+	}
+	return remaining, nil
+}
+
 func (s *Store) claimablePersonalDelivery(ctx context.Context, querier rowQuerier, scope personalAvailabilityScope, nowText string) (personalDeliveryRecord, error) {
 	if scope.empty() {
 		return personalDeliveryRecord{}, sql.ErrNoRows

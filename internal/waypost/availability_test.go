@@ -2,6 +2,7 @@ package waypost
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 )
@@ -53,6 +54,49 @@ func TestAvailabilityClaimablePersonalDeliveryUsesFirstAliasAndStableOrdering(t 
 	}
 	if deliveries[0].RecipientAddress != "workflow/alias" {
 		t.Fatalf("listPersonalDeliveries()[0].recipient_address = %q, want workflow/alias", deliveries[0].RecipientAddress)
+	}
+}
+
+func TestRemainingByStateUsesRecipientStateVisibleIndex(t *testing.T) {
+	t.Parallel()
+
+	runtime, store := newLeaseTestStore(t)
+	defer runtime.Close()
+
+	sent := mustSendMessage(t, store, "workflow/count-plan", "agent/sender", "count", "body")
+	rows, err := store.readDB.QueryContext(context.Background(), `
+EXPLAIN QUERY PLAN
+SELECT d.state, COUNT(*)
+FROM deliveries AS d
+WHERE d.recipient_endpoint_id IN (?)
+  AND d.state IN ('queued', 'leased', 'dead_letter')
+GROUP BY d.state
+`, sent.RecipientID)
+	if err != nil {
+		t.Fatalf("EXPLAIN QUERY PLAN error = %v", err)
+	}
+	defer rows.Close()
+
+	usedIndex := false
+	for rows.Next() {
+		var id, parent, unused int
+		var detail string
+		if err := rows.Scan(&id, &parent, &unused, &detail); err != nil {
+			t.Fatalf("scan query plan: %v", err)
+		}
+		upper := strings.ToUpper(detail)
+		if strings.Contains(detail, "idx_deliveries_recipient_state_visible") {
+			usedIndex = true
+		}
+		if strings.Contains(upper, "SCAN DELIVERIES") || strings.Contains(upper, "SCAN D") {
+			t.Fatalf("remaining-state query plan scans deliveries: %q", detail)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("iterate query plan: %v", err)
+	}
+	if !usedIndex {
+		t.Fatal("remaining-state query plan did not use idx_deliveries_recipient_state_visible")
 	}
 }
 

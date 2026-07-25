@@ -294,11 +294,6 @@ func (a *App) writeReceiveResultText(result ReceiveResultCompact) error {
 			return err
 		}
 	}
-	if result.HasMore {
-		if _, err := io.WriteString(a.stdout, "notice=more_messages_available\n"); err != nil {
-			return err
-		}
-	}
 	return nil
 }
 
@@ -310,11 +305,6 @@ func (a *App) writeReceiveResultFullText(result ReceiveResult) error {
 			}
 		}
 		if err := a.writeReceivedMessageFullText(message); err != nil {
-			return err
-		}
-	}
-	if result.HasMore {
-		if _, err := io.WriteString(a.stdout, "notice=more_messages_available\n"); err != nil {
 			return err
 		}
 	}
