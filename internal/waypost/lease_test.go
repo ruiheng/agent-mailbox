@@ -795,7 +795,7 @@ func TestReceiveBatchRollsBackClaimsWhenRemainingStateCountFails(t *testing.T) {
 		[]string{"workflow/count-rollback"},
 		1,
 		legacyReceiveLeasePolicy,
-		func(context.Context, []string, []string) (map[string]int, error) {
+		func(context.Context, personalAvailabilityScope, []string) (map[string]int, error) {
 			return nil, countErr
 		},
 	)
@@ -840,7 +840,7 @@ func TestReceiveBatchReturnsOnlyUnreleasedClaimsWhenCountRollbackFails(t *testin
 		[]string{"workflow/count-recovery"},
 		1,
 		legacyReceiveLeasePolicy,
-		func(context.Context, []string, []string) (map[string]int, error) {
+		func(context.Context, personalAvailabilityScope, []string) (map[string]int, error) {
 			if _, err := runtime.DB().Exec(`
 CREATE TRIGGER reject_count_rollback
 BEFORE UPDATE OF state ON deliveries

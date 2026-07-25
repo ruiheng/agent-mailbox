@@ -62,9 +62,10 @@ func cliOwnedCommand(args []string) bool {
 }
 
 // WriteCLIJSONError writes the structured failure contract for CLI-owned
-// operations. It leaves normal human-oriented command failures untouched.
+// operations and the exceptional receive-recovery result. It leaves normal
+// human-oriented command failures untouched.
 func WriteCLIJSONError(w io.Writer, args []string, err error) bool {
-	if !CLIRequestsJSON(args) || !cliOwnedCommand(args) {
+	if !CLIRequestsJSON(args) || (!cliOwnedCommand(args) && !errors.Is(err, ErrReceiveRecoveryRequired)) {
 		return false
 	}
 	document := cliErrorFor(err)

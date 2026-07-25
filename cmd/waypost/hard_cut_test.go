@@ -1,11 +1,16 @@
 package main
 
 import (
+	"bytes"
+	"context"
 	"encoding/json"
+	"errors"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/ruiheng/waypost/internal/waypost"
 )
 
 func TestCLIReceiveUsesSparseRemainingStateWithoutHasMore(t *testing.T) {
@@ -192,6 +197,82 @@ func TestCLIJSONErrorsAndEmbeddedDocs(t *testing.T) {
 			if topic == "mcp-cli-boundary" && !strings.Contains(prompt.stdout, "durable-only") {
 				t.Fatalf("mcp-cli-boundary prompt = %q, want durable-only forward guidance", prompt.stdout)
 			}
+			if topic == "mcp-cli-boundary" {
+				for _, operation := range []string{
+					"waypost_status",
+					"waypost_bind",
+					"waypost_debug",
+					"waypost_send",
+					"waypost_recv",
+					"waypost_claim_history",
+					"waypost_ack",
+					"waypost_release",
+					"waypost_defer",
+				} {
+					if !strings.Contains(prompt.stdout, operation) {
+						t.Fatalf("mcp-cli-boundary prompt = %q, missing retained MCP operation %q", prompt.stdout, operation)
+					}
+				}
+			}
 		})
+	}
+}
+
+func TestCLIReceiveRecoveryErrorWritesStructuredJSON(t *testing.T) {
+	recovery := &waypost.ReceiveRecoveryRequiredError{
+		Cause: errors.New("remaining-state query failed"),
+		Claims: []waypost.ReceivedMessage{
+			{
+				DeliveryID:       "dlv_recovery_one",
+				LeaseToken:       "lease_recovery_one",
+				RecipientAddress: "workflow/one",
+				LeaseExpiresAt:   "2026-07-25T10:00:00Z",
+			},
+			{
+				DeliveryID:       "dlv_recovery_two",
+				LeaseToken:       "lease_recovery_two",
+				RecipientAddress: "workflow/two",
+				LeaseExpiresAt:   "2026-07-25T10:01:00Z",
+			},
+		},
+	}
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	exitCode := runCommand(context.Background(), []string{"recv", "--json"}, nil, &stdout, &stderr, func(context.Context, []string) error {
+		return recovery
+	})
+	if exitCode != 1 || stdout.Len() != 0 {
+		t.Fatalf("receive recovery command exit=%d stdout=%q, want exit 1 and empty stdout", exitCode, stdout.String())
+	}
+
+	var document struct {
+		Status    string `json:"status"`
+		ErrorCode string `json:"error_code"`
+		Message   string `json:"message"`
+		Retryable bool   `json:"retryable"`
+		Details   struct {
+			RemainingByStateStatus string `json:"remaining_by_state_status"`
+			Claims                 []struct {
+				DeliveryID       string `json:"delivery_id"`
+				LeaseToken       string `json:"lease_token"`
+				RecipientAddress string `json:"recipient_address"`
+				LeaseExpiresAt   string `json:"lease_expires_at"`
+			} `json:"claims"`
+		} `json:"details"`
+	}
+	if err := json.Unmarshal(stderr.Bytes(), &document); err != nil {
+		t.Fatalf("json.Unmarshal(recovery stderr) error = %v; stderr = %q", err, stderr.String())
+	}
+	if document.Status != "error" || document.ErrorCode != "receive_recovery_required" || document.Message != recovery.Error() || document.Retryable {
+		t.Fatalf("recovery error document = %+v", document)
+	}
+	if document.Details.RemainingByStateStatus != "unavailable" || len(document.Details.Claims) != len(recovery.Claims) {
+		t.Fatalf("recovery error details = %+v", document.Details)
+	}
+	for index, want := range recovery.Claims {
+		got := document.Details.Claims[index]
+		if got.DeliveryID != want.DeliveryID || got.LeaseToken != want.LeaseToken || got.RecipientAddress != want.RecipientAddress || got.LeaseExpiresAt != want.LeaseExpiresAt {
+			t.Fatalf("recovery claim[%d] = %+v, want %+v", index, got, want)
+		}
 	}
 }

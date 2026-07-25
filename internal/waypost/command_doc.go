@@ -19,7 +19,7 @@ Use when: you need a Waypost operation that is not exposed as a common MCP tool.
 ## Do
 1. Run WAYPOST --state-dir STATE_DIR forward (--message ID | --delivery ID) --to ADDRESS --json for durable forwarding.
 2. Use wait, list, read, fail, undefer, group, or address inspect with --json for their durable-state work.
-3. Use the retained MCP operations for send, receive, acknowledgement, release, and defer.
+3. Use MCP for its retained Waypost operations: waypost_status, waypost_bind, waypost_debug, waypost_send, waypost_recv, waypost_claim_history, waypost_ack, waypost_release, and waypost_defer. Claim history is the token-recovery path for a delivery this MCP process already claimed.
 
 ## Interpret
 - error_code decides the next action; retry only when retryable is true.

@@ -208,17 +208,82 @@ INSERT INTO deliveries (
 	}
 
 	metadata := remainingStateBenchmarkMetadata(b, runtimeState, baseDir)
+	assertRemainingStateBenchmarkScope(b, runtimeState, store, addresses)
 	if err := runtimeState.Close(); err != nil {
 		b.Fatalf("close benchmark fixture: %v", err)
 	}
 	return remainingStateBenchmarkFixture{
-		baseDir: baseDir,
-		workDir: workDir,
-		// The database contains 100 recipients, but one receive call resolves
-		// one personal queue. Keeping the scope narrow catches accidental global
-		// scans while measuring the actual receive-path contract.
-		addresses: []string{addresses[0]},
+		baseDir:   baseDir,
+		workDir:   workDir,
+		addresses: addresses,
 		metadata:  metadata,
+	}
+}
+
+func assertRemainingStateBenchmarkScope(b *testing.B, runtimeState *Runtime, store *Store, addresses []string) {
+	b.Helper()
+
+	if len(addresses) != remainingStateBenchmarkAddressCount {
+		b.Fatalf("benchmark address scope = %d, want %d", len(addresses), remainingStateBenchmarkAddressCount)
+	}
+	placeholders := strings.TrimSuffix(strings.Repeat("?,", len(addresses)), ",")
+	args := make([]any, 0, len(addresses))
+	for _, address := range addresses {
+		args = append(args, address)
+	}
+	rows, err := runtimeState.DB().QueryContext(context.Background(), fmt.Sprintf(`
+SELECT d.state, COUNT(*)
+FROM deliveries AS d
+JOIN endpoint_addresses AS ea ON ea.endpoint_id = d.recipient_endpoint_id
+WHERE ea.address IN (%s)
+GROUP BY d.state
+`, placeholders), args...)
+	if err != nil {
+		b.Fatalf("count full benchmark fixture scope: %v", err)
+	}
+	defer rows.Close()
+	allStates := make(map[string]int)
+	for rows.Next() {
+		var state string
+		var count int
+		if err := rows.Scan(&state, &count); err != nil {
+			b.Fatalf("scan full benchmark fixture scope: %v", err)
+		}
+		allStates[state] = count
+	}
+	if err := rows.Err(); err != nil {
+		b.Fatalf("iterate full benchmark fixture scope: %v", err)
+	}
+	wantAllStates := map[string]int{
+		"queued":      60000,
+		"leased":      20000,
+		"dead_letter": 10000,
+		"acked":       10000,
+	}
+	if len(allStates) != len(wantAllStates) {
+		b.Fatalf("benchmark full states = %v, want %v", allStates, wantAllStates)
+	}
+	for state, count := range wantAllStates {
+		if got := allStates[state]; got != count {
+			b.Fatalf("benchmark full state[%s] = %d, want %d", state, got, count)
+		}
+	}
+	remaining, err := store.RemainingByState(context.Background(), addresses, nil)
+	if err != nil {
+		b.Fatalf("count benchmark fixture scope: %v", err)
+	}
+	want := map[string]int{
+		"queued":      60000,
+		"leased":      20000,
+		"dead_letter": 10000,
+	}
+	if len(remaining) != len(want) {
+		b.Fatalf("benchmark remaining states = %v, want %v", remaining, want)
+	}
+	for state, count := range want {
+		if got := remaining[state]; got != count {
+			b.Fatalf("benchmark remaining_by_state[%s] = %d, want %d", state, got, count)
+		}
 	}
 }
 
@@ -235,6 +300,13 @@ func benchmarkReceiveSample(b *testing.B, fixture remainingStateBenchmarkFixture
 		b.Fatalf("open benchmark fixture %q: %v", name, err)
 	}
 	store := runtimeState.Store()
+	// Each sample uses an independent copied database. Warm the same indexed
+	// count scope outside the timer so page-fault cost from a fresh copy does
+	// not masquerade as count-query regression in the paired comparison.
+	if _, err := store.RemainingByState(context.Background(), fixture.addresses, nil); err != nil {
+		_ = runtimeState.Close()
+		b.Fatalf("warm benchmark fixture %q: %v", name, err)
+	}
 	b.StartTimer()
 	started := time.Now()
 	if includeCount {

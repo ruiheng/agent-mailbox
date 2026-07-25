@@ -226,3 +226,116 @@ func TestTrackedLeaseInspectionErrorDoesNotReturnCachedHint(t *testing.T) {
 		t.Fatalf("waypost_recv inspection error = %v, want %v", err, inspectErr)
 	}
 }
+
+func TestReceiveRecoveryTracksAndRenewsEveryUnreleasedClaim(t *testing.T) {
+	claims := []waypost.ReceivedMessage{
+		{
+			DeliveryID:       "dlv_recovery_one",
+			LeaseToken:       "lease_recovery_one",
+			RecipientAddress: "agent-deck/one",
+			LeaseExpiresAt:   "2026-07-25T10:00:00Z",
+		},
+		{
+			DeliveryID:       "dlv_recovery_two",
+			LeaseToken:       "lease_recovery_two",
+			RecipientAddress: "agent-deck/two",
+			LeaseExpiresAt:   "2026-07-25T10:01:00Z",
+		},
+	}
+	renewedTokens := map[string]string{
+		"dlv_recovery_one": "lease_recovery_one_renewed",
+		"dlv_recovery_two": "lease_recovery_two_renewed",
+	}
+	renewCalls := make(map[string][]string)
+	waypostService := &fakeWaypostService{t: t}
+	waypostService.receiveBatchWithTTLFunc = func(context.Context, waypost.ReceiveBatchParams, time.Duration) (waypost.ReceiveResult, error) {
+		return waypost.ReceiveResult{}, &waypost.ReceiveRecoveryRequiredError{
+			Cause:  errors.New("remaining-state query failed"),
+			Claims: claims,
+		}
+	}
+	waypostService.renewFunc = func(_ context.Context, deliveryID, leaseToken string, _ time.Duration) (waypost.LeaseRenewResult, error) {
+		renewedToken, found := renewedTokens[deliveryID]
+		if !found {
+			t.Fatalf("unexpected renewal for %q", deliveryID)
+		}
+		renewCalls[deliveryID] = append(renewCalls[deliveryID], leaseToken)
+		return waypost.LeaseRenewResult{
+			DeliveryID:     deliveryID,
+			LeaseToken:     renewedToken,
+			LeaseExpiresAt: "2026-07-25T11:00:00Z",
+		}, nil
+	}
+	waypostService.leaseStates = map[string]waypost.DeliveryLeaseState{}
+	for _, claim := range claims {
+		waypostService.leaseStates[claim.DeliveryID] = waypost.DeliveryLeaseState{
+			Found:      true,
+			State:      "leased",
+			LeaseToken: claim.LeaseToken,
+		}
+	}
+	service := newService(Options{
+		WaypostServiceFactory: fakeWaypostServiceFactory{service: waypostService},
+		CommandRunner:         &fakeRunner{t: t, handler: func([]string, string) (RunResult, error) { return RunResult{}, nil }},
+		DisableWakeScheduler:  true,
+		DisableLeaseRenewLoop: true,
+	})
+	defer service.Close()
+	service.state.autoBindAttempted = true
+
+	output := callServiceTool(t, service, "waypost_recv", map[string]any{
+		"addresses": []string{"agent-deck/one", "agent-deck/two"},
+	})
+	if output["status"] != "receive_recovery_required" || output["error_code"] != "receive_recovery_required" || output["remaining_by_state_status"] != "unavailable" {
+		t.Fatalf("receive recovery output = %v", output)
+	}
+	responseClaims, ok := output["claims"].([]any)
+	if !ok || len(responseClaims) != len(claims) {
+		t.Fatalf("receive recovery claims = %v, want %d claims", output["claims"], len(claims))
+	}
+	for index, want := range claims {
+		got, ok := responseClaims[index].(map[string]any)
+		if !ok {
+			t.Fatalf("receive recovery claim[%d] = %T, want map", index, responseClaims[index])
+		}
+		if got["delivery_id"] != want.DeliveryID || got["lease_token"] != want.LeaseToken || got["recipient_address"] != want.RecipientAddress || got["lease_expires_at"] != want.LeaseExpiresAt {
+			t.Fatalf("receive recovery claim[%d] = %v, want %+v", index, got, want)
+		}
+	}
+
+	tracked := service.activeLeases.snapshot()
+	if len(tracked) != len(claims) {
+		t.Fatalf("tracked recovery leases = %+v, want %d", tracked, len(claims))
+	}
+	trackedTokens := make(map[string]string, len(tracked))
+	for _, lease := range tracked {
+		trackedTokens[lease.DeliveryID] = lease.LeaseToken
+	}
+	for _, claim := range claims {
+		if trackedTokens[claim.DeliveryID] != claim.LeaseToken {
+			t.Fatalf("tracked recovery token for %q = %q, want %q", claim.DeliveryID, trackedTokens[claim.DeliveryID], claim.LeaseToken)
+		}
+	}
+
+	if err := service.processLeaseRenewals(context.Background()); err != nil {
+		t.Fatalf("processLeaseRenewals() = %v", err)
+	}
+	if len(renewCalls) != len(claims) {
+		t.Fatalf("renew calls = %v, want every recovery claim", renewCalls)
+	}
+	for _, claim := range claims {
+		callTokens := renewCalls[claim.DeliveryID]
+		if len(callTokens) != 1 || callTokens[0] != claim.LeaseToken {
+			t.Fatalf("renew calls for %q = %v, want exactly [%q]", claim.DeliveryID, callTokens, claim.LeaseToken)
+		}
+	}
+	trackedAfterRenewal := service.activeLeases.snapshot()
+	if len(trackedAfterRenewal) != len(claims) {
+		t.Fatalf("tracked leases after renewal = %+v, want %d", trackedAfterRenewal, len(claims))
+	}
+	for _, lease := range trackedAfterRenewal {
+		if want := renewedTokens[lease.DeliveryID]; lease.LeaseToken != want {
+			t.Fatalf("renewed tracked lease = %+v, want token %q", lease, want)
+		}
+	}
+}

@@ -239,33 +239,44 @@ func (s *Store) ReceiveBatch(ctx context.Context, params ReceiveBatchParams) (Re
 }
 
 func (s *Store) receiveBatchWithLeasePolicy(ctx context.Context, addresses []string, maxMessages int, policy receiveLeasePolicy) (ReceiveResult, error) {
-	return s.receiveBatchWithLeasePolicyAndRemainingCounter(ctx, addresses, maxMessages, policy, s.RemainingByState)
+	return s.receiveBatchWithLeasePolicyAndRemainingCounter(ctx, addresses, maxMessages, policy, s.remainingByStateForScope)
 }
 
-func (s *Store) receiveBatchWithLeasePolicyAndRemainingCounter(ctx context.Context, addresses []string, maxMessages int, policy receiveLeasePolicy, remainingCounter func(context.Context, []string, []string) (map[string]int, error)) (ReceiveResult, error) {
-	messages := make([]ReceivedMessage, 0, maxMessages)
-	for len(messages) < maxMessages {
-		message, err := s.receiveOnceWithLeasePolicy(ctx, addresses, policy)
-		if err == nil {
-			messages = append(messages, message)
-			continue
-		}
-		if errors.Is(err, ErrNoMessage) {
-			break
-		}
-		if errors.Is(err, ErrReceiveRecovery) || errors.Is(err, ErrClaimContention) {
-			if _, releaseErr := s.rollbackReceivedBatchMessages(ctx, messages); releaseErr != nil {
-				return ReceiveResult{}, errors.Join(err, releaseErr)
-			}
-			return ReceiveResult{}, err
-		}
-		if len(messages) > 0 {
-			break
-		}
+func (s *Store) receiveBatchWithLeasePolicyAndRemainingCounter(ctx context.Context, addresses []string, maxMessages int, policy receiveLeasePolicy, remainingCounter func(context.Context, personalAvailabilityScope, []string) (map[string]int, error)) (ReceiveResult, error) {
+	policy, err := normalizeReceiveLeasePolicy(policy)
+	if err != nil {
+		return ReceiveResult{}, err
+	}
+	scope, err := s.resolvePersonal(ctx, s.readDB, addresses)
+	if err != nil {
 		return ReceiveResult{}, err
 	}
 
-	remainingByState, err := remainingCounter(ctx, addresses, receivedDeliveryIDs(messages))
+	messages := make([]ReceivedMessage, 0, maxMessages)
+	if !scope.empty() {
+		for len(messages) < maxMessages {
+			message, err := s.claimNextDelivery(ctx, scope, policy)
+			if err == nil {
+				messages = append(messages, message)
+				continue
+			}
+			if errors.Is(err, ErrNoMessage) {
+				break
+			}
+			if errors.Is(err, ErrReceiveRecovery) || errors.Is(err, ErrClaimContention) {
+				if _, releaseErr := s.rollbackReceivedBatchMessages(ctx, messages); releaseErr != nil {
+					return ReceiveResult{}, errors.Join(err, releaseErr)
+				}
+				return ReceiveResult{}, err
+			}
+			if len(messages) > 0 {
+				break
+			}
+			return ReceiveResult{}, err
+		}
+	}
+
+	remainingByState, err := remainingCounter(ctx, scope, receivedDeliveryIDs(messages))
 	if err != nil {
 		unreleased, rollbackErr := s.rollbackReceivedBatchMessages(ctx, messages)
 		if len(unreleased) > 0 {

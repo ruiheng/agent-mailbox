@@ -139,50 +139,81 @@ func (s *Store) RemainingByState(ctx context.Context, addresses, excludedDeliver
 	if err != nil {
 		return nil, err
 	}
+	return s.remainingByStateForScope(ctx, scope, excludedDeliveryIDs)
+}
+
+func (s *Store) remainingByStateForScope(ctx context.Context, scope personalAvailabilityScope, excludedDeliveryIDs []string) (map[string]int, error) {
 	if scope.empty() {
 		return nil, nil
 	}
 
 	endpointPlaceholders := strings.TrimSuffix(strings.Repeat("?,", len(scope.recipientEndpointIDs)), ",")
-	args := make([]any, 0, len(scope.recipientEndpointIDs)+len(excludedDeliveryIDs))
-	for _, endpointID := range scope.recipientEndpointIDs {
-		args = append(args, endpointID)
-	}
+	args := make([]any, 0, len(scope.recipientEndpointIDs)*2+len(excludedDeliveryIDs))
+	query := fmt.Sprintf(`
+SELECT
+  COUNT(*) FILTER (WHERE d.state = 'queued'),
+  COUNT(*) FILTER (WHERE d.state = 'leased'),
+  COUNT(*) FILTER (WHERE d.state = 'dead_letter')
+FROM deliveries AS d
+WHERE d.recipient_endpoint_id IN (%s)
+  AND d.state IN ('queued', 'leased', 'dead_letter')
+`, endpointPlaceholders)
 
-	exclusion := ""
 	if len(excludedDeliveryIDs) > 0 {
 		exclusionPlaceholders := strings.TrimSuffix(strings.Repeat("?,", len(excludedDeliveryIDs)), ",")
-		exclusion = fmt.Sprintf("\n  AND d.delivery_id NOT IN (%s)", exclusionPlaceholders)
+		// Keep the main 100k-row count covered by the recipient/state index.
+		// delivery_id is not part of that index, so a NOT IN predicate here
+		// forces a table lookup for every candidate. The bounded exclusion set is
+		// instead resolved by delivery ID in the same SQLite snapshot and deducted
+		// from the aggregate counts.
+		query = fmt.Sprintf(`
+WITH excluded AS (
+  SELECT d.state
+  FROM deliveries AS d
+  WHERE d.delivery_id IN (%s)
+    AND d.recipient_endpoint_id IN (%s)
+    AND d.state IN ('queued', 'leased', 'dead_letter')
+)
+SELECT
+  COUNT(*) FILTER (WHERE d.state = 'queued') - (SELECT COUNT(*) FROM excluded WHERE state = 'queued'),
+  COUNT(*) FILTER (WHERE d.state = 'leased') - (SELECT COUNT(*) FROM excluded WHERE state = 'leased'),
+  COUNT(*) FILTER (WHERE d.state = 'dead_letter') - (SELECT COUNT(*) FROM excluded WHERE state = 'dead_letter')
+FROM deliveries AS d
+WHERE d.recipient_endpoint_id IN (%s)
+  AND d.state IN ('queued', 'leased', 'dead_letter')
+`, exclusionPlaceholders, endpointPlaceholders, endpointPlaceholders)
 		for _, deliveryID := range excludedDeliveryIDs {
 			args = append(args, deliveryID)
 		}
+		for _, endpointID := range scope.recipientEndpointIDs {
+			args = append(args, endpointID)
+		}
+		for _, endpointID := range scope.recipientEndpointIDs {
+			args = append(args, endpointID)
+		}
+	} else {
+		for _, endpointID := range scope.recipientEndpointIDs {
+			args = append(args, endpointID)
+		}
 	}
 
-	rows, err := s.readDB.QueryContext(ctx, fmt.Sprintf(`
-SELECT d.state, COUNT(*)
-FROM deliveries AS d
-WHERE d.recipient_endpoint_id IN (%s)
-  AND d.state IN ('queued', 'leased', 'dead_letter')%s
-GROUP BY d.state
-`, endpointPlaceholders, exclusion), args...)
+	// GROUP BY state would create a temporary B-tree for a multi-address
+	// receive scope, so count each state from the recipient-first covering index.
+	var queued, leased, deadLetter int
+	err := s.readDB.QueryRowContext(ctx, query, args...).Scan(&queued, &leased, &deadLetter)
 	if err != nil {
 		return nil, fmt.Errorf("count remaining deliveries: %w", err)
 	}
-	defer rows.Close()
 
 	remaining := make(map[string]int)
-	for rows.Next() {
-		var state string
-		var count int
-		if err := rows.Scan(&state, &count); err != nil {
-			return nil, fmt.Errorf("scan remaining delivery count: %w", err)
-		}
+	for state, count := range map[string]int{
+		"queued":      queued,
+		"leased":      leased,
+		"dead_letter": deadLetter,
+	} {
 		if count > 0 {
 			remaining[state] = count
 		}
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate remaining delivery counts: %w", err)
 	}
 	if len(remaining) == 0 {
 		return nil, nil

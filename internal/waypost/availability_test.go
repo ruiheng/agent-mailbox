@@ -66,11 +66,13 @@ func TestRemainingByStateUsesRecipientStateVisibleIndex(t *testing.T) {
 	sent := mustSendMessage(t, store, "workflow/count-plan", "agent/sender", "count", "body")
 	rows, err := store.readDB.QueryContext(context.Background(), `
 EXPLAIN QUERY PLAN
-SELECT d.state, COUNT(*)
+SELECT
+  COUNT(*) FILTER (WHERE d.state = 'queued'),
+  COUNT(*) FILTER (WHERE d.state = 'leased'),
+  COUNT(*) FILTER (WHERE d.state = 'dead_letter')
 FROM deliveries AS d
 WHERE d.recipient_endpoint_id IN (?)
   AND d.state IN ('queued', 'leased', 'dead_letter')
-GROUP BY d.state
 `, sent.RecipientID)
 	if err != nil {
 		t.Fatalf("EXPLAIN QUERY PLAN error = %v", err)
@@ -91,12 +93,36 @@ GROUP BY d.state
 		if strings.Contains(upper, "SCAN DELIVERIES") || strings.Contains(upper, "SCAN D") {
 			t.Fatalf("remaining-state query plan scans deliveries: %q", detail)
 		}
+		if strings.Contains(upper, "TEMP B-TREE") {
+			t.Fatalf("remaining-state query plan materializes a temporary B-tree: %q", detail)
+		}
 	}
 	if err := rows.Err(); err != nil {
 		t.Fatalf("iterate query plan: %v", err)
 	}
 	if !usedIndex {
 		t.Fatal("remaining-state query plan did not use idx_deliveries_recipient_state_visible")
+	}
+}
+
+func TestRemainingByStateDeductsExcludedClaims(t *testing.T) {
+	t.Parallel()
+
+	runtime, store := newLeaseTestStore(t)
+	defer runtime.Close()
+
+	first := mustSendMessage(t, store, "workflow/excluded-count", "agent/sender", "first", "body")
+	mustSendMessage(t, store, "workflow/excluded-count", "agent/sender", "second", "body")
+
+	remaining, err := store.RemainingByState(context.Background(), []string{"workflow/excluded-count"}, []string{first.DeliveryID})
+	if err != nil {
+		t.Fatalf("RemainingByState() error = %v", err)
+	}
+	if got := remaining["queued"]; got != 1 {
+		t.Fatalf("remaining_by_state[queued] = %d, want 1", got)
+	}
+	if len(remaining) != 1 {
+		t.Fatalf("remaining_by_state = %v, want only one queued delivery", remaining)
 	}
 }
 
