@@ -189,7 +189,16 @@ CLI against the same Waypost state:
   "executable": "/absolute/path/to/waypost",
   "resolved_state_dir": "/absolute/path/to/state",
   "bound_addresses": ["ADDRESS"],
-  "default_sender": "ADDRESS"
+  "default_sender": "ADDRESS",
+  "active_lease_count": 1,
+  "active_leases": [
+    {
+      "delivery_id": "dlv_...",
+      "recipient_address": "ADDRESS",
+      "lease_token": "lease_...",
+      "last_renewed_at": "RFC3339 or null"
+    }
+  ]
 }
 ```
 
@@ -204,6 +213,9 @@ The MCP server instructions are themselves a concise agent prompt:
 Call waypost_status before any other waypost_* tool except waypost_debug; it
 auto-binds detectable agent session addresses and reports warnings. Agent Deck
 session tools do not require this bootstrap.
+After waypost_recv claims a personal delivery, this MCP server automatically
+keeps its lease renewed while it remains running; restarting or stopping the
+server ends that automatic renewal.
 MCP exposes only common operations. For complete Waypost functionality and
 workflow guidance, use the reported executable:
   <executable> doc --list

@@ -136,7 +136,7 @@ func (s *Service) registerWaypostTools(server *mcp.Server) {
 	}, s.waypostBind)
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "waypost_status",
-		Description: "Show the currently bound waypost addresses, default sender, and default workdir stored in this MCP server.",
+		Description: "Show the currently bound waypost addresses, default sender, default workdir, and active personal leases (including tokens) held and automatically renewed by this MCP server.",
 	}, s.waypostStatus)
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "waypost_debug",
@@ -187,6 +187,11 @@ func (s *Service) waypostStatus(ctx context.Context, _ *mcp.CallToolRequest, _ w
 	if err != nil {
 		return nil, nil, err
 	}
+	if s.activeLeases.hasTrackedLeases() {
+		if err := s.reconcileTrackedLeases(ctx); err != nil {
+			return nil, nil, err
+		}
+	}
 	s.markWaypostStatusCalled()
 	out := boundStateMap(bound)
 	out["server_version"] = serverVersion
@@ -194,7 +199,27 @@ func (s *Service) waypostStatus(ctx context.Context, _ *mcp.CallToolRequest, _ w
 	out["resolved_state_dir"] = stateDir
 	out["default_sender"] = orUnset(bound.DefaultSender)
 	out["default_workdir"] = orUnset(bound.DefaultWorkdir)
+	activeLeases := activeLeaseStatusItems(s.activeLeases.snapshot())
+	out["active_leases"] = activeLeases
+	out["active_lease_count"] = len(activeLeases)
 	return s.waypostToolResult(ctx, out)
+}
+
+func activeLeaseStatusItems(leases []activeLease) []map[string]any {
+	sort.Slice(leases, func(i, j int) bool {
+		return leases[i].DeliveryID < leases[j].DeliveryID
+	})
+
+	items := make([]map[string]any, 0, len(leases))
+	for _, lease := range leases {
+		items = append(items, map[string]any{
+			"delivery_id":       lease.DeliveryID,
+			"recipient_address": lease.RecipientAddress,
+			"lease_token":       lease.LeaseToken,
+			"last_renewed_at":   nilIfEmpty(lease.LastRenewedAt),
+		})
+	}
+	return items
 }
 
 func (s *Service) sendWaypostMessage(ctx context.Context, input waypostSendInput) (map[string]any, error) {

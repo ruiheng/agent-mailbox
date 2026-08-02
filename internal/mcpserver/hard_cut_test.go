@@ -43,6 +43,53 @@ func TestWaypostStatusReportsAuthoritativeCLIContext(t *testing.T) {
 	}
 }
 
+func TestWaypostStatusReportsActiveLeaseTokens(t *testing.T) {
+	stateDir := filepath.Join(t.TempDir(), "waypost-state")
+	service := newService(Options{
+		StateDir:             stateDir,
+		CommandRunner:        &fakeRunner{t: t, handler: func([]string, string) (RunResult, error) { return RunResult{}, nil }},
+		DisableWakeScheduler: true,
+		LeaseRenewInterval:   time.Hour,
+	})
+	defer service.Close()
+	service.state.boundAddresses = []string{"agent-deck/self"}
+	service.state.defaultSender = "agent-deck/self"
+	service.state.autoBindAttempted = true
+
+	sent := callServiceTool(t, service, "waypost_send", map[string]any{
+		"to_address": "agent-deck/self",
+		"subject":    "status lease",
+		"body":       "body",
+	})
+	deliveryID := sent["delivery_id"].(string)
+	received := callServiceTool(t, service, "waypost_recv", map[string]any{
+		"addresses": []string{"agent-deck/self"},
+	})
+	leaseToken := received["delivery"].(map[string]any)["lease_token"].(string)
+
+	status := callServiceTool(t, service, "waypost_status", map[string]any{})
+	if got := status["active_lease_count"]; got != float64(1) {
+		t.Fatalf("active_lease_count = %v, want 1", got)
+	}
+	leases := status["active_leases"].([]any)
+	if len(leases) != 1 {
+		t.Fatalf("active_leases = %v, want one lease", leases)
+	}
+	lease := leases[0].(map[string]any)
+	if got := lease["delivery_id"]; got != deliveryID {
+		t.Fatalf("active lease delivery_id = %v, want %q", got, deliveryID)
+	}
+	if got := lease["lease_token"]; got != leaseToken {
+		t.Fatalf("active lease token = %v, want %q", got, leaseToken)
+	}
+	if got := lease["recipient_address"]; got != "agent-deck/self" {
+		t.Fatalf("active lease recipient_address = %v, want agent-deck/self", got)
+	}
+	if _, ok := lease["lease_expires_at"]; ok {
+		t.Fatalf("active lease unexpectedly exposed lease_expires_at: %v", lease)
+	}
+}
+
 func TestWaypostStatusCLIReplacementForward(t *testing.T) {
 	stateDir := filepath.Join(t.TempDir(), "waypost-state")
 	service := newService(Options{
@@ -136,7 +183,7 @@ func TestWaypostCLIHelperProcess(t *testing.T) {
 	os.Exit(1)
 }
 
-func TestExternalDurableFailReconcilesMCPLeaseHistory(t *testing.T) {
+func TestExternalDurableFailReconcilesMCPLeaseHistoryAndStatus(t *testing.T) {
 	stateDir := filepath.Join(t.TempDir(), "waypost-state")
 	service := newService(Options{
 		StateDir:              stateDir,
@@ -169,6 +216,17 @@ func TestExternalDurableFailReconcilesMCPLeaseHistory(t *testing.T) {
 		t.Fatalf("durable Fail() error = %v", err)
 	}
 
+	status := callServiceTool(t, service, "waypost_status", map[string]any{})
+	if got := status["active_lease_count"]; got != float64(0) {
+		t.Fatalf("active_lease_count after external fail = %v, want 0", got)
+	}
+	if leases := status["active_leases"].([]any); len(leases) != 0 {
+		t.Fatalf("active_leases after external fail = %v, want empty", leases)
+	}
+	if service.activeLeases.hasTrackedLeases() {
+		t.Fatal("externally failed lease remains active after waypost_status")
+	}
+
 	history := callServiceTool(t, service, "waypost_claim_history", map[string]any{
 		"delivery_id":         deliveryID,
 		"include_terminal":    true,
@@ -188,10 +246,6 @@ func TestExternalDurableFailReconcilesMCPLeaseHistory(t *testing.T) {
 	if _, ok := item["lease_token"]; ok {
 		t.Fatalf("claim history exposed obsolete lease token: %v", item)
 	}
-	if service.activeLeases.hasTrackedLeases() {
-		t.Fatal("externally failed lease remains active in MCP cache")
-	}
-
 	if err := service.processLeaseRenewals(context.Background()); err != nil {
 		t.Fatalf("processLeaseRenewals() after reconciliation = %v", err)
 	}
@@ -219,7 +273,15 @@ func TestTrackedLeaseInspectionErrorDoesNotReturnCachedHint(t *testing.T) {
 		RecipientAddress: "agent-deck/self",
 	}}}, time.Now().UTC().Format(time.RFC3339Nano))
 
-	err := callServiceToolExpectError(t, service, "waypost_recv", map[string]any{
+	err := callServiceToolExpectError(t, service, "waypost_status", map[string]any{})
+	if err == nil || !strings.Contains(err.Error(), inspectErr.Error()) {
+		t.Fatalf("waypost_status inspection error = %v, want %v", err, inspectErr)
+	}
+	if service.state.statusToolCalled {
+		t.Fatal("waypost_status marked successful after lease inspection failed")
+	}
+
+	err = callServiceToolExpectError(t, service, "waypost_recv", map[string]any{
 		"addresses": []string{"agent-deck/self"},
 	})
 	if err == nil || !strings.Contains(err.Error(), inspectErr.Error()) {
