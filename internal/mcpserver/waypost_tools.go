@@ -132,31 +132,31 @@ type readLatestResult struct {
 func (s *Service) registerWaypostTools(server *mcp.Server) {
 	addToolRequiringWaypostStatus(server, s, &mcp.Tool{
 		Name:        "waypost_bind",
-		Description: "Bind one or more waypost addresses into MCP server state.",
+		Description: "Bind Waypost addresses to this MCP server.",
 	}, s.waypostBind)
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "waypost_status",
-		Description: "Show the currently bound waypost addresses, default sender, default workdir, and active personal leases (including tokens) held and automatically renewed by this MCP server.",
+		Description: "Show bound addresses, defaults, and active personal leases (with tokens) automatically renewed by this MCP server.",
 	}, s.waypostStatus)
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "waypost_debug",
-		Description: "Show read-only MCP process and allowlisted tool session environment diagnostics without auto-binding or mutating state.",
+		Description: "Show read-only MCP and allowlisted session-environment diagnostics without binding or changing state.",
 	}, s.waypostDebug)
 	addToolRequiringWaypostStatus(server, s, &mcp.Tool{
 		Name:        "waypost_send",
-		Description: "Send one waypost message and automatically push-notify a non-local target when the address scheme supports it. Set disable_notify_message=true to skip notify for that send.",
+		Description: "Send a Waypost message; push-notify a non-local target when supported. Set disable_notify_message=true to skip notification.",
 	}, s.waypostSend)
 	addToolRequiringWaypostStatus(server, s, &mcp.Tool{
 		Name:        "waypost_recv",
-		Description: "Receive currently available delivery immediately and claim it; recv never blocks. If this MCP process already holds unacknowledged leases, recv returns a hint immediately; pass known_delivery_ids to suppress leases the caller already knows about. If addresses is omitted, receive from all bound addresses; pass addresses only to override that queue set for this call. After ack, use the reported Waypost CLI to reread persisted deliveries when context is lost.",
+		Description: "Immediately claim an available delivery; never blocks. This process's unacknowledged leases return a hint; use known_delivery_ids to suppress known leases. Defaults to all bound addresses; addresses overrides that set for this call. After ack, use the reported CLI to reread persisted deliveries after context loss.",
 	}, s.waypostRecv)
 	addToolRequiringWaypostStatus(server, s, &mcp.Tool{
 		Name:        "waypost_claim_history",
-		Description: "List deliveries this MCP process has claimed during its current lifetime. By default returns active claims without lease tokens; pass delivery_id and include_lease_token=true to recover a token the agent lost.",
+		Description: "List deliveries claimed by this MCP process. By default, returns active claims without tokens; set delivery_id and include_lease_token=true to recover a lost token.",
 	}, s.waypostClaimHistory)
 	addToolRequiringWaypostStatus(server, s, &mcp.Tool{
 		Name:        "waypost_ack",
-		Description: "Acknowledge a claimed waypost delivery. Acked deliveries remain readable later through the reported Waypost CLI.",
+		Description: "Acknowledge a claimed delivery; it remains readable through the reported CLI.",
 	}, s.waypostAck)
 	addToolRequiringWaypostStatus(server, s, &mcp.Tool{
 		Name:        "waypost_release",
@@ -164,7 +164,7 @@ func (s *Service) registerWaypostTools(server *mcp.Server) {
 	}, s.waypostRelease)
 	addToolRequiringWaypostStatus(server, s, &mcp.Tool{
 		Name:        "waypost_defer",
-		Description: "Defer a claimed waypost delivery until a later RFC3339 time.",
+		Description: "Defer a claimed delivery until an RFC3339 time.",
 	}, s.waypostDefer)
 }
 

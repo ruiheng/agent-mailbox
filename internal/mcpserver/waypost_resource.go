@@ -26,7 +26,7 @@ func (s *Service) registerWaypostOverviewResource(server *mcp.Server) {
 		URI:         waypostOverviewURI,
 		Name:        "waypost-bound-overview",
 		Title:       "Waypost Overview",
-		Description: "Summary snapshot of currently claimable waypost work for the bound scope in this MCP server instance.",
+		Description: "Claimable Waypost work in this MCP server's bound scope.",
 		MIMEType:    "application/json",
 	}, s.readWaypostOverviewResource)
 }

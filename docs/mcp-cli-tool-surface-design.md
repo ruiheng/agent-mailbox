@@ -210,18 +210,18 @@ outside this design.
 The MCP server instructions are themselves a concise agent prompt:
 
 ```text
-Call waypost_status before any other waypost_* tool except waypost_debug; it
-auto-binds detectable agent session addresses and reports warnings. Agent Deck
+Call waypost_status before any other waypost_* tool except waypost_debug. It
+auto-binds detectable session addresses and reports warnings. Agent Deck
 session tools do not require this bootstrap.
-After waypost_recv claims a personal delivery, this MCP server automatically
-keeps its lease renewed while it remains running; restarting or stopping the
-server ends that automatic renewal.
-MCP exposes only common operations. For complete Waypost functionality and
-workflow guidance, use the reported executable:
+This server automatically renews leases for personal deliveries claimed by
+waypost_recv until it stops or restarts.
+Waypost is for durable asynchronous work, not real-time communication. MCP
+covers common operations. For complete Waypost guidance:
+  <executable> doc
   <executable> doc --list
   <executable> doc <topic>
-Run stateful CLI operations with the reported resolved_state_dir. Do not guess
-another binary or state directory.
+Use the reported executable and resolved_state_dir for stateful CLI commands;
+never guess either.
 ```
 
 This adds no command catalog to the MCP instructions. `waypost doc` owns the
