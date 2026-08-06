@@ -87,8 +87,8 @@ Use when: you need durable delivery history or a stored body.
 
 ## Do
 1. Run WAYPOST --state-dir STATE_DIR list --for ADDRESS --state acked --json for delivery summaries.
-2. Run WAYPOST --state-dir STATE_DIR read --delivery DELIVERY_ID --json for a delivery body.
-3. Run WAYPOST --state-dir STATE_DIR read --message MESSAGE_ID --json when the message identity, rather than one delivery, is known.
+2. Run WAYPOST --state-dir STATE_DIR read DELIVERY_ID --json for a delivery body.
+3. Run WAYPOST --state-dir STATE_DIR read MESSAGE_ID --json when the message identity, rather than one delivery, is known.
 
 ## Interpret
 - Direct reads preserve the supplied id order.

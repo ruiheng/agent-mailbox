@@ -1187,7 +1187,22 @@ func TestPrepareReadCommandDistinguishesAbsentAndEmptySelectorFlags(t *testing.T
 		{
 			name:    "missing selector",
 			args:    []string{"read"},
-			wantErr: "one of --delivery, --message, or --latest is required",
+			wantErr: "one of ID, --delivery, --message, or --latest is required",
+		},
+		{
+			name:    "empty direct id",
+			args:    []string{"read", "   "},
+			wantErr: "ID must not be empty",
+		},
+		{
+			name:    "mixed direct ids",
+			args:    []string{"read", "dlv_123", "msg_123"},
+			wantErr: "direct read IDs must all be delivery IDs or all be message IDs",
+		},
+		{
+			name:    "direct and explicit selector",
+			args:    []string{"read", "dlv_123", "--message", "msg_123"},
+			wantErr: "ID, --delivery, --message, and --latest are mutually exclusive",
 		},
 		{
 			name:    "latest missing for",
@@ -1258,7 +1273,7 @@ func TestHelpCLIPathsDoNotCreateRuntimeState(t *testing.T) {
 		{
 			name:         "read help",
 			args:         []string{"read", "--help"},
-			wantContains: "Usage:\n  waypost read --message ID [--message ID ...] [--json | --yaml]",
+			wantContains: "Usage:\n  waypost read ID [ID ...] [--json | --yaml]",
 		},
 		{
 			name:         "watch help",

@@ -118,6 +118,25 @@ func TestCLISendRecvAckFlow(t *testing.T) {
 		t.Fatalf("read acked body = %v, want hello reviewer\\n", stored.Items[0]["body"])
 	}
 
+	readByDirectDeliveryID := runCLI(t, "", "--state-dir", stateDir,
+		"read",
+		message.DeliveryID,
+		"--json",
+	)
+	if readByDirectDeliveryID.exitCode != 0 {
+		t.Fatalf("read by direct delivery id exit code = %d, stderr = %q", readByDirectDeliveryID.exitCode, readByDirectDeliveryID.stderr)
+	}
+	var storedDirectDelivery readResult
+	if err := json.Unmarshal([]byte(readByDirectDeliveryID.stdout), &storedDirectDelivery); err != nil {
+		t.Fatalf("json.Unmarshal(read by direct delivery id stdout) error = %v; stdout = %q", err, readByDirectDeliveryID.stdout)
+	}
+	if len(storedDirectDelivery.Items) != 1 {
+		t.Fatalf("len(read by direct delivery id items) = %d, want 1", len(storedDirectDelivery.Items))
+	}
+	if storedDirectDelivery.Items[0]["delivery_id"] != message.DeliveryID {
+		t.Fatalf("read by direct delivery id = %v, want %s", storedDirectDelivery.Items[0]["delivery_id"], message.DeliveryID)
+	}
+
 	if deliveries[0]["message_id"] == "" {
 		t.Fatalf("list acked payload = %v, want message_id", deliveries[0])
 	}
@@ -143,6 +162,25 @@ func TestCLISendRecvAckFlow(t *testing.T) {
 	}
 	if storedMessage.Items[0]["body"] != "hello reviewer\n" {
 		t.Fatalf("read by message body = %v, want hello reviewer\\n", storedMessage.Items[0]["body"])
+	}
+
+	readByDirectMessageID := runCLI(t, "", "--state-dir", stateDir,
+		"read",
+		deliveries[0]["message_id"].(string),
+		"--json",
+	)
+	if readByDirectMessageID.exitCode != 0 {
+		t.Fatalf("read by direct message id exit code = %d, stderr = %q", readByDirectMessageID.exitCode, readByDirectMessageID.stderr)
+	}
+	var storedDirectMessage readResult
+	if err := json.Unmarshal([]byte(readByDirectMessageID.stdout), &storedDirectMessage); err != nil {
+		t.Fatalf("json.Unmarshal(read by direct message id stdout) error = %v; stdout = %q", err, readByDirectMessageID.stdout)
+	}
+	if len(storedDirectMessage.Items) != 1 {
+		t.Fatalf("len(read by direct message id items) = %d, want 1", len(storedDirectMessage.Items))
+	}
+	if storedDirectMessage.Items[0]["message_id"] != deliveries[0]["message_id"] {
+		t.Fatalf("read by direct message id = %v, want %v", storedDirectMessage.Items[0]["message_id"], deliveries[0]["message_id"])
 	}
 
 	readByMessageYAML := runCLI(t, "", "--state-dir", stateDir,
@@ -1705,7 +1743,7 @@ func TestCLIHelpExitsZeroAndPrintsUsage(t *testing.T) {
 		{
 			name:         "read help",
 			args:         []string{"read", "--help"},
-			wantContains: "Usage:\n  waypost read --message ID [--message ID ...] [--json | --yaml]",
+			wantContains: "Usage:\n  waypost read ID [ID ...] [--json | --yaml]",
 		},
 		{
 			name:         "watch help",

@@ -189,7 +189,7 @@ Read one persisted delivery body later:
 
 ```bash
 waypost read \
-  --message <message_id> \
+  <delivery_id> \
   --json
 ```
 
@@ -471,6 +471,7 @@ Read one or more persisted messages, one or more deliveries by id, or the
 latest deliveries for one or more queues.
 
 ```bash
+waypost read <id> [<id> ...] [--json | --yaml]
 waypost read --message <id> [--message <id> ...] [--json | --yaml]
 waypost read --delivery <id> [--delivery <id> ...] [--json | --yaml]
 waypost read --latest --for <address> [--for <address> ...] [--state <state>] [--limit <n>] [--json | --yaml]
@@ -480,9 +481,14 @@ Use `--json` or `--yaml` for scripts and agents.
 
 Notes:
 
+- a positional ID beginning with `dlv_` reads a delivery; any other positional
+  ID reads a message
+- positional IDs can be repeated, but must all identify the same kind of record
+- `--delivery` and `--message` remain available when an explicit selector is
+  preferred
 - `--message` reads by message identity, which matches the body-bearing object
-- `--message` is a raw trusted-environment body read and does not update group
-  read tracking
+- reading by a message ID, including a positional non-`dlv_` ID, is a raw
+  trusted-environment body read and does not update group read tracking
 - `--delivery` reads by one or more delivery records, regardless of whether they are
   `queued`, `leased`, `acked`, or `dead_letter`
 - `--latest` requires at least one `--for`

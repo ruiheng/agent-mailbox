@@ -393,7 +393,8 @@ func (a *App) prepareReadCommand(args []string) (preparedCommand, error) {
 	fs.IntVar(&limit, "limit", 1, "maximum number of latest deliveries to read")
 	formats.register(fs, "emit JSON", "emit YAML")
 
-	if err := a.parseCommandFlags(fs, args, a.writeReadHelp); err != nil {
+	flagArgs, directIDs := splitReadCommandArgs(fs, args)
+	if err := a.parseCommandFlags(fs, flagArgs, a.writeReadHelp); err != nil {
 		return nil, err
 	}
 	normalizedDeliveryIDs, err := normalizeFlagValues([]string(deliveryIDs), "--delivery")
@@ -408,6 +409,20 @@ func (a *App) prepareReadCommand(args []string) (preparedCommand, error) {
 	if err != nil && !errors.Is(err, errFlagValueRequired) {
 		return nil, err
 	}
+	directDeliveryIDs, directMessageIDs, err := normalizeDirectReadIDs(directIDs)
+	if err != nil {
+		return nil, err
+	}
+	hasDirectIDs := len(directDeliveryIDs) > 0 || len(directMessageIDs) > 0
+	if hasDirectIDs && (len(normalizedDeliveryIDs) > 0 || len(normalizedMessageIDs) > 0 || latest) {
+		return nil, errors.New("ID, --delivery, --message, and --latest are mutually exclusive")
+	}
+	if len(directDeliveryIDs) > 0 {
+		normalizedDeliveryIDs = directDeliveryIDs
+	}
+	if len(directMessageIDs) > 0 {
+		normalizedMessageIDs = directMessageIDs
+	}
 	selectorCount := 0
 	if len(normalizedDeliveryIDs) > 0 {
 		selectorCount++
@@ -420,7 +435,7 @@ func (a *App) prepareReadCommand(args []string) (preparedCommand, error) {
 	}
 	switch {
 	case selectorCount == 0:
-		return nil, errors.New("one of --delivery, --message, or --latest is required")
+		return nil, errors.New("one of ID, --delivery, --message, or --latest is required")
 	case selectorCount > 1:
 		return nil, errors.New("--delivery, --message, and --latest are mutually exclusive")
 	case !latest && len(normalizedAddresses) > 0:
@@ -480,6 +495,74 @@ func (a *App) prepareReadCommand(args []string) (preparedCommand, error) {
 	}, nil
 }
 
+// splitReadCommandArgs keeps read's positional IDs separate while preserving
+// interspersed flags. The standard flag package stops parsing at the first
+// positional argument, but `waypost read dlv_123 --json` should work naturally.
+func splitReadCommandArgs(fs *flag.FlagSet, args []string) (flagArgs, directIDs []string) {
+	for index := 0; index < len(args); index++ {
+		arg := args[index]
+		if arg == "--" {
+			directIDs = append(directIDs, args[index+1:]...)
+			break
+		}
+		if len(arg) > 1 && arg[0] == '-' {
+			flagArgs = append(flagArgs, arg)
+			if readFlagTakesValue(fs, arg) && index+1 < len(args) {
+				index++
+				flagArgs = append(flagArgs, args[index])
+			}
+			continue
+		}
+		directIDs = append(directIDs, arg)
+	}
+	return flagArgs, directIDs
+}
+
+func readFlagTakesValue(fs *flag.FlagSet, arg string) bool {
+	name, _, hasInlineValue := strings.Cut(arg, "=")
+	if hasInlineValue {
+		return false
+	}
+	if strings.HasPrefix(name, "--") {
+		name = name[2:]
+	} else if strings.HasPrefix(name, "-") {
+		name = name[1:]
+	}
+	definition := fs.Lookup(name)
+	if definition == nil {
+		return false
+	}
+	if boolean, ok := definition.Value.(interface{ IsBoolFlag() bool }); ok && boolean.IsBoolFlag() {
+		return false
+	}
+	return true
+}
+
+func normalizeDirectReadIDs(values []string) ([]string, []string, error) {
+	if len(values) == 0 {
+		return nil, nil, nil
+	}
+
+	normalized, err := normalizeFlagValues(values, "ID")
+	if err != nil {
+		return nil, nil, err
+	}
+
+	deliveryIDs := make([]string, 0, len(normalized))
+	messageIDs := make([]string, 0, len(normalized))
+	for _, id := range normalized {
+		if strings.HasPrefix(id, "dlv_") {
+			deliveryIDs = append(deliveryIDs, id)
+			continue
+		}
+		messageIDs = append(messageIDs, id)
+	}
+	if len(deliveryIDs) > 0 && len(messageIDs) > 0 {
+		return nil, nil, errors.New("direct read IDs must all be delivery IDs or all be message IDs")
+	}
+	return deliveryIDs, messageIDs, nil
+}
+
 func (a *App) writeListHelp() {
 	writeHelp(a.stdout, []string{
 		"Usage:",
@@ -529,11 +612,13 @@ func (a *App) writeRecvHelp() {
 func (a *App) writeReadHelp() {
 	writeHelp(a.stdout, []string{
 		"Usage:",
+		"  waypost read ID [ID ...] [--json | --yaml]",
 		"  waypost read --message ID [--message ID ...] [--json | --yaml]",
 		"  waypost read --delivery ID [--delivery ID ...] [--json | --yaml]",
 		"  waypost read --latest --for ADDRESS [--for ADDRESS ...] [--state STATE] [--limit N] [--json | --yaml]",
 		"",
 		"Options:",
+		"  ID                  Read by id; dlv_ ids are deliveries, all others are messages (repeatable)",
 		"  --message ID        Message id to read (repeatable)",
 		"  --delivery ID       Delivery id to read (repeatable)",
 		"  --latest            Read the latest deliveries for one or more queues",

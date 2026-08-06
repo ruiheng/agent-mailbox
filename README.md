@@ -501,19 +501,24 @@ Read one persisted delivery body later by `delivery_id`:
 
 ```bash
 waypost --state-dir /tmp/waypost-demo \
-  read --delivery <delivery_id> --json
+  read <delivery_id> --json
 ```
 
 Read the same body directly by `message_id`:
 
 ```bash
 waypost --state-dir /tmp/waypost-demo \
-  read --message <message_id> --json
+  read <message_id> --json
 ```
 
-`read --message` is a raw body read in the trusted local environment. It does
-not update group read tracking; group `recv` remains the operation that records
-reads and advances group unread/read state.
+`read` infers a delivery when the ID starts with `dlv_`; all other IDs are
+read as message IDs. The explicit `--delivery` and `--message` forms remain
+available.
+
+Reading by a message ID (with `--message` or a positional non-`dlv_` ID) is a
+raw body read in the trusted local environment. It does not update group read
+tracking; group `recv` remains the operation that records reads and advances
+group unread/read state.
 
 For the common "read the previous message from this queue" case, skip `list`
 and read the latest acked delivery in one step:
