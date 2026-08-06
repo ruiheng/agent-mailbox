@@ -4930,8 +4930,7 @@ func TestOnlyWaypostToolsRequireWaypostStatus(t *testing.T) {
 
 func TestServerInstructionsScopeStatusGateToWaypostTools(t *testing.T) {
 	for _, want := range []string{
-		"before any other waypost_* tool except waypost_debug",
-		"Agent Deck session tools do not require this bootstrap",
+		"Once after this MCP server starts, call waypost_status before the first waypost_* tool other than waypost_debug",
 		"This server automatically renews leases for personal deliveries claimed by waypost_recv until it stops or restarts",
 		"Waypost is for durable asynchronous work, not real-time communication.",
 		"<executable> doc\n",

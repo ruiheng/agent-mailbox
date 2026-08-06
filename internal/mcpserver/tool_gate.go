@@ -31,5 +31,5 @@ func (s *Service) requireWaypostStatusCalled(toolName string) error {
 	if called {
 		return nil
 	}
-	return fmt.Errorf("%s cannot run before waypost_status; call waypost_status first so the MCP server can auto-bind addresses and report any binding warnings", toolName)
+	return fmt.Errorf("%s cannot run until waypost_status succeeds; call it once to auto-bind addresses and report any binding warnings", toolName)
 }

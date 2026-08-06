@@ -210,9 +210,9 @@ outside this design.
 The MCP server instructions are themselves a concise agent prompt:
 
 ```text
-Call waypost_status before any other waypost_* tool except waypost_debug. It
-auto-binds detectable session addresses and reports warnings. Agent Deck
-session tools do not require this bootstrap.
+Once after this MCP server starts, call waypost_status before the first
+waypost_* tool other than waypost_debug. It auto-binds detectable session
+addresses and reports warnings.
 This server automatically renews leases for personal deliveries claimed by
 waypost_recv until it stops or restarts.
 Waypost is for durable asynchronous work, not real-time communication. MCP

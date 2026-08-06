@@ -247,7 +247,7 @@ The Go MCP entrypoint exposes these Waypost tool names:
 - `agent_deck_create_session`
 - `agent_deck_require_session`
 
-Call `waypost_status` first after starting each MCP server process. It
+Call `waypost_status` once after starting each MCP server process. It
 auto-binds detectable session addresses from `agent-deck session current`,
 tool environment variables such as `CODEX_THREAD_ID`, `CLAUDE_CODE_SESSION_ID`,
 `GEMINI_SESSION_ID`, and `OPENCODE_SESSION_ID`. When an agent-deck session is
@@ -255,7 +255,8 @@ already known, it can also use the agent-deck state database to fill in a Codex
 thread synced later for that same workdir and session.
 That yields addresses such as `agent-deck/<session-id>`, `codex/<session-id>`,
 `claude/<session-id>`, `gemini/<session-id>`, and `opencode/<session-id>`.
-All other tools fail until `waypost_status` succeeds, so callers get the
+Except for `waypost_debug`, all other Waypost tools fail until
+`waypost_status` succeeds, so callers get the
 current binding state and any recovery warnings before they read, send, claim,
 ack, or alter waypost state. If auto-bind cannot find a supported tool session
 address, call `waypost_status` again after agent-deck has synced state for the
