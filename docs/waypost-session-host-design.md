@@ -286,11 +286,14 @@ MCP result with status created_unverified:
       "addresses": ["thurbox/tb-123"]
     }
 
-The allowed non-verified states are path_mismatch, path_unavailable, and
-post_create_lookup_failed.  observed_path is null when unavailable.  Callers
-must not retry session_create blindly.  They first call session_resolve with
-the returned host and session_ref, then choose an operator-approved recovery
-path.  The generic layer performs no delete, replacement, or cleanup.
+The allowed non-verified states are path_mismatch, path_unavailable,
+post_create_lookup_failed, and post_create_identity_mismatch.  The post-create
+re-read must report the same child ID as the create result plus the requested
+name and parent; any mismatch is post_create_identity_mismatch rather than a
+successful create. observed_path is null when unavailable.  Callers must not
+retry session_create blindly.  They first call session_resolve with the
+returned host and session_ref, then choose an operator-approved recovery path.
+The generic layer performs no delete, replacement, or cleanup.
 
 If the create command reports success but its output is malformed or lacks a
 usable child ID, a child may still exist but Waypost cannot safely return an
@@ -326,6 +329,9 @@ safe.  No generic cleanup is attempted.
 A non-zero host create command is an MCP error because creation was not
 confirmed.  The distinction is based on whether the host reported successful
 creation, not on an assumption that all failures are rollback-safe.
+Generic-create command errors use only a fixed public operation label and exit
+code: they never include host argv, stdout, stderr, or a runner error because
+those can echo an operator-owned profile value.
 
 ### session_require
 
@@ -347,7 +353,9 @@ or:
 Exactly one of session_id, session_ref, and a non-empty sessions array is
 required.  workdir is always required.  session_id is a host-issued ID;
 session_ref and each sessions element use the same reference semantics as
-session_resolve.
+session_resolve. For session_id, the resolved host ID must exactly equal the
+supplied value; passing a name in that field is rejected before any start or
+restart. Batches remain reference-based.
 
 Require resolves the target and verifies canonical effective-path equality with
 workdir.  If the target is already active, it re-reads enough host state to
@@ -421,8 +429,11 @@ successful MCP result with status ready_unverified:
 The identity, address, and last known fields come from the verified pre-start
 record.  Allowed non-verified states are post_start_lookup_failed,
 post_start_output_unparseable, post_start_disappeared, post_start_not_ready,
-and post_start_path_mismatch.  observed_path is null when a re-read did not
-produce one.
+post_start_path_mismatch, and post_start_path_unavailable. Parser drift,
+including missing or unknown pinned fields, maps to
+post_start_output_unparseable through a typed output failure; path mismatch and
+unavailable-path results map to their corresponding post-start states.
+observed_path is null when a re-read did not produce one.
 
 Callers must not automatically retry require, delete, restart, replace, or
 roll back after ready_unverified.  They first call session_resolve using the
@@ -582,6 +593,18 @@ The fixture-approved Thurbox adapter uses:
 - session create for generic creation;
 - session restart only from the approved stopped status set.
 
+Pinned source evidence is commit a009e19ccfc71c54fbeaf120cb2267737fc90f4d:
+`src/cli/sessions.rs` implements List through `list_active_sessions()`, and
+`src/session/mod.rs` declares the `HOOK_STATES` vocabulary of working, blocked,
+done, and idle (or null). Therefore the v1.7.1 list grammar offers no
+restartable stopped record and the approved stopped set is intentionally empty.
+The restart fixture remains grammar evidence for a future reviewed stopped-state
+contract, not a currently reachable require branch.
+The same source's missing Get path is `Session not found: <uuid>`; the CLI
+binary writes `error: Session not found: <uuid>` to stderr and exits 1. Only
+that exact result is treated as not found; every other non-zero get or list is
+an operational error.
+
 It chooses exactly one fixture-proven effective-path field.  It does not fall
 back arbitrarily across repo_path, cwd, path, and worktree_path.  A found
 session without the declared field can be returned by resolve with path null,
@@ -643,6 +666,10 @@ wake failed.
 Agent Deck direct notification and its wake probe remain unchanged.  Thurbox
 uses a separate notifier and wake channel.  Direct delivery to one host address
 never aliases to the other host.
+
+For group subscribers, notification diagnostics aggregate their actual host
+schemes: one host reports that scheme (including `thurbox`), while more than
+one reports `mixed`. This does not affect durable group delivery semantics.
 
 In valid nested Thurbox context, the local wake scope includes all durable
 bound addresses for pending-work accounting but its targeted wake target is
@@ -721,21 +748,23 @@ work does not modify it or introduce generic Waypost CLI session commands.
    - Reject unknown hosts, raw host-specific creation fields, empty/conflicting
      batch inputs, missing parent/workdir/profile, and invalid neutral names.
    - Verify ordered single and batch resolve/require response shapes.
+   - Reject a name passed through session_id for either host before a start.
    - Verify batch require continues after per-item error or ready_unverified,
      is non-transactional, and reports every started_session action.
-   - Verify generic results expose neither group nor operator command data.
+   - Verify generic results and generic-create command errors expose neither
+     group nor operator command/profile data.
 
 3. Create and require recovery tests
    - Verify successful create returns created and a verified host address.
-   - Simulate known-ID post-create path mismatch, unavailable path, and lookup
-     failure; assert created_unverified includes ID/ref/address, observed state,
-     and recovery_required.
+   - Simulate known-ID post-create path mismatch, unavailable path, lookup
+     failure, and ID/name/parent mismatch; assert created_unverified includes
+     ID/ref/address, observed state, and recovery_required.
    - Simulate successful host create with malformed/no-ID output; assert
      create_recovery_required includes name/ref and requires resolve before
      retry.
    - Simulate a confirmed start/restart followed by failed re-read, malformed
-     re-read, disappearance, not-ready status, or path mismatch; assert
-     ready_unverified includes pre-action identity/address,
+     or drifted re-read, disappearance, not-ready status, path mismatch, or
+     unavailable path; assert ready_unverified includes pre-action identity/address,
      started_session true, and recovery_required.
    - Assert no generic delete, replacement, rollback, or automatic retry
      occurs in any recovery state; an unconfirmed create/start/restart is an
@@ -753,6 +782,8 @@ work does not modify it or introduce generic Waypost CLI session commands.
      running server.
    - Profile mapping passes only mapped Agent Deck command or Thurbox agent;
      missing selected-host mapping invokes no host create.
+   - A non-zero Thurbox list preflight never reaches create; only the pinned
+     missing-get result resolves as not found.
    - Before the fixture prerequisite, Thurbox is unavailable and runs no CLI.
    - Fixture tests pin get/list/create JSON, effective path, active/stopped
      statuses, restart output, duplicate-name rejection, and strict parsing.

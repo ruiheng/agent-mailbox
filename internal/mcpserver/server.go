@@ -506,6 +506,36 @@ func runCommand(ctx context.Context, runner Runner, args []string, opts runOptio
 	return RunResult{}, fmt.Errorf("command failed: %s :: %s", strings.Join(args, " "), detail)
 }
 
+// runRedactedCommand executes a command whose argv contains an
+// operator-owned value. Unlike runCommand, it intentionally never returns the
+// argv, stdout, stderr, or runner error because any of them can echo that
+// value. Callers must pass a fixed, public operation label.
+func runRedactedCommand(ctx context.Context, runner Runner, args []string, opts runOptions, operation string) (RunResult, error) {
+	runCtx := ctx
+	var cancel context.CancelFunc
+	if opts.timeout > 0 {
+		runCtx, cancel = context.WithTimeout(ctx, opts.timeout)
+		defer cancel()
+	}
+
+	result, err := runner.Run(runCtx, args, opts.input)
+	if err != nil {
+		if errors.Is(err, context.DeadlineExceeded) || errors.Is(runCtx.Err(), context.DeadlineExceeded) {
+			return RunResult{}, fmt.Errorf("%s failed: timed out after %dms", operation, opts.timeout.Milliseconds())
+		}
+		return RunResult{}, fmt.Errorf("%s failed", operation)
+	}
+
+	okCodes := opts.okCodes
+	if len(okCodes) == 0 {
+		okCodes = []int{0}
+	}
+	if containsInt(okCodes, result.ExitCode) {
+		return result, nil
+	}
+	return RunResult{}, fmt.Errorf("%s failed with exit code %d", operation, result.ExitCode)
+}
+
 func runProbe(ctx context.Context, runner Runner, args []string, opts runOptions, failOnError bool) (*RunResult, error) {
 	runCtx := ctx
 	var cancel context.CancelFunc

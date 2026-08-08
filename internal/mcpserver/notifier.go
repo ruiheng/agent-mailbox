@@ -87,13 +87,14 @@ func (m *notificationManager) notifyGroupSubscribers(ctx context.Context, input 
 	if wakeNotifyDisabled(input.DisableNotifyMessage) {
 		return notificationOutcome{
 			Status: "skipped_disabled",
-			Scheme: "agent-deck",
+			Scheme: notificationSchemeForAddresses(notifyAddresses),
 		}
 	}
 
 	outcome := notificationOutcome{Status: "skipped_sender"}
 	attemptedCount := 0
 	sentCount := 0
+	schemes := map[string]bool{}
 	var failures []error
 	for _, notifyAddress := range notifyAddresses {
 		if strings.TrimSpace(notifyAddress) == strings.TrimSpace(input.FromAddress) {
@@ -106,23 +107,58 @@ func (m *notificationManager) notifyGroupSubscribers(ctx context.Context, input 
 			failures = append(failures, err)
 			continue
 		}
+		if scheme != "" {
+			schemes[scheme] = true
+		}
 		if scope == nil {
 			outcome = notificationOutcome{Status: "unsupported", Scheme: scheme}
 			continue
 		}
 		candidate := m.notifyDirectWakeScope(ctx, *scope, input)
+		if candidate.Scheme != "" {
+			schemes[candidate.Scheme] = true
+		}
 		outcome = candidate
 		if notificationOutcomeDelivered(candidate) {
 			sentCount++
 		}
 	}
+	aggregateScheme := notificationSchemeFromSet(schemes)
 	if attemptedCount > 0 && sentCount == attemptedCount {
-		return notificationOutcome{Status: "sent", Scheme: "agent-deck"}
+		return notificationOutcome{Status: "sent", Scheme: aggregateScheme}
 	}
 	if sentCount > 0 {
-		return notificationOutcome{Status: "partial_failed", Scheme: "agent-deck", Err: errors.Join(failures...)}
+		return notificationOutcome{Status: "partial_failed", Scheme: aggregateScheme, Err: errors.Join(failures...)}
+	}
+	if aggregateScheme != "" {
+		outcome.Scheme = aggregateScheme
 	}
 	return outcome
+}
+
+func notificationSchemeForAddresses(addresses []string) string {
+	schemes := map[string]bool{}
+	for _, address := range addresses {
+		parsed, err := parseAddress(address)
+		if err != nil || parsed.Scheme == "" {
+			continue
+		}
+		schemes[parsed.Scheme] = true
+	}
+	return notificationSchemeFromSet(schemes)
+}
+
+func notificationSchemeFromSet(schemes map[string]bool) string {
+	if len(schemes) == 0 {
+		return ""
+	}
+	if len(schemes) > 1 {
+		return "mixed"
+	}
+	for scheme := range schemes {
+		return scheme
+	}
+	return ""
 }
 
 func (m *notificationManager) notifyDirectWakeScope(ctx context.Context, scope wakeScope, input waypostSendInput) notificationOutcome {

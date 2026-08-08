@@ -761,7 +761,7 @@ func (m *sessionManager) resolveSessionShow(ctx context.Context, identifier stri
 	}
 	data, err := parseSessionData(result.Stdout, "agent-deck session show")
 	if err != nil {
-		return nil, err
+		return nil, hostSessionOutputFailure(err)
 	}
 	if data.Success != nil && !*data.Success {
 		return nil, nil

@@ -25,10 +25,12 @@ var (
 	logicalLaunchProfilePattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*$`)
 	thurboxUUIDPattern          = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
 
-	// Thurbox v1.7.1 serializes hook_state as null or one of these four
-	// values. The CLI only lists active session records, so that pinned grammar
-	// has no stopped state we can safely restart. Keep the stopped set explicit
-	// (and empty) rather than guessing from tmux or an unrelated field.
+	// Source-backed Thurbox v1.7.1 evidence: src/cli/sessions.rs List calls
+	// Database::list_active_sessions, while src/session/mod.rs declares
+	// HOOK_STATES as working, blocked, done, and idle (or null in JSON). That
+	// pinned list grammar has no stopped state we can safely restart. Keep the
+	// stopped set explicit (and empty) rather than guessing from tmux or an
+	// unrelated field. The restart fixture remains parser-grammar evidence.
 	thurboxActiveSessionStatuses = map[string]bool{
 		"":        true,
 		"working": true,
@@ -52,6 +54,53 @@ type hostWorkdirVerification struct {
 	State        string
 	ObservedPath string
 	Err          error
+}
+
+type hostSessionOutputFailureKind string
+
+const (
+	hostSessionOutputGrammarFailure  hostSessionOutputFailureKind = "grammar"
+	hostSessionOutputIdentityFailure hostSessionOutputFailureKind = "identity"
+)
+
+// hostSessionOutputError distinguishes a host's parseable command execution
+// from output that no longer matches the approved session grammar. Recovery
+// after a confirmed start must not classify this through error text.
+type hostSessionOutputError struct {
+	cause error
+	kind  hostSessionOutputFailureKind
+}
+
+func (e *hostSessionOutputError) Error() string {
+	return e.cause.Error()
+}
+
+func (e *hostSessionOutputError) Unwrap() error {
+	return e.cause
+}
+
+func hostSessionOutputFailure(err error) error {
+	if err == nil {
+		return nil
+	}
+	return &hostSessionOutputError{cause: err, kind: hostSessionOutputGrammarFailure}
+}
+
+func hostSessionIdentityFailure(err error) error {
+	if err == nil {
+		return nil
+	}
+	return &hostSessionOutputError{cause: err, kind: hostSessionOutputIdentityFailure}
+}
+
+func isHostSessionOutputFailure(err error) bool {
+	var outputErr *hostSessionOutputError
+	return errors.As(err, &outputErr)
+}
+
+func isHostSessionIdentityFailure(err error) bool {
+	var outputErr *hostSessionOutputError
+	return errors.As(err, &outputErr) && outputErr.kind == hostSessionOutputIdentityFailure
 }
 
 func parseSessionHost(value string) (sessionHost, error) {
@@ -119,7 +168,7 @@ func (m *sessionManager) resolveHostSession(ctx context.Context, host sessionHos
 		}
 		hostData := hostSessionFromAgentDeck(data)
 		if hostData.ID == "" {
-			return nil, errors.New("agent-deck session show returned a session without an id")
+			return nil, hostSessionOutputFailure(errors.New("agent-deck session show returned a session without an id"))
 		}
 		return hostData, nil
 	case sessionHostThurbox:
@@ -152,10 +201,20 @@ func (m *sessionManager) resolveThurboxSession(ctx context.Context, identifier s
 		if err != nil {
 			return nil, err
 		}
-		if result == nil || result.ExitCode != 0 {
+		if thurboxSessionGetIsMissing(result, identifier) {
 			return nil, nil
 		}
-		return parseThurboxSessionRecord(result.Stdout, "thurbox v1.7.1 session get")
+		if result == nil || result.ExitCode != 0 {
+			return nil, thurboxProbeFailure("thurbox v1.7.1 session get", result)
+		}
+		data, err := parseThurboxSessionRecord(result.Stdout, "thurbox v1.7.1 session get")
+		if err != nil {
+			return nil, hostSessionOutputFailure(err)
+		}
+		if data.ID != identifier {
+			return nil, hostSessionIdentityFailure(fmt.Errorf("thurbox v1.7.1 session get returned session id %q, want %q", data.ID, identifier))
+		}
+		return data, nil
 	}
 
 	result, err := runProbe(ctx, m.runner, []string{"thurbox-cli", "session", "list", "--json"}, runOptions{timeout: timeout}, true)
@@ -163,11 +222,11 @@ func (m *sessionManager) resolveThurboxSession(ctx context.Context, identifier s
 		return nil, err
 	}
 	if result == nil || result.ExitCode != 0 {
-		return nil, nil
+		return nil, thurboxProbeFailure("thurbox v1.7.1 session list", result)
 	}
 	sessions, err := parseThurboxSessionList(result.Stdout)
 	if err != nil {
-		return nil, err
+		return nil, hostSessionOutputFailure(err)
 	}
 
 	var found *hostSessionData
@@ -182,6 +241,23 @@ func (m *sessionManager) resolveThurboxSession(ctx context.Context, identifier s
 		found = &candidate
 	}
 	return found, nil
+}
+
+// In pinned Thurbox v1.7.1, sessions::resolve formats a missing UUID as
+// "Session not found: <uuid>". src/bin/thurbox-cli.rs adds the "error: "
+// prefix and exits 1. No other non-zero get/list result means not found.
+func thurboxSessionGetIsMissing(result *RunResult, identifier string) bool {
+	return result != nil &&
+		result.ExitCode == 1 &&
+		strings.TrimSpace(result.Stdout) == "" &&
+		strings.TrimSpace(result.Stderr) == "error: Session not found: "+identifier
+}
+
+func thurboxProbeFailure(operation string, result *RunResult) error {
+	if result == nil {
+		return fmt.Errorf("%s returned no result", operation)
+	}
+	return fmt.Errorf("%s failed with exit code %d", operation, result.ExitCode)
 }
 
 func parseThurboxSessionList(text string) ([]hostSessionData, error) {
@@ -519,10 +595,10 @@ func (m *sessionManager) createHostSession(ctx context.Context, host sessionHost
 	var created *hostSessionData
 	switch host {
 	case sessionHostAgentDeck:
-		result, err := runCommand(ctx, m.runner, []string{
+		result, err := runRedactedCommand(ctx, m.runner, []string{
 			"agent-deck", "launch", "--json", "--title", name, "--cmd", launchValue,
 			"--parent", parentSessionID, canonicalWorkdir,
-		}, runOptions{})
+		}, runOptions{}, "generic agent-deck session create")
 		if err != nil {
 			return nil, err
 		}
@@ -532,10 +608,10 @@ func (m *sessionManager) createHostSession(ctx context.Context, host sessionHost
 		}
 		created = hostSessionFromAgentDeck(legacyData)
 	case sessionHostThurbox:
-		result, err := runCommand(ctx, m.runner, []string{
+		result, err := runRedactedCommand(ctx, m.runner, []string{
 			"thurbox-cli", "session", "create", "--json", "--name", name,
 			"--repo-path", canonicalWorkdir, "--agent", launchValue, "--parent", parentSessionID,
-		}, runOptions{})
+		}, runOptions{}, "generic thurbox session create")
 		if err != nil {
 			return nil, err
 		}
@@ -549,10 +625,23 @@ func (m *sessionManager) createHostSession(ctx context.Context, host sessionHost
 
 	refreshed, err := m.resolveHostSession(ctx, host, created.ID, ensureSessionShowTimeout)
 	if err != nil {
-		return createdUnverifiedResult(created, name, canonicalWorkdir, "post_create_lookup_failed", "", err.Error()), nil
+		state := "post_create_lookup_failed"
+		if isHostSessionIdentityFailure(err) {
+			state = "post_create_identity_mismatch"
+		}
+		return createdUnverifiedResult(created, name, canonicalWorkdir, state, "", err.Error()), nil
 	}
 	if refreshed == nil {
 		return createdUnverifiedResult(created, name, canonicalWorkdir, "post_create_lookup_failed", "", "target session not found after create"), nil
+	}
+	if err := verifyCreatedHostSessionIdentity(created, refreshed, name, parentSessionID); err != nil {
+		resultData := created
+		observedPath := ""
+		if refreshed.ID == created.ID {
+			resultData = refreshed
+			observedPath = refreshed.Path
+		}
+		return createdUnverifiedResult(resultData, name, canonicalWorkdir, "post_create_identity_mismatch", observedPath, err.Error()), nil
 	}
 	verification := verifyHostSessionWorkdir(refreshed, workdir, canonicalWorkdir)
 	if verification.State != "verified" {
@@ -568,15 +657,44 @@ func parseErrOrMissingID(err error, operation string) string {
 	return operation + " returned no usable session id"
 }
 
-func (m *sessionManager) requireHostSession(ctx context.Context, host sessionHost, identifier, workdir string) (map[string]any, error) {
+func verifyCreatedHostSessionIdentity(created, refreshed *hostSessionData, requestedName, requestedParentSessionID string) error {
+	if created == nil || refreshed == nil {
+		return errors.New("target session identity unavailable after create")
+	}
+	if created.ID != refreshed.ID {
+		return fmt.Errorf("created session id %q does not match refreshed session id %q", created.ID, refreshed.ID)
+	}
+	if created.Name != requestedName {
+		return fmt.Errorf("created session name %q does not match requested name %q", created.Name, requestedName)
+	}
+	if created.ParentSessionID != requestedParentSessionID {
+		return fmt.Errorf("created session parent %q does not match requested parent %q", created.ParentSessionID, requestedParentSessionID)
+	}
+	if refreshed.Name != requestedName {
+		return fmt.Errorf("refreshed session name %q does not match requested name %q", refreshed.Name, requestedName)
+	}
+	if refreshed.ParentSessionID != requestedParentSessionID {
+		return fmt.Errorf("refreshed session parent %q does not match requested parent %q", refreshed.ParentSessionID, requestedParentSessionID)
+	}
+	return nil
+}
+
+type hostSessionSelectorKind string
+
+const (
+	hostSessionSelectorID  hostSessionSelectorKind = "session_id"
+	hostSessionSelectorRef hostSessionSelectorKind = "session_ref"
+)
+
+func (m *sessionManager) requireHostSession(ctx context.Context, host sessionHost, identifier, workdir string, selectorKind hostSessionSelectorKind) (map[string]any, error) {
 	canonicalWorkdir, err := canonicalizeTargetWorkdir(workdir, "requiring")
 	if err != nil {
 		return nil, err
 	}
-	return m.requireHostSessionWithCanonicalWorkdir(ctx, host, identifier, workdir, canonicalWorkdir)
+	return m.requireHostSessionWithCanonicalWorkdir(ctx, host, identifier, workdir, canonicalWorkdir, selectorKind)
 }
 
-func (m *sessionManager) requireHostSessionWithCanonicalWorkdir(ctx context.Context, host sessionHost, identifier, requestedWorkdir, canonicalWorkdir string) (map[string]any, error) {
+func (m *sessionManager) requireHostSessionWithCanonicalWorkdir(ctx context.Context, host sessionHost, identifier, requestedWorkdir, canonicalWorkdir string, selectorKind hostSessionSelectorKind) (map[string]any, error) {
 	identifier = strings.TrimSpace(identifier)
 	if identifier == "" {
 		return nil, errors.New("session identifier is required when requiring a target session")
@@ -587,6 +705,9 @@ func (m *sessionManager) requireHostSessionWithCanonicalWorkdir(ctx context.Cont
 	}
 	if data == nil {
 		return nil, fmt.Errorf("target session not found: %s", identifier)
+	}
+	if selectorKind == hostSessionSelectorID && data.ID != identifier {
+		return nil, fmt.Errorf("session_id must exactly match the resolved host session ID: %s", identifier)
 	}
 	if err := validateHostSessionWorkdir(data, requestedWorkdir, canonicalWorkdir); err != nil {
 		return nil, err
@@ -622,7 +743,7 @@ func (m *sessionManager) reverifyStartedHostSession(ctx context.Context, host se
 	refreshed, err := m.resolveHostSession(ctx, host, previous.ID, ensureSessionShowTimeout)
 	if err != nil {
 		state := "post_start_lookup_failed"
-		if strings.Contains(err.Error(), "invalid JSON") || strings.Contains(err.Error(), "unclassified") {
+		if isHostSessionOutputFailure(err) {
 			state = "post_start_output_unparseable"
 		}
 		return readyUnverifiedResult(previous, sessionRef, canonicalWorkdir, state, "", err.Error()), nil
@@ -630,14 +751,28 @@ func (m *sessionManager) reverifyStartedHostSession(ctx context.Context, host se
 	if refreshed == nil {
 		return readyUnverifiedResult(previous, sessionRef, canonicalWorkdir, "post_start_disappeared", "", "target session not found after start"), nil
 	}
+	if refreshed.ID != previous.ID {
+		return readyUnverifiedResult(previous, sessionRef, canonicalWorkdir, "post_start_output_unparseable", "", fmt.Sprintf("refreshed session id %q does not match started session id %q", refreshed.ID, previous.ID)), nil
+	}
 	if !hostSessionIsReady(host, refreshed) {
 		return readyUnverifiedResult(previous, sessionRef, canonicalWorkdir, "post_start_not_ready", refreshed.Path, "target session is not ready after start"), nil
 	}
 	verification := verifyHostSessionWorkdir(refreshed, requestedWorkdir, canonicalWorkdir)
 	if verification.State != "verified" {
-		return readyUnverifiedResult(previous, sessionRef, canonicalWorkdir, verification.State, verification.ObservedPath, verification.Err.Error()), nil
+		return readyUnverifiedResult(previous, sessionRef, canonicalWorkdir, postStartVerificationState(verification.State), verification.ObservedPath, verification.Err.Error()), nil
 	}
 	return readyVerifiedResult(refreshed, sessionRef, canonicalWorkdir, true), nil
+}
+
+func postStartVerificationState(state string) string {
+	switch state {
+	case "path_mismatch":
+		return "post_start_path_mismatch"
+	case "path_unavailable":
+		return "post_start_path_unavailable"
+	default:
+		return "post_start_lookup_failed"
+	}
 }
 
 func hostSessionIsReady(host sessionHost, data *hostSessionData) bool {

@@ -194,7 +194,13 @@ func (s *Service) sessionRequire(ctx context.Context, req *mcp.CallToolRequest, 
 		return nil, nil, err
 	}
 	if !batch {
-		out, err := s.sessions.requireHostSession(ctx, host, firstNonEmpty(input.SessionID, input.SessionRef), input.Workdir)
+		identifier := input.SessionRef
+		selectorKind := hostSessionSelectorRef
+		if strings.TrimSpace(input.SessionID) != "" {
+			identifier = input.SessionID
+			selectorKind = hostSessionSelectorID
+		}
+		out, err := s.sessions.requireHostSession(ctx, host, identifier, input.Workdir, selectorKind)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -207,7 +213,7 @@ func (s *Service) sessionRequire(ctx context.Context, req *mcp.CallToolRequest, 
 	}
 	results := make([]map[string]any, 0, len(input.Sessions))
 	for _, session := range input.Sessions {
-		out, err := s.sessions.requireHostSessionWithCanonicalWorkdir(ctx, host, session, input.Workdir, workdir)
+		out, err := s.sessions.requireHostSessionWithCanonicalWorkdir(ctx, host, session, input.Workdir, workdir, hostSessionSelectorRef)
 		if err != nil {
 			out = genericRequireErrorResult(host, session, err)
 		}
@@ -240,8 +246,11 @@ func validateGenericRequireSessionArgs(req *mcp.CallToolRequest, input sessionRe
 	if hasSessions && len(input.Sessions) == 0 {
 		return false, errors.New("session_require sessions must contain at least one session")
 	}
-	if !hasSessions && strings.TrimSpace(firstNonEmpty(input.SessionID, input.SessionRef)) == "" {
-		return false, errors.New("session_require session_id or session_ref must not be empty")
+	if hasSessionID && strings.TrimSpace(input.SessionID) == "" {
+		return false, errors.New("session_require session_id must not be empty")
+	}
+	if hasSessionRef && strings.TrimSpace(input.SessionRef) == "" {
+		return false, errors.New("session_require session_ref must not be empty")
 	}
 	for _, session := range input.Sessions {
 		if strings.TrimSpace(session) == "" {
