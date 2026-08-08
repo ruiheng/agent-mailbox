@@ -15,6 +15,7 @@ var strictSessionAddressSchemes = map[string]struct{}{
 	"codex":      {},
 	"gemini":     {},
 	"opencode":   {},
+	"thurbox":    {},
 }
 
 type ParsedAddress struct {

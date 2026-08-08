@@ -18,7 +18,7 @@ type App struct {
 	stdin  io.Reader
 	stdout io.Writer
 	stderr io.Writer
-	runMCP func(context.Context, string) error
+	runMCP func(context.Context, mcpserver.Options) error
 	runWeb func(context.Context, webui.Options) error
 }
 
@@ -27,8 +27,8 @@ func New(stdin io.Reader, stdout, stderr io.Writer) *App {
 		stdin:  stdin,
 		stdout: stdout,
 		stderr: stderr,
-		runMCP: func(ctx context.Context, stateDir string) error {
-			service := mcpserver.NewService(mcpserver.Options{StateDir: stateDir})
+		runMCP: func(ctx context.Context, options mcpserver.Options) error {
+			service := mcpserver.NewService(options)
 			defer service.Close()
 			return service.Server().Run(ctx, &mcp.StdioTransport{})
 		},
@@ -79,14 +79,34 @@ func parseGlobalArgs(args []string) (string, []string, bool, error) {
 }
 
 func (a *App) runMCPCommand(ctx context.Context, stateDir string, args []string) error {
-	if len(args) > 0 {
-		if len(args) == 1 && isHelpArg(args[0]) {
+	fs := flag.NewFlagSet("waypost mcp", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+
+	var configPath string
+	fs.StringVar(&configPath, "session-host-config", "", "absolute path to immutable generic session-host configuration")
+	if err := fs.Parse(args); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
 			a.writeMCPHelp()
 			return waypost.ErrHelpRequested
 		}
-		return fmt.Errorf("mcp does not accept arguments")
+		return err
 	}
-	return a.runMCP(ctx, stateDir)
+	if fs.NArg() != 0 {
+		return fmt.Errorf("mcp does not accept positional arguments")
+	}
+
+	var sessionHostConfig *mcpserver.SessionHostConfig
+	if configPath != "" {
+		var err error
+		sessionHostConfig, err = mcpserver.LoadSessionHostConfig(configPath)
+		if err != nil {
+			return err
+		}
+	}
+	return a.runMCP(ctx, mcpserver.Options{
+		StateDir:          stateDir,
+		SessionHostConfig: sessionHostConfig,
+	})
 }
 
 func (a *App) runMigrateCommand(stateDir string, args []string) error {
@@ -206,9 +226,12 @@ func (a *App) writeRootHelp() {
 func (a *App) writeMCPHelp() {
 	writeHelp(a.stdout, []string{
 		"Usage:",
-		"  waypost mcp",
+		"  waypost mcp [--session-host-config ABSOLUTE_PATH]",
 		"",
 		"Run the built-in stdio MCP server using the main waypost binary.",
+		"",
+		"Options:",
+		"  --session-host-config ABSOLUTE_PATH    Immutable launch-profile mapping for generic session_create",
 	})
 }
 

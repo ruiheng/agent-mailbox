@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/ruiheng/waypost/internal/mcpserver"
 	"github.com/ruiheng/waypost/internal/waypost"
 	"github.com/ruiheng/waypost/internal/webui"
 )
@@ -73,6 +74,9 @@ func TestRunMCPHelp(t *testing.T) {
 	if !strings.Contains(stdout.String(), "waypost mcp") {
 		t.Fatalf("mcp help = %q, want usage text", stdout.String())
 	}
+	if !strings.Contains(stdout.String(), "--session-host-config") {
+		t.Fatalf("mcp help = %q, want session-host configuration flag", stdout.String())
+	}
 }
 
 func TestRunMigrateMovesLegacyState(t *testing.T) {
@@ -107,7 +111,7 @@ func TestRunMCPInvokesRunner(t *testing.T) {
 		stdin:  strings.NewReader(""),
 		stdout: &bytes.Buffer{},
 		stderr: &bytes.Buffer{},
-		runMCP: func(context.Context, string) error {
+		runMCP: func(context.Context, mcpserver.Options) error {
 			called = true
 			return nil
 		},
@@ -124,13 +128,13 @@ func TestRunMCPInvokesRunner(t *testing.T) {
 func TestRunMCPForwardsStateDir(t *testing.T) {
 	t.Parallel()
 
-	var gotStateDir string
+	var gotOptions mcpserver.Options
 	app := &App{
 		stdin:  strings.NewReader(""),
 		stdout: &bytes.Buffer{},
 		stderr: &bytes.Buffer{},
-		runMCP: func(_ context.Context, stateDir string) error {
-			gotStateDir = stateDir
+		runMCP: func(_ context.Context, options mcpserver.Options) error {
+			gotOptions = options
 			return nil
 		},
 	}
@@ -139,8 +143,61 @@ func TestRunMCPForwardsStateDir(t *testing.T) {
 	if err := app.Run(context.Background(), []string{"--state-dir", stateDir, "mcp"}); err != nil {
 		t.Fatalf("Run(--state-dir mcp) error = %v", err)
 	}
-	if gotStateDir != stateDir {
-		t.Fatalf("mcp state dir = %q, want %q", gotStateDir, stateDir)
+	if gotOptions.StateDir != stateDir {
+		t.Fatalf("mcp state dir = %q, want %q", gotOptions.StateDir, stateDir)
+	}
+}
+
+func TestRunMCPLoadsSessionHostConfigBeforeStartingServer(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "session-hosts.json")
+	if err := os.WriteFile(configPath, []byte(`{"profiles":{"architect":{"thurbox_agent":"codex"}}}`), 0o600); err != nil {
+		t.Fatalf("WriteFile(session config): %v", err)
+	}
+
+	var gotOptions mcpserver.Options
+	app := &App{
+		stdin:  strings.NewReader(""),
+		stdout: &bytes.Buffer{},
+		stderr: &bytes.Buffer{},
+		runMCP: func(_ context.Context, options mcpserver.Options) error {
+			gotOptions = options
+			return nil
+		},
+	}
+	if err := app.Run(context.Background(), []string{"mcp", "--session-host-config", configPath}); err != nil {
+		t.Fatalf("Run(mcp --session-host-config) error = %v", err)
+	}
+	if gotOptions.SessionHostConfig == nil {
+		t.Fatal("runMCP options have nil SessionHostConfig")
+	}
+	profile, ok := gotOptions.SessionHostConfig.Profiles["architect"]
+	if !ok || profile.ThurboxAgent != "codex" || profile.AgentDeckCommand != "" {
+		t.Fatalf("loaded session-host config = %#v", gotOptions.SessionHostConfig.Profiles)
+	}
+}
+
+func TestRunMCPRejectsInvalidSessionHostConfigBeforeStartingServer(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "invalid-session-hosts.json")
+	if err := os.WriteFile(configPath, []byte(`{"profiles":{"architect":{"unexpected":true}}}`), 0o600); err != nil {
+		t.Fatalf("WriteFile(invalid session config): %v", err)
+	}
+
+	started := false
+	app := &App{
+		stdin:  strings.NewReader(""),
+		stdout: &bytes.Buffer{},
+		stderr: &bytes.Buffer{},
+		runMCP: func(context.Context, mcpserver.Options) error {
+			started = true
+			return nil
+		},
+	}
+	err := app.Run(context.Background(), []string{"mcp", "--session-host-config", configPath})
+	if err == nil || !strings.Contains(err.Error(), "unknown field") {
+		t.Fatalf("Run(mcp invalid --session-host-config) error = %v", err)
+	}
+	if started {
+		t.Fatal("MCP server started with invalid session-host configuration")
 	}
 }
 

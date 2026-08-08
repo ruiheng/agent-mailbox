@@ -42,6 +42,7 @@ func TestParseAddressRejectsNestedKnownSessionAddress(t *testing.T) {
 		"codex/session/task",
 		"gemini/session/task",
 		"opencode/session/task",
+		"thurbox/session/task",
 	} {
 		if _, err := ParseAddress(address); err == nil {
 			t.Fatalf("ParseAddress(%q) error = nil, want known-session nested path rejection", address)
@@ -58,6 +59,7 @@ func TestParseAddressAcceptsKnownSessionSingleTarget(t *testing.T) {
 		"codex/550e8400-e29b-41d4-a716-446655440000",
 		"gemini/550e8400-e29b-41d4-a716-446655440000",
 		"opencode/550e8400-e29b-41d4-a716-446655440000",
+		"thurbox/550e8400-e29b-41d4-a716-446655440000",
 	} {
 		parsed, err := ParseAddress(address)
 		if err != nil {

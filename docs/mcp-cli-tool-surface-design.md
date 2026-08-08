@@ -16,7 +16,7 @@ durable-state Waypost capability surface available through CLI.
 
 ## Hard-Cut Decision
 
-Waypost MCP exposes exactly twelve tools after this change. There is no
+Waypost MCP exposes exactly fifteen tools after this change. There is no
 `full` profile, `hybrid` profile, profile flag, legacy tool set, capability
 manifest, or runtime capability registry.
 
@@ -43,6 +43,9 @@ The retained tools are:
 - `agent_deck_resolve_session`
 - `agent_deck_create_session`
 - `agent_deck_require_session`
+- `session_resolve`
+- `session_create`
+- `session_require`
 
 ### Why they remain
 
@@ -55,7 +58,9 @@ the MCP active-lease tracker and renewal loop.
 
 The three Agent Deck session tools remain because they are frequent structured
 operations. Their implementation is unchanged and remains outside the rest of
-this design.
+this design. The three host-neutral session tools are additive compatibility
+layers for the fixed Agent Deck and Thurbox host set; they do not expose a
+generic lifecycle or command surface.
 
 Lease lifecycle operations stay separate. There is no synthetic `settle`
 operation.
@@ -173,11 +178,12 @@ func registerWaypostTools(server *mcp.Server) {
     registerStatusBindDebug(server)
     registerMessagePath(server)
     registerLeaseLifecycle(server)
+    registerGenericSessionTools(server)
     registerAgentDeckSessionTools(server)
 }
 ```
 
-Tests assert the exact twelve tool names. A removed tool appearing in the
+Tests assert the exact fifteen tool names. A removed tool appearing in the
 MCP list is a test failure.
 
 `waypost_status` continues to report the live MCP information needed to use
@@ -579,7 +585,7 @@ Topic responsibilities:
 
 Automated checks cover:
 
-- MCP exposes exactly the twelve retained tool names
+- MCP exposes exactly the fifteen retained tool names
 - every deleted MCP tool is absent
 - every deleted tool's CLI route satisfies the operation matrix
 - status, bind, and debug bootstrap/repair behavior
@@ -623,7 +629,7 @@ Automated checks cover:
   testing their commands keeps them version-matched.
 - Remaining-state counting adds receive-path work. The index, query-plan test,
   rollback invariant, and benchmark bound the risk.
-- Twelve tools are not the theoretical minimum, but each retained tool is
+- Fifteen tools are not the theoretical minimum, but each retained tool is
   justified by frequency or live MCP state.
 
 ## Rejected Alternatives
@@ -672,7 +678,7 @@ and human-oriented detail.
 5. add concise embedded `waypost doc` topics and prompt tests
 6. add one durable-state reconciliation path shared by renewal, the
    `active_leases` receive gate, and claim history
-7. hard-cut MCP registration to the twelve retained typed tools
+7. hard-cut MCP registration to the fifteen retained typed tools
 8. delete `recv.has_more` and add exact personal/group receive results
 9. add remaining-state counts and post-claim rollback/recovery
 10. run the full CLI, MCP, concurrency, prompt, query-plan, and benchmark suite

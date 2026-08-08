@@ -303,8 +303,8 @@ func (s *Service) notifyWaypostSend(ctx context.Context, input waypostSendInput,
 		if err != nil {
 			return notificationOutcome{Status: "failed", Err: err}
 		}
-		hasAgentDeckWakeTarget := scope != nil && len(scope.targetsForChannel(WakeChannelAgentDeck)) > 0
-		if hasAgentDeckWakeTarget && strings.TrimSpace(sendResult.DeliveryID) != "" {
+		hasSessionHostWakeTarget := scope != nil && len(scope.WakeTargets) > 0
+		if hasSessionHostWakeTarget && strings.TrimSpace(sendResult.DeliveryID) != "" {
 			if err := s.waitBeforeNotify(notifyCtx); err != nil {
 				return notificationOutcome{Status: "failed", Scheme: "waypost", Err: err}
 			}

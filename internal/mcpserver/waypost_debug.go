@@ -51,9 +51,11 @@ func debugSessionState(snapshot stateSnapshot) map[string]any {
 		"auto_bound_tool_fallback":         snapshot.AutoBoundToolFallback,
 		"auto_bind_warnings":               snapshot.AutoBindWarnings,
 		"detected_agent_deck_session_id":   snapshot.DetectedAgentDeckSession,
+		"detected_thurbox_session_id":      snapshot.DetectedThurboxSession,
 		"detected_tool_session_addresses":  detectedToolSessionAddresses(snapshot),
 		"bound_tool_session_addresses":     boundToolSessionAddresses(snapshot.BoundAddresses),
 		"bound_agent_deck_session_address": boundAddressesByScheme(snapshot.BoundAddresses, "agent-deck"),
+		"bound_thurbox_session_address":    boundAddressesByScheme(snapshot.BoundAddresses, "thurbox"),
 	}
 	for key, value := range detectedToolSessionOutputFields(snapshot.DetectedToolSessions, func(value string) any { return value }) {
 		out[key] = value
@@ -99,7 +101,7 @@ func toolSessionEnvDiagnostics(lookup func(string) (string, bool)) map[string]an
 
 func debugEnvNames() []string {
 	names := append([]string(nil), toolSessionEnvNames()...)
-	return append(names, "AGENTDECK_INSTANCE_ID", "TMUX")
+	return append(names, "AGENTDECK_INSTANCE_ID", "THURBOX_SESSION", "TMUX")
 }
 
 func isToolSessionEnvName(name string) bool {

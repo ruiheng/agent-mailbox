@@ -13,6 +13,7 @@ type WakeChannelName string
 
 const (
 	WakeChannelAgentDeck       WakeChannelName = "agent_deck"
+	WakeChannelThurbox         WakeChannelName = "thurbox"
 	WakeHintMCPResourceUpdated WakeChannelName = "mcp_resource_updated"
 )
 
@@ -121,6 +122,9 @@ func (s *Service) processWakeScheduler(ctx context.Context) error {
 	if s.tryWakeChannel(ctx, snapshot, runtime, now, WakeChannelAgentDeck) {
 		return nil
 	}
+	if s.tryWakeChannel(ctx, snapshot, runtime, now, WakeChannelThurbox) {
+		return nil
+	}
 
 	s.wakeSchedulerState.pruneExcept([]string{scope.ScopeID})
 	return nil
@@ -146,11 +150,15 @@ func (s *Service) tryWakeChannel(ctx context.Context, snapshot wakeSnapshot, run
 			return true
 		}
 		return false
-	case WakeChannelAgentDeck:
+	case WakeChannelAgentDeck, WakeChannelThurbox:
 		attemptedWakeableTarget := false
 		for _, target := range snapshotTargetsForChannel(snapshot, channel) {
+			manager := notificationManagerForWakeChannel(target.Channel)
+			if manager == "" {
+				continue
+			}
 			route := notificationRoute{
-				Manager: "agent-deck",
+				Manager: manager,
 				Target:  target.Target,
 			}
 			probe := s.notifications.probeRoute(ctx, route)
@@ -193,8 +201,19 @@ func (s *Service) currentLocalWakeScope(ctx context.Context) (*wakeScope, error)
 	if err != nil {
 		return nil, err
 	}
+	scopeID := localWakeScopeID(snapshot)
+	// THURBOX_SESSION identifies the immediate nested host. Keep every bound
+	// Waypost address in the accounting scope, but never turn an outer Agent
+	// Deck identity into an additional wake target for the nested worker.
+	if thurboxSessionID, _ := detectCurrentThurboxSessionID(); thurboxSessionID != "" {
+		targets = []WakeTarget{{
+			Channel: WakeChannelThurbox,
+			Target:  thurboxSessionID,
+		}}
+		scopeID = "local/thurbox/" + thurboxSessionID
+	}
 	return &wakeScope{
-		ScopeID:          localWakeScopeID(snapshot),
+		ScopeID:          scopeID,
 		WaypostAddresses: append([]string(nil), snapshot.BoundAddresses...),
 		WakeTargets:      targets,
 	}, nil
@@ -217,6 +236,8 @@ func directWakeScopeForAddress(address string) (*wakeScope, string, error) {
 
 func localWakeScopeID(snapshot stateSnapshot) string {
 	switch {
+	case strings.TrimSpace(snapshot.DetectedThurboxSession) != "":
+		return "local/thurbox/" + strings.TrimSpace(snapshot.DetectedThurboxSession)
 	case strings.TrimSpace(snapshot.DetectedAgentDeckSession) != "":
 		return "local/agent-deck/" + strings.TrimSpace(snapshot.DetectedAgentDeckSession)
 	case strings.TrimSpace(snapshot.DetectedToolSessions["codex"]) != "":
@@ -257,6 +278,8 @@ func wakeTargetForAddress(address string) (WakeTarget, bool, string, error) {
 	switch parsed.Scheme {
 	case "agent-deck":
 		return WakeTarget{Channel: WakeChannelAgentDeck, Target: parsed.ID}, true, parsed.Scheme, nil
+	case "thurbox":
+		return WakeTarget{Channel: WakeChannelThurbox, Target: parsed.ID}, true, parsed.Scheme, nil
 	default:
 		return WakeTarget{}, false, parsed.Scheme, nil
 	}
@@ -328,6 +351,22 @@ var wakeChannelConfigs = map[WakeChannelName]wakeChannelConfig{
 		InitialDelay: defaultAgentDeckInitialDelay,
 		Cooldown:     defaultAgentDeckCooldown,
 	},
+	WakeChannelThurbox: {
+		Category:     "targeted_wake",
+		InitialDelay: defaultAgentDeckInitialDelay,
+		Cooldown:     defaultAgentDeckCooldown,
+	},
+}
+
+func notificationManagerForWakeChannel(channel WakeChannelName) string {
+	switch channel {
+	case WakeChannelAgentDeck:
+		return "agent-deck"
+	case WakeChannelThurbox:
+		return "thurbox"
+	default:
+		return ""
+	}
 }
 
 func allowWakeAttempt(snapshot wakeSnapshot, runtime wakeRuntime, now time.Time, channel WakeChannelName, config wakeChannelConfig) (bool, string) {

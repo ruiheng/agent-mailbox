@@ -1,0 +1,38 @@
+[
+  {
+    "id": "11111111-1111-4111-8111-111111111111",
+    "name": "planner",
+    "agent": "codex",
+    "backend_type": "local-tmux",
+    "agent_session_id": "019fe1b0-9d5a-7b01-9c47-cc623ef44661",
+    "cwd": "/workspace/waypost",
+    "parent_session_id": null,
+    "display_order": null,
+    "worktrees": [
+      {
+        "repo_path": "/workspace/waypost",
+        "worktree_path": "/workspace/waypost",
+        "branch": "main"
+      }
+    ],
+    "hook_state": null
+  },
+  {
+    "id": "22222222-2222-4222-8222-222222222222",
+    "name": "architect-author",
+    "agent": "codex",
+    "backend_type": "local-tmux",
+    "agent_session_id": null,
+    "cwd": "/workspace/waypost",
+    "parent_session_id": "11111111-1111-4111-8111-111111111111",
+    "display_order": 2,
+    "worktrees": [
+      {
+        "repo_path": "/workspace/waypost",
+        "worktree_path": "/workspace/waypost",
+        "branch": "main"
+      }
+    ],
+    "hook_state": "idle"
+  }
+]

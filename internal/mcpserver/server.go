@@ -190,6 +190,10 @@ func (f *runtimeWaypostServiceFactory) Close() error {
 type Options struct {
 	WaypostServiceFactory waypostServiceFactory
 	CommandRunner         Runner
+	// SessionHostConfig is parsed by the MCP command before the service starts.
+	// A nil value deliberately leaves generic resolve/require available while
+	// making generic create fail before it runs any host command.
+	SessionHostConfig     *SessionHostConfig
 	StateDir              string
 	Executable            string
 	Now                   func() time.Time
@@ -290,6 +294,9 @@ func newService(opts Options) *Service {
 	}
 	state := &serverState{}
 	sessions := newSessionManager(opts.CommandRunner, state)
+	// Copy the startup configuration once so callers cannot alter a running
+	// server's profile mapping by mutating the Options value afterward.
+	sessions.sessionHostConfig = cloneSessionHostConfig(opts.SessionHostConfig)
 	ctx, cancel := context.WithCancel(context.Background())
 	service := &Service{
 		ctx:                   ctx,
@@ -564,6 +571,7 @@ func boundStateMap(bound boundState) map[string]any {
 		"default_sender":                  nilIfEmpty(bound.DefaultSender),
 		"default_workdir":                 nilIfEmpty(bound.DefaultWorkdir),
 		"detected_agent_deck_session_id":  nilIfEmpty(bound.DetectedAgentDeckSession),
+		"detected_thurbox_session_id":     nilIfEmpty(bound.DetectedThurboxSession),
 		"detected_tool_session_addresses": bound.DetectedToolSessionAddresses,
 		"warnings":                        bound.Warnings,
 	}

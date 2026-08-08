@@ -47,6 +47,10 @@ type agentDeckNotifier struct {
 	sessions *sessionManager
 }
 
+type thurboxNotifier struct {
+	runner Runner
+}
+
 func newNotificationManager(runner Runner, sessions *sessionManager) *notificationManager {
 	manager := &notificationManager{
 		notifiers: map[string]managerNotifier{},
@@ -56,6 +60,7 @@ func newNotificationManager(runner Runner, sessions *sessionManager) *notificati
 		runner:   runner,
 		sessions: sessions,
 	}
+	manager.notifiers["thurbox"] = thurboxNotifier{runner: runner}
 	return manager
 }
 
@@ -122,19 +127,19 @@ func (m *notificationManager) notifyGroupSubscribers(ctx context.Context, input 
 
 func (m *notificationManager) notifyDirectWakeScope(ctx context.Context, scope wakeScope, input waypostSendInput) notificationOutcome {
 	outcome := notificationOutcome{Status: "unsupported"}
-	targets := scope.targetsForChannel(WakeChannelAgentDeck)
-	if len(targets) == 0 {
-		return outcome
-	}
-	if wakeNotifyDisabled(input.DisableNotifyMessage) {
-		return notificationOutcome{
-			Status: "skipped_disabled",
-			Scheme: "agent-deck",
+	for _, target := range scope.WakeTargets {
+		manager := notificationManagerForWakeChannel(target.Channel)
+		if manager == "" {
+			continue
 		}
-	}
-	for _, target := range targets {
+		if wakeNotifyDisabled(input.DisableNotifyMessage) {
+			return notificationOutcome{
+				Status: "skipped_disabled",
+				Scheme: manager,
+			}
+		}
 		route := notificationRoute{
-			Manager: "agent-deck",
+			Manager: manager,
 			Target:  target.Target,
 		}
 		probe := m.probeRoute(ctx, route)
@@ -256,6 +261,62 @@ func (n agentDeckNotifier) Notify(ctx context.Context, event notificationEvent) 
 		}
 	}
 
+	return notificationOutcome{
+		Status: "sent",
+		Scheme: n.Name(),
+	}
+}
+
+func (n thurboxNotifier) Name() string {
+	return "thurbox"
+}
+
+func (n thurboxNotifier) Probe(_ context.Context, route notificationRoute) notificationProbe {
+	if strings.TrimSpace(route.Target) == "" {
+		return notificationProbe{
+			Status: "not_found",
+			Scheme: n.Name(),
+		}
+	}
+	// Thurbox's native mailbox is intentionally not part of Waypost workflow.
+	// A session-send attempt is the best available targeted wake check and is
+	// performed only after the durable Waypost send has completed.
+	return notificationProbe{
+		Status:   "wakeable",
+		Scheme:   n.Name(),
+		Wakeable: true,
+	}
+}
+
+func (n thurboxNotifier) Notify(ctx context.Context, event notificationEvent) notificationOutcome {
+	if event.Kind != notificationDelivery && event.Kind != notificationFallbackWake {
+		return notificationOutcome{
+			Status: "unsupported",
+			Scheme: n.Name(),
+		}
+	}
+	if wakeNotifyDisabled(event.DisableNotifyMessage) {
+		return notificationOutcome{
+			Status: "skipped_disabled",
+			Scheme: n.Name(),
+		}
+	}
+	notifyMessage := resolveWakeNotifyMessage(event.DisableNotifyMessage, defaultNotifyMessage)
+	if notifyMessage == "" {
+		return notificationOutcome{
+			Status: "skipped_disabled",
+			Scheme: n.Name(),
+		}
+	}
+	if _, err := runCommand(ctx, n.runner, []string{
+		"thurbox-cli", "session", "send", event.Route.Target, notifyMessage,
+	}, runOptions{timeout: syncCmdTimeout}); err != nil {
+		return notificationOutcome{
+			Status: "failed",
+			Scheme: n.Name(),
+			Err:    err,
+		}
+	}
 	return notificationOutcome{
 		Status: "sent",
 		Scheme: n.Name(),
