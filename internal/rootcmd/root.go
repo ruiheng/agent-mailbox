@@ -82,8 +82,10 @@ func (a *App) runMCPCommand(ctx context.Context, stateDir string, args []string)
 	fs := flag.NewFlagSet("waypost mcp", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 
-	var configPath string
-	fs.StringVar(&configPath, "session-host-config", "", "absolute path to immutable generic session-host configuration")
+	// Keep the historical launcher flag as inert syntax compatibility. The
+	// value is deliberately discarded and never opened, statted, parsed, or
+	// passed into the MCP service.
+	fs.Func("session-host-config", "deprecated; accepted and ignored", func(string) error { return nil })
 	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			a.writeMCPHelp()
@@ -95,17 +97,8 @@ func (a *App) runMCPCommand(ctx context.Context, stateDir string, args []string)
 		return fmt.Errorf("mcp does not accept positional arguments")
 	}
 
-	var sessionHostConfig *mcpserver.SessionHostConfig
-	if configPath != "" {
-		var err error
-		sessionHostConfig, err = mcpserver.LoadSessionHostConfig(configPath)
-		if err != nil {
-			return err
-		}
-	}
 	return a.runMCP(ctx, mcpserver.Options{
-		StateDir:          stateDir,
-		SessionHostConfig: sessionHostConfig,
+		StateDir: stateDir,
 	})
 }
 
@@ -231,7 +224,7 @@ func (a *App) writeMCPHelp() {
 		"Run the built-in stdio MCP server using the main waypost binary.",
 		"",
 		"Options:",
-		"  --session-host-config ABSOLUTE_PATH    Immutable launch-profile mapping for generic session_create",
+		"  --session-host-config ABSOLUTE_PATH    deprecated; accepted and ignored",
 	})
 }
 

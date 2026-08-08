@@ -60,7 +60,10 @@ The three Agent Deck session tools remain because they are frequent structured
 operations. Their implementation is unchanged and remains outside the rest of
 this design. The three host-neutral session tools are additive compatibility
 layers for the fixed Agent Deck and Thurbox host set; they do not expose a
-generic lifecycle or command surface.
+generic lifecycle or command surface. `session_create` accepts the optional
+caller-supplied opaque launch values `full_command_line` and
+`thurbox_agent_key`; after host selection it consumes only the applicable
+value and does not resolve roles or profiles.
 
 Lease lifecycle operations stay separate. There is no synthetic `settle`
 operation.

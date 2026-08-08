@@ -35,7 +35,7 @@ type serverState struct {
 	boundAddresses           []string
 	defaultSender            string
 	defaultWorkdir           string
-	manualBinding             bool
+	manualBinding            bool
 	autoBindAttempted        bool
 	autoBindEmptyResult      bool
 	autoBoundToolFallback    bool
@@ -50,7 +50,7 @@ type stateSnapshot struct {
 	BoundAddresses           []string
 	DefaultSender            string
 	DefaultWorkdir           string
-	ManualBinding             bool
+	ManualBinding            bool
 	AutoBindAttempted        bool
 	AutoBindEmptyResult      bool
 	AutoBoundToolFallback    bool
@@ -105,10 +105,9 @@ type psRow struct {
 }
 
 type sessionManager struct {
-	runner            Runner
-	state             *serverState
-	parentPID         func() int
-	sessionHostConfig *SessionHostConfig
+	runner    Runner
+	state     *serverState
+	parentPID func() int
 }
 
 type sessionShowProbeStatus string
@@ -220,7 +219,7 @@ func (m *sessionManager) snapshotState() stateSnapshot {
 		BoundAddresses:           append([]string(nil), m.state.boundAddresses...),
 		DefaultSender:            m.state.defaultSender,
 		DefaultWorkdir:           m.state.defaultWorkdir,
-		ManualBinding:             m.state.manualBinding,
+		ManualBinding:            m.state.manualBinding,
 		AutoBindAttempted:        m.state.autoBindAttempted,
 		AutoBindEmptyResult:      m.state.autoBindEmptyResult,
 		AutoBoundToolFallback:    m.state.autoBoundToolFallback,

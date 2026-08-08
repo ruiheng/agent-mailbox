@@ -246,6 +246,16 @@ The Go MCP entrypoint exposes these Waypost tool names:
 - `agent_deck_resolve_session`
 - `agent_deck_create_session`
 - `agent_deck_require_session`
+- `session_resolve`
+- `session_create`
+- `session_require`
+
+The host-neutral `session_create` tool takes the caller-supplied optional
+strings `full_command_line` (Agent Deck) and `thurbox_agent_key` (Thurbox).
+After host selection it consumes only the applicable value; it does not load a
+Waypost profile mapping. Existing launchers may still pass
+`waypost mcp --session-host-config PATH`; that deprecated option is accepted
+and ignored.
 
 Call `waypost_status` once after starting each MCP server process. It
 auto-binds detectable session addresses from `agent-deck session current`,

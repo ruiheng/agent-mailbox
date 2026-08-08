@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"regexp"
 	"sort"
@@ -19,11 +20,13 @@ type sessionHost string
 const (
 	sessionHostAgentDeck sessionHost = "agent-deck"
 	sessionHostThurbox   sessionHost = "thurbox"
+
+	genericSessionCreateOutputUnparseableDetail = "generic session create returned unusable output"
 )
 
 var (
-	logicalLaunchProfilePattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*$`)
-	thurboxUUIDPattern          = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
+	genericSessionNamePattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*$`)
+	thurboxUUIDPattern        = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
 
 	// Source-backed Thurbox v1.7.1 evidence: src/cli/sessions.rs List calls
 	// Database::list_active_sessions, while src/session/mod.rs declares
@@ -281,6 +284,18 @@ func parseThurboxSessionList(text string) ([]hostSessionData, error) {
 	return sessions, nil
 }
 
+func ensureJSONEOF(decoder *json.Decoder) error {
+	var extra any
+	err := decoder.Decode(&extra)
+	if err == io.EOF {
+		return nil
+	}
+	if err == nil {
+		return fmt.Errorf("contains multiple JSON values")
+	}
+	return err
+}
+
 // parseThurboxSessionRecord accepts precisely the get/list object emitted by
 // Thurbox v1.7.1. In particular cwd is the one effective-workdir field; this
 // adapter never falls back to repo_path, worktree_path, or another lookalike.
@@ -517,41 +532,42 @@ func thurboxWorktrees(fields map[string]json.RawMessage, context string) error {
 	return nil
 }
 
-func validateLogicalLaunchProfile(profile string) (string, error) {
-	profile = strings.TrimSpace(profile)
-	if profile == "" {
-		return "", errors.New("launch_profile is required when creating a target session")
-	}
-	if !logicalLaunchProfilePattern.MatchString(profile) {
-		return "", errors.New("launch_profile must be a configured logical profile name, not a shell command")
-	}
-	return profile, nil
-}
-
 func validateGenericSessionName(name string) (string, error) {
 	name = strings.TrimSpace(name)
 	if name == "" {
 		return "", errors.New("session_name is required when creating a target session")
 	}
-	if !logicalLaunchProfilePattern.MatchString(name) {
+	if !genericSessionNamePattern.MatchString(name) {
 		return "", errors.New("session_name must use letters, digits, dot, underscore, or hyphen")
 	}
 	return name, nil
 }
 
-func (m *sessionManager) createHostSession(ctx context.Context, host sessionHost, name, workdir, parentSessionID, launchProfile string) (map[string]any, error) {
+func selectedHostLaunchValue(host sessionHost, fullCommandLine, thurboxAgentKey string) (string, error) {
+	switch host {
+	case sessionHostAgentDeck:
+		fullCommandLine = strings.TrimSpace(fullCommandLine)
+		if fullCommandLine == "" {
+			return "", errors.New("full_command_line is required when creating an agent-deck session")
+		}
+		return fullCommandLine, nil
+	case sessionHostThurbox:
+		thurboxAgentKey = strings.TrimSpace(thurboxAgentKey)
+		if thurboxAgentKey == "" {
+			return "", errors.New("thurbox_agent_key is required when creating a thurbox session")
+		}
+		return thurboxAgentKey, nil
+	default:
+		return "", fmt.Errorf("unsupported session host %q", host)
+	}
+}
+
+func (m *sessionManager) createHostSession(ctx context.Context, host sessionHost, name, workdir, parentSessionID, fullCommandLine, thurboxAgentKey string) (map[string]any, error) {
 	name, err := validateGenericSessionName(name)
 	if err != nil {
 		return nil, err
 	}
-	launchProfile, err = validateLogicalLaunchProfile(launchProfile)
-	if err != nil {
-		return nil, err
-	}
-	// Profile lookup deliberately precedes every host command. An omitted,
-	// unknown, or incomplete operator configuration cannot probe or create a
-	// host session.
-	launchValue, err := m.sessionHostConfig.profileForHost(host, launchProfile)
+	launchValue, err := selectedHostLaunchValue(host, fullCommandLine, thurboxAgentKey)
 	if err != nil {
 		return nil, err
 	}
@@ -604,7 +620,7 @@ func (m *sessionManager) createHostSession(ctx context.Context, host sessionHost
 		}
 		legacyData, parseErr := parseSessionData(result.Stdout, "agent-deck launch")
 		if parseErr != nil || legacyData == nil || strings.TrimSpace(legacyData.ID) == "" {
-			return createRecoveryResult(host, name, parentSessionID, canonicalWorkdir, parseErrOrMissingID(parseErr, "agent-deck launch")), nil
+			return createRecoveryResult(host, name, parentSessionID, canonicalWorkdir), nil
 		}
 		created = hostSessionFromAgentDeck(legacyData)
 	case sessionHostThurbox:
@@ -617,7 +633,7 @@ func (m *sessionManager) createHostSession(ctx context.Context, host sessionHost
 		}
 		created, err = parseThurboxCreatedSession(result.Stdout)
 		if err != nil || created == nil || strings.TrimSpace(created.ID) == "" {
-			return createRecoveryResult(host, name, parentSessionID, canonicalWorkdir, parseErrOrMissingID(err, "thurbox session create")), nil
+			return createRecoveryResult(host, name, parentSessionID, canonicalWorkdir), nil
 		}
 	default:
 		return nil, fmt.Errorf("unsupported session host %q", host)
@@ -648,13 +664,6 @@ func (m *sessionManager) createHostSession(ctx context.Context, host sessionHost
 		return createdUnverifiedResult(refreshed, name, canonicalWorkdir, verification.State, verification.ObservedPath, verification.Err.Error()), nil
 	}
 	return createdVerifiedResult(refreshed, name, canonicalWorkdir), nil
-}
-
-func parseErrOrMissingID(err error, operation string) string {
-	if err != nil {
-		return err.Error()
-	}
-	return operation + " returned no usable session id"
 }
 
 func verifyCreatedHostSessionIdentity(created, refreshed *hostSessionData, requestedName, requestedParentSessionID string) error {
@@ -844,14 +853,14 @@ func createdUnverifiedResult(data *hostSessionData, sessionRef, canonicalWorkdir
 	return out
 }
 
-func createRecoveryResult(host sessionHost, sessionRef, parentSessionID, canonicalWorkdir, detail string) map[string]any {
+func createRecoveryResult(host sessionHost, sessionRef, parentSessionID, canonicalWorkdir string) map[string]any {
 	return map[string]any{
 		"host":              string(host),
 		"status":            "create_recovery_required",
 		"created_target":    nil,
 		"started_session":   nil,
 		"recovery_required": true,
-		"verification":      verificationMap("create_output_unparseable", canonicalWorkdir, "", detail),
+		"verification":      verificationMap("create_output_unparseable", canonicalWorkdir, "", genericSessionCreateOutputUnparseableDetail),
 		"session_id":        nil,
 		"session_ref":       sessionRef,
 		"session_name":      sessionRef,

@@ -27,14 +27,22 @@ func TestGenericSessionToolSchemasAreHostNeutral(t *testing.T) {
 	if err != nil {
 		t.Fatalf("jsonschema.For(sessionCreateInput): %v", err)
 	}
-	for _, field := range []string{"session_name", "workdir", "parent_session_id", "launch_profile"} {
+	for _, field := range []string{"session_name", "workdir", "parent_session_id"} {
 		if !containsString(createSchema.Required, field) {
 			t.Fatalf("create required fields = %v, want %q", createSchema.Required, field)
 		}
 	}
-	for _, field := range []string{"ensure_cmd", "group_path", "startup_instruction", "thurbox_agent"} {
+	for _, field := range []string{"launch_profile", "ensure_cmd", "group_path", "startup_instruction", "thurbox_agent"} {
 		if _, ok := createSchema.Properties[field]; ok {
 			t.Fatalf("generic create schema unexpectedly exposes host-specific %q", field)
+		}
+	}
+	for _, field := range []string{"full_command_line", "thurbox_agent_key"} {
+		if _, ok := createSchema.Properties[field]; !ok {
+			t.Fatalf("generic create schema does not expose optional launch field %q", field)
+		}
+		if containsString(createSchema.Required, field) {
+			t.Fatalf("generic create schema unexpectedly requires optional launch field %q: %v", field, createSchema.Required)
 		}
 	}
 
@@ -45,11 +53,99 @@ func TestGenericSessionToolSchemasAreHostNeutral(t *testing.T) {
 	if !containsString(requireSchema.Required, "workdir") {
 		t.Fatalf("require required fields = %v, want workdir", requireSchema.Required)
 	}
-	for _, field := range []string{"launch_profile", "ensure_cmd", "group_path"} {
+	for _, field := range []string{"launch_profile", "full_command_line", "thurbox_agent_key", "ensure_cmd", "group_path"} {
 		if _, ok := requireSchema.Properties[field]; ok {
 			t.Fatalf("generic require schema unexpectedly exposes %q", field)
 		}
 	}
+}
+
+func TestSelectedHostLaunchValueValidatesOnlySelectedField(t *testing.T) {
+	for _, test := range []struct {
+		name    string
+		host    sessionHost
+		command string
+		key     string
+		want    string
+		wantErr string
+	}{
+		{
+			name:    "agent deck trims command",
+			host:    sessionHostAgentDeck,
+			command: "  codex --model gpt-5.6  ",
+			key:     "ignored\x00key",
+			want:    "codex --model gpt-5.6",
+		},
+		{
+			name:    "thurbox trims key",
+			host:    sessionHostThurbox,
+			command: "ignored\x00command",
+			key:     "  codex  ",
+			want:    "codex",
+		},
+		{
+			name:    "agent deck blank",
+			host:    sessionHostAgentDeck,
+			key:     "valid-but-irrelevant",
+			wantErr: "full_command_line is required when creating an agent-deck session",
+		},
+		{
+			name:    "thurbox blank",
+			host:    sessionHostThurbox,
+			command: "valid-but-irrelevant",
+			wantErr: "thurbox_agent_key is required when creating a thurbox session",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			got, err := selectedHostLaunchValue(test.host, test.command, test.key)
+			if test.wantErr != "" {
+				if err == nil || err.Error() != test.wantErr {
+					t.Fatalf("selectedHostLaunchValue() error = %v, want %q", err, test.wantErr)
+				}
+				return
+			}
+			if err != nil || got != test.want {
+				t.Fatalf("selectedHostLaunchValue() = %q, err=%v; want %q", got, err, test.want)
+			}
+		})
+	}
+}
+
+func TestGenericSessionCreateRejectsRemovedAndWrongTypeLaunchFieldsAtSchema(t *testing.T) {
+	service := newService(Options{
+		WaypostServiceFactory: failOpenWaypostServiceFactory{t: t},
+		CommandRunner: &fakeRunner{t: t, handler: func(args []string, input string) (RunResult, error) {
+			t.Fatalf("schema-invalid create must not run host command: %v", args)
+			return RunResult{}, nil
+		}},
+		DisableWakeScheduler:  true,
+		DisableLeaseRenewLoop: true,
+	})
+	base := map[string]any{
+		"host":              "agent-deck",
+		"session_name":      "architect-reviewer",
+		"workdir":           t.TempDir(),
+		"parent_session_id": "agent-parent",
+		"full_command_line": "codex",
+	}
+	removed := cloneSessionCreateTestArgs(base)
+	removed["launch_profile"] = "architect"
+	if err := callServiceToolExpectError(t, service, "session_create", removed); err == nil || !strings.Contains(err.Error(), "launch_profile") {
+		t.Fatalf("removed launch_profile error = %v, want schema rejection", err)
+	}
+	wrongType := cloneSessionCreateTestArgs(base)
+	wrongType["thurbox_agent_key"] = []any{"not-a-string"}
+	if err := callServiceToolExpectError(t, service, "session_create", wrongType); err == nil {
+		t.Fatal("wrong-type irrelevant launch field unexpectedly passed schema validation")
+	}
+}
+
+func cloneSessionCreateTestArgs(input map[string]any) map[string]any {
+	output := make(map[string]any, len(input))
+	for key, value := range input {
+		output[key] = value
+	}
+	return output
 }
 
 func TestThurboxV171FixturesUseStrictPinnedGrammar(t *testing.T) {
@@ -265,28 +361,28 @@ func TestInvalidNestedThurboxIdentityOnlyWarns(t *testing.T) {
 	}
 }
 
-func TestGenericSessionCreateRequiresStartupConfigurationBeforeHostSelection(t *testing.T) {
+func TestGenericSessionCreateRequiresSelectedLaunchValueBeforeHostCommands(t *testing.T) {
 	service := newService(Options{
 		WaypostServiceFactory: failOpenWaypostServiceFactory{t: t},
 		CommandRunner: &fakeRunner{t: t, handler: func(args []string, input string) (RunResult, error) {
-			t.Fatalf("missing profile configuration must not probe a host: %v", args)
+			t.Fatalf("missing selected launch value must not run a host command: %v", args)
 			return RunResult{}, nil
 		}},
 		DisableWakeScheduler:  true,
 		DisableLeaseRenewLoop: true,
 	})
 	err := callServiceToolExpectError(t, service, "session_create", map[string]any{
+		"host":              "thurbox",
 		"session_name":      "architect-reviewer",
 		"workdir":           t.TempDir(),
 		"parent_session_id": thurboxPlannerID,
-		"launch_profile":    "architect",
 	})
-	if err == nil || !strings.Contains(err.Error(), "requires session-host configuration") {
-		t.Fatalf("missing startup configuration error = %v", err)
+	if err == nil || !strings.Contains(err.Error(), "thurbox_agent_key is required") {
+		t.Fatalf("missing selected launch value error = %v", err)
 	}
 }
 
-func TestGenericSessionCreateUsesMappedProfileAndVerifiedParent(t *testing.T) {
+func TestGenericSessionCreateUsesCallerSuppliedThurboxKeyAndVerifiedParent(t *testing.T) {
 	workdir := t.TempDir()
 	canonicalWorkdir := canonicalTestWorkdir(t, workdir)
 	parent := thurboxSessionRecord(t, thurboxPlannerID, "planner", canonicalWorkdir, "", "idle")
@@ -311,9 +407,6 @@ func TestGenericSessionCreateUsesMappedProfileAndVerifiedParent(t *testing.T) {
 	service := newService(Options{
 		WaypostServiceFactory: failOpenWaypostServiceFactory{t: t},
 		CommandRunner:         commandRunner,
-		SessionHostConfig: &SessionHostConfig{Profiles: map[string]SessionHostProfile{
-			"architect": {ThurboxAgent: "codex"},
-		}},
 		DisableWakeScheduler:  true,
 		DisableLeaseRenewLoop: true,
 	})
@@ -323,7 +416,8 @@ func TestGenericSessionCreateUsesMappedProfileAndVerifiedParent(t *testing.T) {
 		"session_name":      "architect-reviewer",
 		"workdir":           workdir,
 		"parent_session_id": thurboxPlannerID,
-		"launch_profile":    "architect",
+		"full_command_line": "ignored-agent-deck-value",
+		"thurbox_agent_key": "  codex  ",
 	})
 	if output["host"] != "thurbox" || output["status"] != "created" || output["session_id"] != thurboxReviewID || output["created_target"] != true || output["started_session"] != true || output["recovery_required"] != false {
 		t.Fatalf("generic create output = %v", output)
@@ -332,14 +426,14 @@ func TestGenericSessionCreateUsesMappedProfileAndVerifiedParent(t *testing.T) {
 	if !ok || verification["state"] != "verified" || verification["requested_workdir"] != canonicalWorkdir {
 		t.Fatalf("create verification = %v", output["verification"])
 	}
-	for _, forbidden := range []string{"group", "title", "ensure_cmd", "thurbox_agent", "launch_profile"} {
+	for _, forbidden := range []string{"group", "title", "ensure_cmd", "thurbox_agent", "launch_profile", "full_command_line", "thurbox_agent_key"} {
 		if _, ok := output[forbidden]; ok {
 			t.Fatalf("generic create leaked %q: %v", forbidden, output)
 		}
 	}
 }
 
-func TestGenericSessionCreateMapsAgentDeckProfileWithoutLegacyFields(t *testing.T) {
+func TestGenericSessionCreateUsesCallerSuppliedAgentDeckCommandWithoutLegacyFields(t *testing.T) {
 	workdir := t.TempDir()
 	canonicalWorkdir := canonicalTestWorkdir(t, workdir)
 	parent := `{"id":"agent-parent","title":"planner","status":"waiting","path":` + jsonString(t, canonicalWorkdir) + `}`
@@ -362,9 +456,6 @@ func TestGenericSessionCreateMapsAgentDeckProfileWithoutLegacyFields(t *testing.
 	service := newService(Options{
 		WaypostServiceFactory: failOpenWaypostServiceFactory{t: t},
 		CommandRunner:         commandRunner,
-		SessionHostConfig: &SessionHostConfig{Profiles: map[string]SessionHostProfile{
-			"architect": {AgentDeckCommand: "codex --model gpt-5.6"},
-		}},
 		DisableWakeScheduler:  true,
 		DisableLeaseRenewLoop: true,
 	})
@@ -373,19 +464,20 @@ func TestGenericSessionCreateMapsAgentDeckProfileWithoutLegacyFields(t *testing.
 		"session_name":      "architect-reviewer",
 		"workdir":           workdir,
 		"parent_session_id": "agent-parent",
-		"launch_profile":    "architect",
+		"full_command_line": "  codex --model gpt-5.6  ",
+		"thurbox_agent_key": "ignored-thurbox-key",
 	})
 	if output["host"] != "agent-deck" || output["status"] != "created" || output["session_id"] != "agent-child" || output["parent_session_id"] != "agent-parent" {
 		t.Fatalf("generic Agent Deck create output = %v", output)
 	}
-	for _, forbidden := range []string{"group", "title", "ensure_cmd", "launch_profile"} {
+	for _, forbidden := range []string{"group", "title", "ensure_cmd", "launch_profile", "full_command_line", "thurbox_agent_key"} {
 		if _, ok := output[forbidden]; ok {
 			t.Fatalf("generic Agent Deck create leaked %q: %v", forbidden, output)
 		}
 	}
 }
 
-func TestGenericSessionCreateRedactsMappedProfileFromCommandErrors(t *testing.T) {
+func TestGenericSessionCreateRedactsCallerLaunchValueFromCommandErrors(t *testing.T) {
 	for _, test := range []struct {
 		name string
 		host sessionHost
@@ -399,7 +491,7 @@ func TestGenericSessionCreateRedactsMappedProfileFromCommandErrors(t *testing.T)
 		t.Run(test.name, func(t *testing.T) {
 			workdir := t.TempDir()
 			canonicalWorkdir := canonicalTestWorkdir(t, workdir)
-			const profileValue = "operator-profile-secret"
+			const launchValue = "operator-launch-secret"
 			parentID := "agent-parent"
 			if test.host == sessionHostThurbox {
 				parentID = thurboxPlannerID
@@ -413,11 +505,11 @@ func TestGenericSessionCreateRedactsMappedProfileFromCommandErrors(t *testing.T)
 						return RunResult{ExitCode: 0, Stdout: `{"id":"agent-parent","title":"planner","status":"waiting","path":` + jsonString(t, canonicalWorkdir) + `}`}, nil
 					case reflect.DeepEqual(args, []string{"agent-deck", "session", "show", "architect-reviewer", "--json"}):
 						return RunResult{ExitCode: 1, Stderr: "not found"}, nil
-					case reflect.DeepEqual(args, []string{"agent-deck", "launch", "--json", "--title", "architect-reviewer", "--cmd", profileValue, "--parent", parentID, canonicalWorkdir}):
+					case reflect.DeepEqual(args, []string{"agent-deck", "launch", "--json", "--title", "architect-reviewer", "--cmd", launchValue, "--parent", parentID, canonicalWorkdir}):
 						if test.mode == "runner" {
-							return RunResult{}, errors.New("runner echoed " + profileValue)
+							return RunResult{}, errors.New("runner echoed " + launchValue)
 						}
-						return RunResult{ExitCode: 23, Stdout: "stdout " + profileValue, Stderr: "stderr " + profileValue}, nil
+						return RunResult{ExitCode: 23, Stdout: "stdout " + launchValue, Stderr: "stderr " + launchValue}, nil
 					}
 				case sessionHostThurbox:
 					parent := thurboxSessionRecord(t, thurboxPlannerID, "planner", canonicalWorkdir, "", "idle")
@@ -426,27 +518,20 @@ func TestGenericSessionCreateRedactsMappedProfileFromCommandErrors(t *testing.T)
 						return RunResult{ExitCode: 0, Stdout: parent}, nil
 					case reflect.DeepEqual(args, []string{"thurbox-cli", "session", "list", "--json"}):
 						return RunResult{ExitCode: 0, Stdout: "[]"}, nil
-					case reflect.DeepEqual(args, []string{"thurbox-cli", "session", "create", "--json", "--name", "architect-reviewer", "--repo-path", canonicalWorkdir, "--agent", profileValue, "--parent", parentID}):
+					case reflect.DeepEqual(args, []string{"thurbox-cli", "session", "create", "--json", "--name", "architect-reviewer", "--repo-path", canonicalWorkdir, "--agent", launchValue, "--parent", parentID}):
 						if test.mode == "runner" {
-							return RunResult{}, errors.New("runner echoed " + profileValue)
+							return RunResult{}, errors.New("runner echoed " + launchValue)
 						}
-						return RunResult{ExitCode: 23, Stdout: "stdout " + profileValue, Stderr: "stderr " + profileValue}, nil
+						return RunResult{ExitCode: 23, Stdout: "stdout " + launchValue, Stderr: "stderr " + launchValue}, nil
 					}
 				}
 				t.Fatalf("unexpected command args: %v", args)
 				return RunResult{}, nil
 			}}
 
-			profile := SessionHostProfile{}
-			if test.host == sessionHostAgentDeck {
-				profile.AgentDeckCommand = profileValue
-			} else {
-				profile.ThurboxAgent = profileValue
-			}
 			service := newService(Options{
 				WaypostServiceFactory: failOpenWaypostServiceFactory{t: t},
 				CommandRunner:         commandRunner,
-				SessionHostConfig:     &SessionHostConfig{Profiles: map[string]SessionHostProfile{"architect": profile}},
 				DisableWakeScheduler:  true,
 				DisableLeaseRenewLoop: true,
 			})
@@ -455,10 +540,21 @@ func TestGenericSessionCreateRedactsMappedProfileFromCommandErrors(t *testing.T)
 				"session_name":      "architect-reviewer",
 				"workdir":           workdir,
 				"parent_session_id": parentID,
-				"launch_profile":    "architect",
+				"full_command_line": func() string {
+					if test.host == sessionHostAgentDeck {
+						return launchValue
+					}
+					return "ignored-agent-deck-value"
+				}(),
+				"thurbox_agent_key": func() string {
+					if test.host == sessionHostThurbox {
+						return launchValue
+					}
+					return "ignored-thurbox-key"
+				}(),
 			})
-			if err == nil || strings.Contains(err.Error(), profileValue) {
-				t.Fatalf("generic create error = %v, must redact %q", err, profileValue)
+			if err == nil || strings.Contains(err.Error(), launchValue) {
+				t.Fatalf("generic create error = %v, must redact %q", err, launchValue)
 			}
 		})
 	}
@@ -520,9 +616,6 @@ func TestGenericThurboxCreateFailsClosedOnPreflightListFailure(t *testing.T) {
 	service := newService(Options{
 		WaypostServiceFactory: failOpenWaypostServiceFactory{t: t},
 		CommandRunner:         commandRunner,
-		SessionHostConfig: &SessionHostConfig{Profiles: map[string]SessionHostProfile{
-			"architect": {ThurboxAgent: "codex"},
-		}},
 		DisableWakeScheduler:  true,
 		DisableLeaseRenewLoop: true,
 	})
@@ -531,7 +624,7 @@ func TestGenericThurboxCreateFailsClosedOnPreflightListFailure(t *testing.T) {
 		"session_name":      "architect-reviewer",
 		"workdir":           workdir,
 		"parent_session_id": thurboxPlannerID,
-		"launch_profile":    "architect",
+		"thurbox_agent_key": "codex",
 	})
 	if err == nil || !strings.Contains(err.Error(), "session list failed with exit code 2") || createCalled {
 		t.Fatalf("preflight list failure = err=%v createCalled=%v", err, createCalled)
@@ -558,9 +651,6 @@ func TestGenericSessionCreateRecoversFromConfirmedMalformedOutput(t *testing.T) 
 	service := newService(Options{
 		WaypostServiceFactory: failOpenWaypostServiceFactory{t: t},
 		CommandRunner:         commandRunner,
-		SessionHostConfig: &SessionHostConfig{Profiles: map[string]SessionHostProfile{
-			"architect": {ThurboxAgent: "codex"},
-		}},
 		DisableWakeScheduler:  true,
 		DisableLeaseRenewLoop: true,
 	})
@@ -570,14 +660,65 @@ func TestGenericSessionCreateRecoversFromConfirmedMalformedOutput(t *testing.T) 
 		"session_name":      "architect-reviewer",
 		"workdir":           workdir,
 		"parent_session_id": thurboxPlannerID,
-		"launch_profile":    "architect",
+		"thurbox_agent_key": "codex",
 	})
 	if output["status"] != "create_recovery_required" || output["created_target"] != nil || output["started_session"] != nil || output["recovery_required"] != true || output["session_id"] != nil {
 		t.Fatalf("create recovery output = %v", output)
 	}
 	verification := output["verification"].(map[string]any)
-	if verification["state"] != "create_output_unparseable" || verification["requested_workdir"] != canonicalWorkdir {
+	if verification["state"] != "create_output_unparseable" || verification["requested_workdir"] != canonicalWorkdir || verification["error"] != genericSessionCreateOutputUnparseableDetail {
 		t.Fatalf("create recovery verification = %v", verification)
+	}
+}
+
+func TestGenericAgentDeckCreateRecoveryUsesFixedRedactedDetail(t *testing.T) {
+	workdir := t.TempDir()
+	canonicalWorkdir := canonicalTestWorkdir(t, workdir)
+	parent := `{"id":"agent-parent","title":"planner","status":"waiting","path":` + jsonString(t, canonicalWorkdir) + `}`
+	for _, createOutput := range []string{
+		`malformed selected-secret ignored-secret`,
+		`{"title":"selected-secret","path":"ignored-secret"}`,
+	} {
+		t.Run(createOutput, func(t *testing.T) {
+			commandRunner := &fakeRunner{t: t, handler: func(args []string, input string) (RunResult, error) {
+				switch {
+				case reflect.DeepEqual(args, []string{"agent-deck", "session", "show", "agent-parent", "--json"}):
+					return RunResult{ExitCode: 0, Stdout: parent}, nil
+				case reflect.DeepEqual(args, []string{"agent-deck", "session", "show", "architect-reviewer", "--json"}):
+					return RunResult{ExitCode: 1, Stderr: "not found"}, nil
+				case reflect.DeepEqual(args, []string{"agent-deck", "launch", "--json", "--title", "architect-reviewer", "--cmd", "selected-secret", "--parent", "agent-parent", canonicalWorkdir}):
+					return RunResult{ExitCode: 0, Stdout: createOutput}, nil
+				default:
+					t.Fatalf("unexpected command args: %v", args)
+					return RunResult{}, nil
+				}
+			}}
+			service := newService(Options{
+				WaypostServiceFactory: failOpenWaypostServiceFactory{t: t},
+				CommandRunner:         commandRunner,
+				DisableWakeScheduler:  true,
+				DisableLeaseRenewLoop: true,
+			})
+			output := callServiceTool(t, service, "session_create", map[string]any{
+				"host":              "agent-deck",
+				"session_name":      "architect-reviewer",
+				"workdir":           workdir,
+				"parent_session_id": "agent-parent",
+				"full_command_line": " selected-secret ",
+				"thurbox_agent_key": "ignored-secret",
+			})
+			if output["status"] != "create_recovery_required" {
+				t.Fatalf("create recovery output = %v", output)
+			}
+			verification := output["verification"].(map[string]any)
+			if verification["state"] != "create_output_unparseable" || verification["error"] != genericSessionCreateOutputUnparseableDetail {
+				t.Fatalf("create recovery verification = %v", verification)
+			}
+			encoded, _ := json.Marshal(output)
+			if strings.Contains(string(encoded), "selected-secret") || strings.Contains(string(encoded), "ignored-secret") {
+				t.Fatalf("create recovery leaked launch data: %s", encoded)
+			}
+		})
 	}
 }
 
@@ -606,9 +747,6 @@ func TestGenericSessionCreateReturnsRecoveryRecordForPostCreatePathMismatch(t *t
 	service := newService(Options{
 		WaypostServiceFactory: failOpenWaypostServiceFactory{t: t},
 		CommandRunner:         commandRunner,
-		SessionHostConfig: &SessionHostConfig{Profiles: map[string]SessionHostProfile{
-			"architect": {ThurboxAgent: "codex"},
-		}},
 		DisableWakeScheduler:  true,
 		DisableLeaseRenewLoop: true,
 	})
@@ -617,7 +755,7 @@ func TestGenericSessionCreateReturnsRecoveryRecordForPostCreatePathMismatch(t *t
 		"session_name":      "architect-reviewer",
 		"workdir":           workdir,
 		"parent_session_id": thurboxPlannerID,
-		"launch_profile":    "architect",
+		"thurbox_agent_key": "codex",
 	})
 	if output["status"] != "created_unverified" || output["created_target"] != true || output["started_session"] != true || output["recovery_required"] != true || output["session_id"] != thurboxReviewID {
 		t.Fatalf("post-create recovery output = %v", output)
@@ -690,9 +828,6 @@ func TestGenericSessionCreateReturnsRecoveryForIdentityMismatch(t *testing.T) {
 			service := newService(Options{
 				WaypostServiceFactory: failOpenWaypostServiceFactory{t: t},
 				CommandRunner:         commandRunner,
-				SessionHostConfig: &SessionHostConfig{Profiles: map[string]SessionHostProfile{
-					"architect": {ThurboxAgent: "codex"},
-				}},
 				DisableWakeScheduler:  true,
 				DisableLeaseRenewLoop: true,
 			})
@@ -701,7 +836,7 @@ func TestGenericSessionCreateReturnsRecoveryForIdentityMismatch(t *testing.T) {
 				"session_name":      "architect-reviewer",
 				"workdir":           workdir,
 				"parent_session_id": thurboxPlannerID,
-				"launch_profile":    "architect",
+				"thurbox_agent_key": "codex",
 			})
 			if output["status"] != "created_unverified" || output["created_target"] != true || output["recovery_required"] != true {
 				t.Fatalf("identity recovery output = %v", output)
@@ -713,16 +848,13 @@ func TestGenericSessionCreateReturnsRecoveryForIdentityMismatch(t *testing.T) {
 	}
 }
 
-func TestGenericSessionCreateFailsBeforeHostCommandsWithoutUsableProfile(t *testing.T) {
+func TestGenericSessionCreateFailsBeforeHostCommandsWithoutSelectedLaunchValue(t *testing.T) {
 	workdir := t.TempDir()
 	service := newService(Options{
 		WaypostServiceFactory: failOpenWaypostServiceFactory{t: t},
 		CommandRunner: &fakeRunner{t: t, handler: func(args []string, input string) (RunResult, error) {
-			t.Fatalf("profile validation must run before host commands: %v", args)
+			t.Fatalf("selected launch-value validation must run before host commands: %v", args)
 			return RunResult{}, nil
-		}},
-		SessionHostConfig: &SessionHostConfig{Profiles: map[string]SessionHostProfile{
-			"architect": {AgentDeckCommand: "codex"},
 		}},
 		DisableWakeScheduler:  true,
 		DisableLeaseRenewLoop: true,
@@ -732,10 +864,10 @@ func TestGenericSessionCreateFailsBeforeHostCommandsWithoutUsableProfile(t *test
 		"session_name":      "architect-reviewer",
 		"workdir":           workdir,
 		"parent_session_id": thurboxPlannerID,
-		"launch_profile":    "architect",
+		"full_command_line": "   ",
 	})
-	if err == nil || !strings.Contains(err.Error(), "no thurbox mapping") {
-		t.Fatalf("missing thurbox mapping error = %v", err)
+	if err == nil || !strings.Contains(err.Error(), "thurbox_agent_key is required") {
+		t.Fatalf("missing thurbox key error = %v", err)
 	}
 }
 
@@ -1076,39 +1208,6 @@ func TestNestedThurboxWakeTargetsOnlyImmediateSession(t *testing.T) {
 	}
 	if calls := commandRunner.Calls(); len(calls) != 1 {
 		t.Fatalf("nested scheduler calls = %v, want one Thurbox wake", calls)
-	}
-}
-
-func TestSessionHostConfigIsStrictAndImmutable(t *testing.T) {
-	configPath := filepath.Join(t.TempDir(), "session-hosts.json")
-	if err := os.WriteFile(configPath, []byte(`{"profiles":{"architect":{"agent_deck_command":"codex --model gpt-5.6","thurbox_agent":"codex"}}}`), 0o600); err != nil {
-		t.Fatalf("WriteFile(config): %v", err)
-	}
-	config, err := LoadSessionHostConfig(configPath)
-	if err != nil {
-		t.Fatalf("LoadSessionHostConfig(valid): %v", err)
-	}
-	if err := os.WriteFile(configPath, []byte(`{"profiles":{"architect":{"thurbox_agent":"changed"}}}`), 0o600); err != nil {
-		t.Fatalf("WriteFile(changed config): %v", err)
-	}
-	if got, err := config.profileForHost(sessionHostThurbox, "architect"); err != nil || got != "codex" {
-		t.Fatalf("loaded config changed after file rewrite: value=%q err=%v", got, err)
-	}
-	if got, err := config.profileForHost(sessionHostAgentDeck, "architect"); err != nil || got != "codex --model gpt-5.6" {
-		t.Fatalf("agent-deck profile mapping = %q, err=%v", got, err)
-	}
-	service := newService(Options{SessionHostConfig: config, DisableWakeScheduler: true})
-	config.Profiles["architect"] = SessionHostProfile{ThurboxAgent: "mutated"}
-	if got, err := service.sessions.sessionHostConfig.profileForHost(sessionHostThurbox, "architect"); err != nil || got != "codex" {
-		t.Fatalf("service profile mapping changed after Options mutation: value=%q err=%v", got, err)
-	}
-
-	invalidPath := filepath.Join(t.TempDir(), "invalid-session-hosts.json")
-	if err := os.WriteFile(invalidPath, []byte(`{"profiles":{"architect":{"thurbox_agent":"codex","unexpected":true}}}`), 0o600); err != nil {
-		t.Fatalf("WriteFile(invalid config): %v", err)
-	}
-	if _, err := LoadSessionHostConfig(invalidPath); err == nil || !strings.Contains(err.Error(), "unknown field") {
-		t.Fatalf("LoadSessionHostConfig(unknown field) error = %v", err)
 	}
 }
 

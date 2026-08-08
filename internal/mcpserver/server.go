@@ -190,10 +190,6 @@ func (f *runtimeWaypostServiceFactory) Close() error {
 type Options struct {
 	WaypostServiceFactory waypostServiceFactory
 	CommandRunner         Runner
-	// SessionHostConfig is parsed by the MCP command before the service starts.
-	// A nil value deliberately leaves generic resolve/require available while
-	// making generic create fail before it runs any host command.
-	SessionHostConfig     *SessionHostConfig
 	StateDir              string
 	Executable            string
 	Now                   func() time.Time
@@ -294,9 +290,6 @@ func newService(opts Options) *Service {
 	}
 	state := &serverState{}
 	sessions := newSessionManager(opts.CommandRunner, state)
-	// Copy the startup configuration once so callers cannot alter a running
-	// server's profile mapping by mutating the Options value afterward.
-	sessions.sessionHostConfig = cloneSessionHostConfig(opts.SessionHostConfig)
 	ctx, cancel := context.WithCancel(context.Background())
 	service := &Service{
 		ctx:                   ctx,
@@ -506,10 +499,10 @@ func runCommand(ctx context.Context, runner Runner, args []string, opts runOptio
 	return RunResult{}, fmt.Errorf("command failed: %s :: %s", strings.Join(args, " "), detail)
 }
 
-// runRedactedCommand executes a command whose argv contains an
-// operator-owned value. Unlike runCommand, it intentionally never returns the
-// argv, stdout, stderr, or runner error because any of them can echo that
-// value. Callers must pass a fixed, public operation label.
+// runRedactedCommand executes a command whose argv contains caller-supplied
+// data. Unlike runCommand, it intentionally never returns the argv, stdout,
+// stderr, or runner error because any of them can echo that value. Callers
+// must pass a fixed, public operation label.
 func runRedactedCommand(ctx context.Context, runner Runner, args []string, opts runOptions, operation string) (RunResult, error) {
 	runCtx := ctx
 	var cancel context.CancelFunc

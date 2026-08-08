@@ -35,10 +35,8 @@ type agentDeckRequireSessionInput struct {
 	Workdir    string   `json:"workdir"`
 }
 
-// The generic tools intentionally expose only logical session inputs. A
-// launch_profile is a configured host profile such as "codex"; it is never a
-// shell command and group placement is deliberately left to host-specific
-// compatibility tools.
+// The generic tools intentionally expose only host-neutral session inputs.
+// Host-specific compatibility fields remain on the legacy Agent Deck tools.
 type sessionResolveInput struct {
 	Host     string   `json:"host,omitempty"`
 	Session  string   `json:"session,omitempty"`
@@ -50,7 +48,8 @@ type sessionCreateInput struct {
 	SessionName     string `json:"session_name"`
 	Workdir         string `json:"workdir"`
 	ParentSessionID string `json:"parent_session_id"`
-	LaunchProfile   string `json:"launch_profile"`
+	FullCommandLine string `json:"full_command_line,omitempty"`
+	ThurboxAgentKey string `json:"thurbox_agent_key,omitempty"`
 }
 
 type sessionRequireInput struct {
@@ -68,7 +67,7 @@ func (s *Service) registerSessionTools(server *mcp.Server) {
 	}, s.sessionResolve)
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "session_create",
-		Description: "Create a session in an explicit workdir through Agent Deck or Thurbox. launch_profile is a configured logical profile name, not a shell command.",
+		Description: "Create a session in an explicit workdir through Agent Deck or Thurbox. The selected adapter consumes its applicable caller-supplied launch value: full_command_line for Agent Deck or thurbox_agent_key for Thurbox.",
 	}, s.sessionCreate)
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "session_require",
@@ -168,16 +167,11 @@ func validateGenericResolveSessionArgs(req *mcp.CallToolRequest, input sessionRe
 }
 
 func (s *Service) sessionCreate(ctx context.Context, _ *mcp.CallToolRequest, input sessionCreateInput) (*mcp.CallToolResult, map[string]any, error) {
-	// A missing configuration must fail before host selection, which may probe
-	// Agent Deck. Resolve and require intentionally do not share this gate.
-	if s.sessions.sessionHostConfig == nil {
-		return nil, nil, errors.New("generic session creation requires session-host configuration")
-	}
 	host, err := s.sessions.selectSessionHost(ctx, input.Host)
 	if err != nil {
 		return nil, nil, err
 	}
-	out, err := s.sessions.createHostSession(ctx, host, input.SessionName, input.Workdir, input.ParentSessionID, input.LaunchProfile)
+	out, err := s.sessions.createHostSession(ctx, host, input.SessionName, input.Workdir, input.ParentSessionID, input.FullCommandLine, input.ThurboxAgentKey)
 	if err != nil {
 		return nil, nil, err
 	}
