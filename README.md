@@ -257,6 +257,10 @@ Waypost profile mapping. Existing launchers may still pass
 `waypost mcp --session-host-config PATH`; that deprecated option is accepted
 and ignored.
 
+For generic Agent Deck creation, the adapter inherits the direct parent's
+non-empty group from its preflight snapshot; callers do not provide a group
+field. Root-group and nested-parent cases are rejected before launch.
+
 Call `waypost_status` once after starting each MCP server process. It
 auto-binds detectable session addresses from `agent-deck session current`,
 tool environment variables such as `CODEX_THREAD_ID`, `CLAUDE_CODE_SESSION_ID`,

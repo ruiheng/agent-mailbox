@@ -743,3 +743,37 @@ schema-valid string launch fields from typed handler entry onward; pre-handler
 SDK errors for schema-invalid values are outside that guarantee. The design
 also uses fixed public create-output recovery text, deterministic silent ignore
 for the irrelevant valid string, and a deprecated inert CLI-flag shim.
+
+## Compatibility Amendment: Agent Deck Parent-Group Snapshot (2026-08-09)
+
+This Waypost-only amendment records the accepted
+`waypost-agent-deck-group-inference` design
+(`.agent-artifacts/design-spec/9bb9e861-1786247385/r002.md`) against the
+baseline commits `760e083` and `0b55ce0`. It does not change the generic
+`session_create` request or result schemas, Thurbox behavior, legacy Agent Deck
+tools, Agentgear, or durable delivery semantics.
+
+For generic Agent Deck creation, Waypost reads the direct parent's `group`
+from the same authoritative `session show` record used for parent/workdir
+validation, requires a top-level parent with a non-empty group, and passes that
+exact preflight snapshot explicitly as `--group <snapshot>` alongside the
+requested `--parent`. The child is created with one redacted launch command,
+trusts only the receipt ID, then refreshes the child and verifies name, parent,
+workdir, and the captured group before returning `created`.
+
+Root/empty-group parents and parents that are themselves child sessions fail
+before launch with fixed redacted errors. A non-empty group path missing from
+Agent Deck's registry may be recreated by Agent Deck's explicit-group behavior.
+The guarantee is snapshot-based (`child.group == parent.group` observed during
+Waypost preflight), not atomic against a concurrent later parent move. A
+refreshed group mismatch returns `created_unverified` with recovery state
+`post_create_group_mismatch`; Waypost does not move, delete, or relaunch the
+child.
+
+The implementation is limited to `internal/mcpserver/session_host.go`, focused
+tests, the generic tool description, and this documentation amendment. It adds
+only an internal normalized `Group` field, explicit `--group` argv, pre-create
+parent-shape gates, and refreshed-group verification. No group-list probe,
+second launch, post-create move, fallback launch, or Agent Deck version probe
+is permitted. Thurbox argv and all legacy group-placement behavior remain
+unchanged.
