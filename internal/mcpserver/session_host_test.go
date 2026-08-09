@@ -433,11 +433,12 @@ func TestGenericSessionCreateUsesCallerSuppliedThurboxKeyAndVerifiedParent(t *te
 	}
 }
 
-func TestGenericSessionCreateUsesCallerSuppliedAgentDeckCommandWithoutLegacyFields(t *testing.T) {
+func TestGenericAgentDeckCreateUsesReceiptIDAndAuthoritativeRefreshedRecord(t *testing.T) {
 	workdir := t.TempDir()
 	canonicalWorkdir := canonicalTestWorkdir(t, workdir)
 	parent := `{"id":"agent-parent","title":"planner","status":"waiting","path":` + jsonString(t, canonicalWorkdir) + `}`
-	child := `{"id":"agent-child","title":"architect-reviewer","status":"waiting","path":` + jsonString(t, canonicalWorkdir) + `,"parent_session_id":"agent-parent"}`
+	launchReceipt := `{"id":"agent-child"}`
+	refreshed := `{"id":"agent-child","title":"architect-reviewer","status":"waiting","path":` + jsonString(t, canonicalWorkdir) + `,"parent_session_id":"agent-parent"}`
 	commandRunner := &fakeRunner{t: t, handler: func(args []string, input string) (RunResult, error) {
 		switch {
 		case reflect.DeepEqual(args, []string{"agent-deck", "session", "show", "agent-parent", "--json"}):
@@ -445,9 +446,9 @@ func TestGenericSessionCreateUsesCallerSuppliedAgentDeckCommandWithoutLegacyFiel
 		case reflect.DeepEqual(args, []string{"agent-deck", "session", "show", "architect-reviewer", "--json"}):
 			return RunResult{ExitCode: 1, Stderr: "not found"}, nil
 		case reflect.DeepEqual(args, []string{"agent-deck", "launch", "--json", "--title", "architect-reviewer", "--cmd", "codex --model gpt-5.6", "--parent", "agent-parent", canonicalWorkdir}):
-			return RunResult{ExitCode: 0, Stdout: child}, nil
+			return RunResult{ExitCode: 0, Stdout: launchReceipt}, nil
 		case reflect.DeepEqual(args, []string{"agent-deck", "session", "show", "agent-child", "--json"}):
-			return RunResult{ExitCode: 0, Stdout: child}, nil
+			return RunResult{ExitCode: 0, Stdout: refreshed}, nil
 		default:
 			t.Fatalf("unexpected command args: %v", args)
 			return RunResult{}, nil

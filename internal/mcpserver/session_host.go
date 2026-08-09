@@ -650,7 +650,7 @@ func (m *sessionManager) createHostSession(ctx context.Context, host sessionHost
 	if refreshed == nil {
 		return createdUnverifiedResult(created, name, canonicalWorkdir, "post_create_lookup_failed", "", "target session not found after create"), nil
 	}
-	if err := verifyCreatedHostSessionIdentity(created, refreshed, name, parentSessionID); err != nil {
+	if err := verifyCreatedHostSessionIdentity(host, created, refreshed, name, parentSessionID); err != nil {
 		resultData := created
 		observedPath := ""
 		if refreshed.ID == created.ID {
@@ -666,18 +666,26 @@ func (m *sessionManager) createHostSession(ctx context.Context, host sessionHost
 	return createdVerifiedResult(refreshed, name, canonicalWorkdir), nil
 }
 
-func verifyCreatedHostSessionIdentity(created, refreshed *hostSessionData, requestedName, requestedParentSessionID string) error {
+func verifyCreatedHostSessionIdentity(host sessionHost, created, refreshed *hostSessionData, requestedName, requestedParentSessionID string) error {
 	if created == nil || refreshed == nil {
 		return errors.New("target session identity unavailable after create")
 	}
 	if created.ID != refreshed.ID {
 		return fmt.Errorf("created session id %q does not match refreshed session id %q", created.ID, refreshed.ID)
 	}
-	if created.Name != requestedName {
-		return fmt.Errorf("created session name %q does not match requested name %q", created.Name, requestedName)
-	}
-	if created.ParentSessionID != requestedParentSessionID {
-		return fmt.Errorf("created session parent %q does not match requested parent %q", created.ParentSessionID, requestedParentSessionID)
+	switch host {
+	case sessionHostAgentDeck:
+		// Agent Deck's launch output is a receipt: only its session ID is needed
+		// to retrieve the authoritative post-create session record below.
+	case sessionHostThurbox:
+		if created.Name != requestedName {
+			return fmt.Errorf("created session name %q does not match requested name %q", created.Name, requestedName)
+		}
+		if created.ParentSessionID != requestedParentSessionID {
+			return fmt.Errorf("created session parent %q does not match requested parent %q", created.ParentSessionID, requestedParentSessionID)
+		}
+	default:
+		return fmt.Errorf("unsupported session host %q", host)
 	}
 	if refreshed.Name != requestedName {
 		return fmt.Errorf("refreshed session name %q does not match requested name %q", refreshed.Name, requestedName)
