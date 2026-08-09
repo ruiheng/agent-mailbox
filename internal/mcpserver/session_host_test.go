@@ -439,6 +439,7 @@ func TestGenericAgentDeckCreateUsesReceiptIDAndAuthoritativeRefreshedRecord(t *t
 	parent := `{"id":"agent-parent","title":"planner","status":"waiting","path":` + jsonString(t, canonicalWorkdir) + `}`
 	launchReceipt := `{"id":"agent-child"}`
 	refreshed := `{"id":"agent-child","title":"architect-reviewer","status":"waiting","path":` + jsonString(t, canonicalWorkdir) + `,"parent_session_id":"agent-parent"}`
+	launchCalls := 0
 	commandRunner := &fakeRunner{t: t, handler: func(args []string, input string) (RunResult, error) {
 		switch {
 		case reflect.DeepEqual(args, []string{"agent-deck", "session", "show", "agent-parent", "--json"}):
@@ -446,6 +447,7 @@ func TestGenericAgentDeckCreateUsesReceiptIDAndAuthoritativeRefreshedRecord(t *t
 		case reflect.DeepEqual(args, []string{"agent-deck", "session", "show", "architect-reviewer", "--json"}):
 			return RunResult{ExitCode: 1, Stderr: "not found"}, nil
 		case reflect.DeepEqual(args, []string{"agent-deck", "launch", "--json", "--title", "architect-reviewer", "--cmd", "codex --model gpt-5.6", "--parent", "agent-parent", canonicalWorkdir}):
+			launchCalls++
 			return RunResult{ExitCode: 0, Stdout: launchReceipt}, nil
 		case reflect.DeepEqual(args, []string{"agent-deck", "session", "show", "agent-child", "--json"}):
 			return RunResult{ExitCode: 0, Stdout: refreshed}, nil
@@ -470,6 +472,9 @@ func TestGenericAgentDeckCreateUsesReceiptIDAndAuthoritativeRefreshedRecord(t *t
 	})
 	if output["host"] != "agent-deck" || output["status"] != "created" || output["session_id"] != "agent-child" || output["parent_session_id"] != "agent-parent" {
 		t.Fatalf("generic Agent Deck create output = %v", output)
+	}
+	if launchCalls != 1 {
+		t.Fatalf("agent-deck launch calls = %d, want 1", launchCalls)
 	}
 	for _, forbidden := range []string{"group", "title", "ensure_cmd", "launch_profile", "full_command_line", "thurbox_agent_key"} {
 		if _, ok := output[forbidden]; ok {
