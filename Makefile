@@ -5,9 +5,11 @@ BINARY_NAME ?= waypost
 PREFIX ?= /usr/local
 DESTDIR ?=
 INSTALL_DIR ?= $(PREFIX)/bin
+USER_PREFIX ?= $(HOME)/.local
+USER_INSTALL_DIR ?= $(USER_PREFIX)/bin
 BUILD_OUTPUT := $(BIN_DIR)/$(BINARY_NAME)
 
-.PHONY: help build test run run-mcp install clean
+.PHONY: help build test run run-mcp install install-user clean
 
 help:
 	@printf '%s\n' \
@@ -16,7 +18,8 @@ help:
 		'  make test                  Run the Go test suite' \
 		'  make run ARGS="..."        Run the CLI with go run and pass ARGS through' \
 		'  make run-mcp               Run the built-in stdio MCP server with go run' \
-		'  make install               Install the already-built CLI into $(DESTDIR)$(INSTALL_DIR)' \
+		'  make install               Install the already-built CLI into $(DESTDIR)$(INSTALL_DIR) (typically requires root)' \
+		'  make install-user          Install the already-built CLI into $(USER_INSTALL_DIR)' \
 		'  make clean                 Remove local build output'
 
 build:
@@ -35,6 +38,10 @@ run-mcp:
 install:
 	@mkdir -p $(DESTDIR)$(INSTALL_DIR)
 	install -m 0755 $(BUILD_OUTPUT) $(DESTDIR)$(INSTALL_DIR)/$(BINARY_NAME)
+
+install-user:
+	@mkdir -p $(USER_INSTALL_DIR)
+	install -m 0755 $(BUILD_OUTPUT) $(USER_INSTALL_DIR)/$(BINARY_NAME)
 
 clean:
 	rm -rf $(BIN_DIR)
