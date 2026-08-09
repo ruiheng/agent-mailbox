@@ -1359,6 +1359,7 @@ func TestThurboxWakeFollowsDurableSendAndFailureKeepsDelivery(t *testing.T) {
 		DisableWakeScheduler:  true,
 		DisableLeaseRenewLoop: true,
 	})
+	service.notifications.retryWait = func(context.Context, time.Duration) error { return nil }
 	defer service.Close()
 	service.state.boundAddresses = []string{"agent-deck/sender"}
 	service.state.defaultSender = "agent-deck/sender"

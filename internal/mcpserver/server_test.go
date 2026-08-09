@@ -682,6 +682,142 @@ func TestWaypostSendNotifiesWorkerTarget(t *testing.T) {
 	}
 }
 
+func TestWaypostSendRetriesFailedNudgeWithoutResendingDelivery(t *testing.T) {
+	waypostService := &fakeWaypostService{t: t}
+	sendCount := 0
+	waypostService.sendFunc = func(_ context.Context, params waypost.SendParams) (waypost.SendResult, error) {
+		sendCount++
+		if params.ToAddress != "agent-deck/target" || params.FromAddress != "agent-deck/self" || params.Subject != "delegate" {
+			t.Fatalf("send params = %+v", params)
+		}
+		if string(params.Body) != "body" {
+			t.Fatalf("send body = %q, want body", string(params.Body))
+		}
+		return waypost.SendResult{DeliveryID: "dlv_retry"}, nil
+	}
+
+	nudgeAttempts := 0
+	commandRunner := &fakeRunner{t: t, handler: func(args []string, input string) (RunResult, error) {
+		switch {
+		case strings.Join(args, "\x00") == strings.Join([]string{"agent-deck", "session", "show", "target", "--json"}, "\x00"):
+			return RunResult{ExitCode: 0, Stdout: `{"id":"target","title":"coder-123","status":"waiting"}`}, nil
+		case len(args) == 6 && args[0] == "agent-deck" && args[1] == "session" && args[2] == "send":
+			nudgeAttempts++
+			if nudgeAttempts < 3 {
+				return RunResult{ExitCode: 1, Stderr: "temporary wakeup failure"}, nil
+			}
+			return RunResult{ExitCode: 0}, nil
+		default:
+			t.Fatalf("unexpected command args: %v", args)
+			return RunResult{}, nil
+		}
+	}}
+
+	service := newService(Options{
+		WaypostServiceFactory: fakeWaypostServiceFactory{service: waypostService},
+		CommandRunner:         commandRunner,
+		NotifyDelay:           -1,
+	})
+	service.state.boundAddresses = []string{"agent-deck/self"}
+	service.state.defaultSender = "agent-deck/self"
+	service.state.autoBindAttempted = true
+	retryDelays := []time.Duration{}
+	service.notifications.retryWait = func(_ context.Context, delay time.Duration) error {
+		retryDelays = append(retryDelays, delay)
+		return nil
+	}
+
+	output := callServiceTool(t, service, "waypost_send", map[string]any{
+		"to_address": "agent-deck/target",
+		"subject":    "delegate",
+		"body":       "body",
+	})
+
+	if got := output["status"]; got != "sent" {
+		t.Fatalf("status = %v, want sent", got)
+	}
+	if got := output["notify_status"]; got != "sent" {
+		t.Fatalf("notify_status = %v, want sent", got)
+	}
+	if sendCount != 1 {
+		t.Fatalf("durable sends = %d, want 1", sendCount)
+	}
+	if nudgeAttempts != 3 {
+		t.Fatalf("nudge attempts = %d, want 3", nudgeAttempts)
+	}
+	if want := []time.Duration{500 * time.Millisecond, time.Second}; !reflect.DeepEqual(retryDelays, want) {
+		t.Fatalf("retry delays = %v, want %v", retryDelays, want)
+	}
+}
+
+func TestWaypostSendStopsAfterExhaustingNudgeRetries(t *testing.T) {
+	waypostService := &fakeWaypostService{t: t}
+	sendCount := 0
+	waypostService.sendFunc = func(_ context.Context, params waypost.SendParams) (waypost.SendResult, error) {
+		sendCount++
+		if string(params.Body) != "body" {
+			t.Fatalf("send body = %q, want body", string(params.Body))
+		}
+		return waypost.SendResult{DeliveryID: "dlv_retry_exhausted"}, nil
+	}
+
+	nudgeAttempts := 0
+	commandRunner := &fakeRunner{t: t, handler: func(args []string, input string) (RunResult, error) {
+		switch {
+		case strings.Join(args, "\x00") == strings.Join([]string{"agent-deck", "session", "show", "target", "--json"}, "\x00"):
+			return RunResult{ExitCode: 0, Stdout: `{"id":"target","title":"coder-123","status":"waiting"}`}, nil
+		case len(args) == 6 && args[0] == "agent-deck" && args[1] == "session" && args[2] == "send":
+			nudgeAttempts++
+			return RunResult{ExitCode: 1, Stderr: "persistent wakeup failure"}, nil
+		default:
+			t.Fatalf("unexpected command args: %v", args)
+			return RunResult{}, nil
+		}
+	}}
+
+	service := newService(Options{
+		WaypostServiceFactory: fakeWaypostServiceFactory{service: waypostService},
+		CommandRunner:         commandRunner,
+		NotifyDelay:           -1,
+	})
+	service.state.boundAddresses = []string{"agent-deck/self"}
+	service.state.defaultSender = "agent-deck/self"
+	service.state.autoBindAttempted = true
+	retryDelays := []time.Duration{}
+	service.notifications.retryWait = func(_ context.Context, delay time.Duration) error {
+		retryDelays = append(retryDelays, delay)
+		return nil
+	}
+
+	output := callServiceTool(t, service, "waypost_send", map[string]any{
+		"to_address": "agent-deck/target",
+		"subject":    "delegate",
+		"body":       "body",
+	})
+
+	if got := output["status"]; got != "sent" {
+		t.Fatalf("status = %v, want sent", got)
+	}
+	if got := output["delivery_id"]; got != "dlv_retry_exhausted" {
+		t.Fatalf("delivery_id = %v, want dlv_retry_exhausted", got)
+	}
+	if got := output["notify_status"]; got != "failed" {
+		t.Fatalf("notify_status = %v, want failed", got)
+	}
+	if got := output["notify_error"]; got == nil || !strings.Contains(got.(string), "persistent wakeup failure") {
+		t.Fatalf("notify_error = %v, want persistent wakeup failure detail", got)
+	}
+	if sendCount != 1 {
+		t.Fatalf("durable sends = %d, want 1", sendCount)
+	}
+	if nudgeAttempts != 4 {
+		t.Fatalf("nudge attempts = %d, want 4", nudgeAttempts)
+	}
+	if want := []time.Duration{500 * time.Millisecond, time.Second, 2 * time.Second}; !reflect.DeepEqual(retryDelays, want) {
+		t.Fatalf("retry delays = %v, want %v", retryDelays, want)
+	}
+}
+
 func TestWaypostSendSkipsNotifyWhenDeliveryAlreadyClaimed(t *testing.T) {
 	waypostService := &fakeWaypostService{t: t}
 	openCount := 0
@@ -1119,6 +1255,7 @@ func TestWaypostSendGroupModeKeepsReceiptWhenSubscriberNotifyFails(t *testing.T)
 		CommandRunner:         commandRunner,
 		DisableWakeScheduler:  true,
 	})
+	service.notifications.retryWait = func(context.Context, time.Duration) error { return nil }
 
 	output := callServiceTool(t, service, "waypost_send", map[string]any{
 		"to_address":   "group/review",
@@ -1482,6 +1619,7 @@ func TestWaypostSendReturnsReceiptWhenNotifyFails(t *testing.T) {
 	service.state.boundAddresses = []string{"agent-deck/self"}
 	service.state.defaultSender = "agent-deck/self"
 	service.state.autoBindAttempted = true
+	service.notifications.retryWait = func(context.Context, time.Duration) error { return nil }
 
 	output := callServiceTool(t, service, "waypost_send", map[string]any{
 		"to_address": "agent-deck/target",

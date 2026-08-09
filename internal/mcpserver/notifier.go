@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"time"
 )
 
 type notificationRoute struct {
@@ -40,6 +41,7 @@ type managerNotifier interface {
 type notificationManager struct {
 	notifiers map[string]managerNotifier
 	sessions  *sessionManager
+	retryWait func(context.Context, time.Duration) error
 }
 
 type agentDeckNotifier struct {
@@ -55,6 +57,7 @@ func newNotificationManager(runner Runner, sessions *sessionManager) *notificati
 	manager := &notificationManager{
 		notifiers: map[string]managerNotifier{},
 		sessions:  sessions,
+		retryWait: waitForNotificationRetry,
 	}
 	manager.notifiers["agent-deck"] = agentDeckNotifier{
 		runner:   runner,
@@ -187,7 +190,7 @@ func (m *notificationManager) notifyDirectWakeScope(ctx context.Context, scope w
 			continue
 		}
 
-		outcome = m.notifyRoute(ctx, notificationEvent{
+		outcome = m.notifyRouteWithRetry(ctx, notificationEvent{
 			Kind:                 notificationDelivery,
 			Route:                route,
 			Subject:              input.Subject,
@@ -214,6 +217,41 @@ func (m *notificationManager) notifyRoute(ctx context.Context, event notificatio
 		outcome.Scheme = notifier.Name()
 	}
 	return outcome
+}
+
+var notificationRetryDelays = [...]time.Duration{
+	500 * time.Millisecond,
+	time.Second,
+	2 * time.Second,
+}
+
+func (m *notificationManager) notifyRouteWithRetry(ctx context.Context, event notificationEvent) notificationOutcome {
+	outcome := m.notifyRoute(ctx, event)
+	for _, delay := range notificationRetryDelays {
+		if outcome.Status != "failed" {
+			return outcome
+		}
+		wait := m.retryWait
+		if wait == nil {
+			wait = waitForNotificationRetry
+		}
+		if err := wait(ctx, delay); err != nil {
+			return outcome
+		}
+		outcome = m.notifyRoute(ctx, event)
+	}
+	return outcome
+}
+
+func waitForNotificationRetry(ctx context.Context, delay time.Duration) error {
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
 }
 
 func (m *notificationManager) probeRoute(ctx context.Context, route notificationRoute) notificationProbe {
