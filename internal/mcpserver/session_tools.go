@@ -67,7 +67,7 @@ func (s *Service) registerSessionTools(server *mcp.Server) {
 	}, s.sessionResolve)
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "session_create",
-		Description: "Create a session in an explicit workdir through Agent Deck or Thurbox. The selected adapter consumes its applicable caller-supplied launch value: full_command_line for Agent Deck or thurbox_agent_key for Thurbox.",
+		Description: "Create a session in an explicit workdir through Agent Deck or Thurbox. Generic Agent Deck creation requires a top-level parent with a non-empty group and uses that parent's preflight group snapshot. The selected adapter consumes its applicable caller-supplied launch value: full_command_line for Agent Deck or thurbox_agent_key for Thurbox.",
 	}, s.sessionCreate)
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "session_require",

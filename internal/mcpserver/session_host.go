@@ -22,6 +22,9 @@ const (
 	sessionHostThurbox   sessionHost = "thurbox"
 
 	genericSessionCreateOutputUnparseableDetail = "generic session create returned unusable output"
+	genericAgentDeckNestedParentDetail          = "generic agent-deck create does not support a parent that is itself a child session"
+	genericAgentDeckEmptyParentGroupDetail      = "generic agent-deck create requires a parent with a non-empty group"
+	genericAgentDeckGroupMismatchDetail         = "refreshed agent-deck session group does not match the parent group snapshot"
 )
 
 var (
@@ -49,6 +52,7 @@ type hostSessionData struct {
 	ID              string
 	Name            string
 	Status          string
+	Group           string
 	Path            string
 	ParentSessionID string
 }
@@ -190,6 +194,7 @@ func hostSessionFromAgentDeck(data *sessionData) *hostSessionData {
 		ID:              strings.TrimSpace(data.ID),
 		Name:            strings.TrimSpace(data.Title),
 		Status:          strings.TrimSpace(data.Status),
+		Group:           strings.TrimSpace(data.Group),
 		Path:            strings.TrimSpace(data.Path),
 		ParentSessionID: strings.TrimSpace(data.ParentSessionID),
 	}
@@ -596,6 +601,16 @@ func (m *sessionManager) createHostSession(ctx context.Context, host sessionHost
 	if err := validateHostSessionWorkdir(parent, workdir, canonicalWorkdir); err != nil {
 		return nil, err
 	}
+	parentGroupSnapshot := ""
+	if host == sessionHostAgentDeck {
+		if parent.ParentSessionID != "" {
+			return nil, errors.New(genericAgentDeckNestedParentDetail)
+		}
+		parentGroupSnapshot = strings.TrimSpace(parent.Group)
+		if parentGroupSnapshot == "" {
+			return nil, errors.New(genericAgentDeckEmptyParentGroupDetail)
+		}
+	}
 
 	existing, err := m.resolveHostSession(ctx, host, name, ensureSessionShowTimeout)
 	if err != nil {
@@ -613,7 +628,7 @@ func (m *sessionManager) createHostSession(ctx context.Context, host sessionHost
 	case sessionHostAgentDeck:
 		result, err := runRedactedCommand(ctx, m.runner, []string{
 			"agent-deck", "launch", "--json", "--title", name, "--cmd", launchValue,
-			"--parent", parentSessionID, canonicalWorkdir,
+			"--group", parentGroupSnapshot, "--parent", parentSessionID, canonicalWorkdir,
 		}, runOptions{}, "generic agent-deck session create")
 		if err != nil {
 			return nil, err
@@ -658,6 +673,9 @@ func (m *sessionManager) createHostSession(ctx context.Context, host sessionHost
 			observedPath = refreshed.Path
 		}
 		return createdUnverifiedResult(resultData, name, canonicalWorkdir, "post_create_identity_mismatch", observedPath, err.Error()), nil
+	}
+	if host == sessionHostAgentDeck && strings.TrimSpace(refreshed.Group) != parentGroupSnapshot {
+		return createdUnverifiedResult(refreshed, name, canonicalWorkdir, "post_create_group_mismatch", refreshed.Path, genericAgentDeckGroupMismatchDetail), nil
 	}
 	verification := verifyHostSessionWorkdir(refreshed, workdir, canonicalWorkdir)
 	if verification.State != "verified" {
