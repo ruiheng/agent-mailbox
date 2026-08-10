@@ -882,6 +882,65 @@ func TestWaypostSendStopsAfterExhaustingNudgeRetries(t *testing.T) {
 	}
 }
 
+func TestWaypostSendDoesNotRetryAmbiguousNudgeTimeout(t *testing.T) {
+	waypostService := &fakeWaypostService{t: t}
+	waypostService.sendFunc = func(_ context.Context, params waypost.SendParams) (waypost.SendResult, error) {
+		return waypost.SendResult{DeliveryID: "dlv_timeout"}, nil
+	}
+
+	probeAttempts := 0
+	nudgeAttempts := 0
+	commandRunner := &fakeRunner{t: t, handler: func(args []string, input string) (RunResult, error) {
+		switch {
+		case strings.Join(args, "\x00") == strings.Join([]string{"agent-deck", "session", "show", "target", "--json"}, "\x00"):
+			probeAttempts++
+			return RunResult{ExitCode: 0, Stdout: `{"id":"target","title":"coder-123","status":"waiting"}`}, nil
+		case len(args) == 6 && args[0] == "agent-deck" && args[1] == "session" && args[2] == "send":
+			nudgeAttempts++
+			return RunResult{}, context.DeadlineExceeded
+		default:
+			t.Fatalf("unexpected command args: %v", args)
+			return RunResult{}, nil
+		}
+	}}
+
+	service := newService(Options{
+		WaypostServiceFactory: fakeWaypostServiceFactory{service: waypostService},
+		CommandRunner:         commandRunner,
+		NotifyDelay:           -1,
+	})
+	service.state.boundAddresses = []string{"agent-deck/self"}
+	service.state.defaultSender = "agent-deck/self"
+	service.state.autoBindAttempted = true
+	retryDelays := []time.Duration{}
+	service.notifications.retryWait = func(_ context.Context, delay time.Duration) error {
+		retryDelays = append(retryDelays, delay)
+		return nil
+	}
+
+	output := callServiceTool(t, service, "waypost_send", map[string]any{
+		"to_address": "agent-deck/target",
+		"subject":    "delegate",
+		"body":       "body",
+	})
+
+	if got := output["notify_status"]; got != "failed" {
+		t.Fatalf("notify_status = %v, want failed", got)
+	}
+	if got := output["notify_error"]; got == nil || !strings.Contains(got.(string), "timed out") {
+		t.Fatalf("notify_error = %v, want timeout detail", got)
+	}
+	if probeAttempts != 1 {
+		t.Fatalf("probe attempts = %d, want 1", probeAttempts)
+	}
+	if nudgeAttempts != 1 {
+		t.Fatalf("nudge attempts = %d, want 1", nudgeAttempts)
+	}
+	if len(retryDelays) != 0 {
+		t.Fatalf("retry delays = %v, want none", retryDelays)
+	}
+}
+
 func TestWaypostSendSkipsNotifyWhenDeliveryAlreadyClaimed(t *testing.T) {
 	waypostService := &fakeWaypostService{t: t}
 	openCount := 0

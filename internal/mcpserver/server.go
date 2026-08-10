@@ -476,7 +476,10 @@ func runCommand(ctx context.Context, runner Runner, args []string, opts runOptio
 	if err != nil {
 		detail := err.Error()
 		if errors.Is(err, context.DeadlineExceeded) || errors.Is(runCtx.Err(), context.DeadlineExceeded) {
-			detail = fmt.Sprintf("timed out after %dms", opts.timeout.Milliseconds())
+			return RunResult{}, fmt.Errorf("command failed: %s :: timed out after %dms: %w", strings.Join(args, " "), opts.timeout.Milliseconds(), context.DeadlineExceeded)
+		}
+		if errors.Is(err, context.Canceled) || errors.Is(runCtx.Err(), context.Canceled) {
+			return RunResult{}, fmt.Errorf("command failed: %s :: canceled: %w", strings.Join(args, " "), context.Canceled)
 		}
 		return RunResult{}, fmt.Errorf("command failed: %s :: %s", strings.Join(args, " "), detail)
 	}

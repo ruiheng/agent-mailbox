@@ -222,7 +222,7 @@ var notificationRetryDelays = [...]time.Duration{
 func (m *notificationManager) notifyRouteWithRetry(ctx context.Context, event notificationEvent) notificationOutcome {
 	outcome := m.notifyRouteAttempt(ctx, event)
 	for _, delay := range notificationRetryDelays {
-		if outcome.Status != "failed" {
+		if !notificationOutcomeRetryable(outcome) {
 			return outcome
 		}
 		wait := m.retryWait
@@ -235,6 +235,13 @@ func (m *notificationManager) notifyRouteWithRetry(ctx context.Context, event no
 		outcome = m.notifyRouteAttempt(ctx, event)
 	}
 	return outcome
+}
+
+func notificationOutcomeRetryable(outcome notificationOutcome) bool {
+	if outcome.Status != "failed" {
+		return false
+	}
+	return !errors.Is(outcome.Err, context.Canceled) && !errors.Is(outcome.Err, context.DeadlineExceeded)
 }
 
 func (m *notificationManager) notifyRouteAttempt(ctx context.Context, event notificationEvent) notificationOutcome {
