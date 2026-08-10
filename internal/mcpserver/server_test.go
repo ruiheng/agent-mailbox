@@ -1282,6 +1282,58 @@ func TestWaypostSendGroupModeKeepsReceiptWhenSubscriberNotifyFails(t *testing.T)
 	}
 }
 
+func TestWaypostSendGroupModeReportsPartialNotifyFailureDetail(t *testing.T) {
+	waypostService := &fakeWaypostService{t: t}
+	waypostService.sendFunc = func(_ context.Context, params waypost.SendParams) (waypost.SendResult, error) {
+		return waypost.SendResult{
+			Mode:                       waypost.SendModeGroup,
+			MessageID:                  "msg_group_partial",
+			GroupID:                    "grp_1",
+			GroupAddress:               "group/review",
+			GroupNotificationAddresses: []string{"agent-deck/moderator", "agent-deck/observer"},
+			MessageCreatedAt:           "2026-04-18T00:00:00Z",
+		}, nil
+	}
+
+	commandRunner := &fakeRunner{t: t, handler: func(args []string, input string) (RunResult, error) {
+		switch {
+		case strings.Join(args, "\x00") == strings.Join([]string{"agent-deck", "session", "show", "moderator", "--json"}, "\x00"):
+			return RunResult{ExitCode: 0, Stdout: `{"id":"moderator","title":"moderator","status":"waiting"}`}, nil
+		case strings.Join(args, "\x00") == strings.Join([]string{"agent-deck", "session", "show", "observer", "--json"}, "\x00"):
+			return RunResult{ExitCode: 0, Stdout: `{"id":"observer","title":"observer","status":"waiting"}`}, nil
+		case len(args) == 6 && args[0] == "agent-deck" && args[1] == "session" && args[2] == "send" && args[4] == "moderator":
+			return RunResult{ExitCode: 0}, nil
+		case len(args) == 6 && args[0] == "agent-deck" && args[1] == "session" && args[2] == "send" && args[4] == "observer":
+			return RunResult{ExitCode: 1, Stderr: "observer notify failed"}, nil
+		default:
+			t.Fatalf("unexpected command args: %v", args)
+			return RunResult{}, nil
+		}
+	}}
+
+	service := newService(Options{
+		WaypostServiceFactory: fakeWaypostServiceFactory{service: waypostService},
+		CommandRunner:         commandRunner,
+		DisableWakeScheduler:  true,
+	})
+	service.notifications.retryWait = func(context.Context, time.Duration) error { return nil }
+
+	output := callServiceTool(t, service, "waypost_send", map[string]any{
+		"to_address":   "group/review",
+		"from_address": "agent-deck/expert",
+		"subject":      "expert post",
+		"body":         "body",
+		"group":        true,
+	})
+
+	if got := output["notify_status"]; got != "partial_failed" {
+		t.Fatalf("notify_status = %v, want partial_failed", got)
+	}
+	if got := output["notify_error"]; got == nil || !strings.Contains(got.(string), "observer notify failed") {
+		t.Fatalf("notify_error = %v, want observer failure detail", got)
+	}
+}
+
 func TestWaypostForwardByMessageIDPreservesPayloadAndPrefixesSubject(t *testing.T) {
 	t.Skip("waypost_forward is CLI-owned after the MCP hard cut")
 	sourceSenderAddress := "agent/source"

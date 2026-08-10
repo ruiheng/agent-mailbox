@@ -124,6 +124,8 @@ func (m *notificationManager) notifyGroupSubscribers(ctx context.Context, input 
 		outcome = candidate
 		if notificationOutcomeDelivered(candidate) {
 			sentCount++
+		} else if candidate.Err != nil {
+			failures = append(failures, candidate.Err)
 		}
 	}
 	aggregateScheme := notificationSchemeFromSet(schemes)
