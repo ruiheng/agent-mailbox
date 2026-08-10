@@ -1457,6 +1457,69 @@ func TestWaypostSendGroupModeReportsPartialNotifyFailureDetail(t *testing.T) {
 	}
 }
 
+func TestNotifyGroupSubscribersPreservesFailureBeforeUnsupportedTarget(t *testing.T) {
+	commandRunner := &fakeRunner{t: t, handler: func(args []string, input string) (RunResult, error) {
+		switch {
+		case strings.Join(args, "\x00") == strings.Join([]string{"agent-deck", "session", "show", "moderator", "--json"}, "\x00"):
+			return RunResult{ExitCode: 0, Stdout: `{"id":"moderator","title":"moderator","status":"waiting"}`}, nil
+		case len(args) == 6 && args[0] == "agent-deck" && args[1] == "session" && args[2] == "send":
+			return RunResult{ExitCode: 1, Stderr: "moderator notify failed"}, nil
+		default:
+			t.Fatalf("unexpected command args: %v", args)
+			return RunResult{}, nil
+		}
+	}}
+	manager := newNotificationManager(commandRunner, newSessionManager(commandRunner, &serverState{}))
+	manager.retryWait = func(context.Context, time.Duration) error { return nil }
+
+	outcome := manager.notifyGroupSubscribers(context.Background(), waypostSendInput{
+		FromAddress: "agent-deck/expert",
+	}, []string{"agent-deck/moderator", "codex/observer"})
+
+	if outcome.Status != "failed" {
+		t.Fatalf("status = %q, want failed", outcome.Status)
+	}
+	if outcome.Scheme != "mixed" {
+		t.Fatalf("scheme = %q, want mixed", outcome.Scheme)
+	}
+	if outcome.Err == nil || !strings.Contains(outcome.Err.Error(), "moderator notify failed") {
+		t.Fatalf("error = %v, want moderator failure detail", outcome.Err)
+	}
+}
+
+func TestNotifyGroupSubscribersAggregatesAllFailuresWithoutSuccess(t *testing.T) {
+	commandRunner := &fakeRunner{t: t, handler: func(args []string, input string) (RunResult, error) {
+		switch {
+		case len(args) == 5 && args[0] == "agent-deck" && args[1] == "session" && args[2] == "show":
+			target := args[3]
+			return RunResult{ExitCode: 0, Stdout: fmt.Sprintf(`{"id":%q,"title":%q,"status":"waiting"}`, target, target)}, nil
+		case len(args) == 6 && args[0] == "agent-deck" && args[1] == "session" && args[2] == "send":
+			return RunResult{ExitCode: 1, Stderr: args[4] + " notify failed"}, nil
+		default:
+			t.Fatalf("unexpected command args: %v", args)
+			return RunResult{}, nil
+		}
+	}}
+	manager := newNotificationManager(commandRunner, newSessionManager(commandRunner, &serverState{}))
+	manager.retryWait = func(context.Context, time.Duration) error { return nil }
+
+	outcome := manager.notifyGroupSubscribers(context.Background(), waypostSendInput{
+		FromAddress: "agent-deck/expert",
+	}, []string{"agent-deck/moderator", "agent-deck/observer"})
+
+	if outcome.Status != "failed" {
+		t.Fatalf("status = %q, want failed", outcome.Status)
+	}
+	if outcome.Err == nil {
+		t.Fatal("error = nil, want both notification failures")
+	}
+	for _, want := range []string{"moderator notify failed", "observer notify failed"} {
+		if !strings.Contains(outcome.Err.Error(), want) {
+			t.Fatalf("error = %v, want %q", outcome.Err, want)
+		}
+	}
+}
+
 func TestWaypostForwardByMessageIDPreservesPayloadAndPrefixesSubject(t *testing.T) {
 	t.Skip("waypost_forward is CLI-owned after the MCP hard cut")
 	sourceSenderAddress := "agent/source"

@@ -136,6 +136,9 @@ func (m *notificationManager) notifyGroupSubscribers(ctx context.Context, input 
 	if sentCount > 0 {
 		return notificationOutcome{Status: "partial_failed", Scheme: aggregateScheme, Err: errors.Join(failures...)}
 	}
+	if len(failures) > 0 {
+		return notificationOutcome{Status: "failed", Scheme: aggregateScheme, Err: errors.Join(failures...)}
+	}
 	if aggregateScheme != "" {
 		outcome.Scheme = aggregateScheme
 	}
