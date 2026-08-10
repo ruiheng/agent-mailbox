@@ -682,7 +682,7 @@ func TestWaypostSendNotifiesWorkerTarget(t *testing.T) {
 	}
 }
 
-func TestWaypostSendRetriesFailedNudgeWithoutResendingDelivery(t *testing.T) {
+func TestWaypostSendDoesNotRetryFailedNudge(t *testing.T) {
 	waypostService := &fakeWaypostService{t: t}
 	sendCount := 0
 	waypostService.sendFunc = func(_ context.Context, params waypost.SendParams) (waypost.SendResult, error) {
@@ -703,10 +703,7 @@ func TestWaypostSendRetriesFailedNudgeWithoutResendingDelivery(t *testing.T) {
 			return RunResult{ExitCode: 0, Stdout: `{"id":"target","title":"coder-123","status":"waiting"}`}, nil
 		case len(args) == 6 && args[0] == "agent-deck" && args[1] == "session" && args[2] == "send":
 			nudgeAttempts++
-			if nudgeAttempts < 3 {
-				return RunResult{ExitCode: 1, Stderr: "temporary wakeup failure"}, nil
-			}
-			return RunResult{ExitCode: 0}, nil
+			return RunResult{ExitCode: 1, Stderr: "ambiguous wakeup failure"}, nil
 		default:
 			t.Fatalf("unexpected command args: %v", args)
 			return RunResult{}, nil
@@ -736,17 +733,20 @@ func TestWaypostSendRetriesFailedNudgeWithoutResendingDelivery(t *testing.T) {
 	if got := output["status"]; got != "sent" {
 		t.Fatalf("status = %v, want sent", got)
 	}
-	if got := output["notify_status"]; got != "sent" {
-		t.Fatalf("notify_status = %v, want sent", got)
+	if got := output["notify_status"]; got != "failed" {
+		t.Fatalf("notify_status = %v, want failed", got)
+	}
+	if got := output["notify_error"]; got == nil || !strings.Contains(got.(string), "ambiguous wakeup failure") {
+		t.Fatalf("notify_error = %v, want ambiguous wakeup failure detail", got)
 	}
 	if sendCount != 1 {
 		t.Fatalf("durable sends = %d, want 1", sendCount)
 	}
-	if nudgeAttempts != 3 {
-		t.Fatalf("nudge attempts = %d, want 3", nudgeAttempts)
+	if nudgeAttempts != 1 {
+		t.Fatalf("nudge attempts = %d, want 1", nudgeAttempts)
 	}
-	if want := []time.Duration{500 * time.Millisecond, time.Second}; !reflect.DeepEqual(retryDelays, want) {
-		t.Fatalf("retry delays = %v, want %v", retryDelays, want)
+	if len(retryDelays) != 0 {
+		t.Fatalf("retry delays = %v, want none", retryDelays)
 	}
 }
 
@@ -814,7 +814,7 @@ func TestWaypostSendRetriesUnknownWakeProbeWithoutResendingDelivery(t *testing.T
 	}
 }
 
-func TestWaypostSendStopsAfterExhaustingNudgeRetries(t *testing.T) {
+func TestWaypostSendStopsAfterExhaustingWakeProbeRetries(t *testing.T) {
 	waypostService := &fakeWaypostService{t: t}
 	sendCount := 0
 	waypostService.sendFunc = func(_ context.Context, params waypost.SendParams) (waypost.SendResult, error) {
@@ -825,14 +825,12 @@ func TestWaypostSendStopsAfterExhaustingNudgeRetries(t *testing.T) {
 		return waypost.SendResult{DeliveryID: "dlv_retry_exhausted"}, nil
 	}
 
-	nudgeAttempts := 0
+	probeAttempts := 0
 	commandRunner := &fakeRunner{t: t, handler: func(args []string, input string) (RunResult, error) {
 		switch {
 		case strings.Join(args, "\x00") == strings.Join([]string{"agent-deck", "session", "show", "target", "--json"}, "\x00"):
-			return RunResult{ExitCode: 0, Stdout: `{"id":"target","title":"coder-123","status":"waiting"}`}, nil
-		case len(args) == 6 && args[0] == "agent-deck" && args[1] == "session" && args[2] == "send":
-			nudgeAttempts++
-			return RunResult{ExitCode: 1, Stderr: "persistent wakeup failure"}, nil
+			probeAttempts++
+			return RunResult{ExitCode: 1, Stderr: "persistent lookup failure"}, nil
 		default:
 			t.Fatalf("unexpected command args: %v", args)
 			return RunResult{}, nil
@@ -868,14 +866,14 @@ func TestWaypostSendStopsAfterExhaustingNudgeRetries(t *testing.T) {
 	if got := output["notify_status"]; got != "failed" {
 		t.Fatalf("notify_status = %v, want failed", got)
 	}
-	if got := output["notify_error"]; got == nil || !strings.Contains(got.(string), "persistent wakeup failure") {
-		t.Fatalf("notify_error = %v, want persistent wakeup failure detail", got)
+	if got := output["notify_error"]; got == nil || !strings.Contains(got.(string), "unknown result") {
+		t.Fatalf("notify_error = %v, want unknown lookup result detail", got)
 	}
 	if sendCount != 1 {
 		t.Fatalf("durable sends = %d, want 1", sendCount)
 	}
-	if nudgeAttempts != 4 {
-		t.Fatalf("nudge attempts = %d, want 4", nudgeAttempts)
+	if probeAttempts != 4 {
+		t.Fatalf("probe attempts = %d, want 4", probeAttempts)
 	}
 	if want := []time.Duration{500 * time.Millisecond, time.Second, 2 * time.Second}; !reflect.DeepEqual(retryDelays, want) {
 		t.Fatalf("retry delays = %v, want %v", retryDelays, want)

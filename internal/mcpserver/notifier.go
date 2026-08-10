@@ -238,11 +238,23 @@ var notificationRetryDelays = [...]time.Duration{
 }
 
 func (m *notificationManager) notifyRouteWithRetry(ctx context.Context, event notificationEvent) notificationOutcome {
-	outcome := m.notifyRouteAttempt(ctx, event)
-	for _, delay := range notificationRetryDelays {
-		if !notificationOutcomeRetryable(outcome) {
+	for attempt := 0; ; attempt++ {
+		probe := m.probeRoute(ctx, event.Route)
+		if probe.Wakeable {
+			// Notify is a non-idempotent side effect. Once it has been attempted,
+			// its error is ambiguous: the target may already have received the
+			// message. Only retry failures that happen before Notify is called.
+			return m.notifyRoute(ctx, event)
+		}
+		outcome := notificationOutcome{
+			Status: probe.Status,
+			Scheme: probe.Scheme,
+			Err:    probe.Err,
+		}
+		if !notificationProbeRetryable(probe) || attempt == len(notificationRetryDelays) {
 			return outcome
 		}
+		delay := notificationRetryDelays[attempt]
 		wait := m.retryWait
 		if wait == nil {
 			wait = waitForNotificationRetry
@@ -250,28 +262,14 @@ func (m *notificationManager) notifyRouteWithRetry(ctx context.Context, event no
 		if err := wait(ctx, delay); err != nil {
 			return outcome
 		}
-		outcome = m.notifyRouteAttempt(ctx, event)
 	}
-	return outcome
 }
 
-func notificationOutcomeRetryable(outcome notificationOutcome) bool {
-	if outcome.Status != "failed" {
+func notificationProbeRetryable(probe notificationProbe) bool {
+	if probe.Status != "failed" {
 		return false
 	}
-	return !errors.Is(outcome.Err, context.Canceled) && !errors.Is(outcome.Err, context.DeadlineExceeded)
-}
-
-func (m *notificationManager) notifyRouteAttempt(ctx context.Context, event notificationEvent) notificationOutcome {
-	probe := m.probeRoute(ctx, event.Route)
-	if !probe.Wakeable {
-		return notificationOutcome{
-			Status: probe.Status,
-			Scheme: probe.Scheme,
-			Err:    probe.Err,
-		}
-	}
-	return m.notifyRoute(ctx, event)
+	return !errors.Is(probe.Err, context.Canceled) && !errors.Is(probe.Err, context.DeadlineExceeded)
 }
 
 func waitForNotificationRetry(ctx context.Context, delay time.Duration) error {
