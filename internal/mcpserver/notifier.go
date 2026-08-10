@@ -95,10 +95,10 @@ func (m *notificationManager) notifyGroupSubscribers(ctx context.Context, input 
 		}
 	}
 
-	outcome := notificationOutcome{Status: "skipped_sender"}
 	attemptedCount := 0
 	sentCount := 0
 	schemes := map[string]bool{}
+	statuses := map[string]bool{}
 	var failures []error
 	for _, notifyAddress := range notifyAddresses {
 		if strings.TrimSpace(notifyAddress) == strings.TrimSpace(input.FromAddress) {
@@ -107,7 +107,7 @@ func (m *notificationManager) notifyGroupSubscribers(ctx context.Context, input 
 		attemptedCount++
 		scope, scheme, err := directWakeScopeForAddress(notifyAddress)
 		if err != nil {
-			outcome = notificationOutcome{Status: "failed", Err: err}
+			statuses["failed"] = true
 			failures = append(failures, err)
 			continue
 		}
@@ -115,14 +115,16 @@ func (m *notificationManager) notifyGroupSubscribers(ctx context.Context, input 
 			schemes[scheme] = true
 		}
 		if scope == nil {
-			outcome = notificationOutcome{Status: "unsupported", Scheme: scheme}
+			statuses["unsupported"] = true
 			continue
 		}
 		candidate := m.notifyDirectWakeScope(ctx, *scope, input)
 		if candidate.Scheme != "" {
 			schemes[candidate.Scheme] = true
 		}
-		outcome = candidate
+		if status := strings.TrimSpace(candidate.Status); status != "" {
+			statuses[status] = true
+		}
 		if notificationOutcomeDelivered(candidate) {
 			sentCount++
 		} else if candidate.Err != nil {
@@ -139,10 +141,23 @@ func (m *notificationManager) notifyGroupSubscribers(ctx context.Context, input 
 	if len(failures) > 0 {
 		return notificationOutcome{Status: "failed", Scheme: aggregateScheme, Err: errors.Join(failures...)}
 	}
-	if aggregateScheme != "" {
-		outcome.Scheme = aggregateScheme
+	return notificationOutcome{
+		Status: notificationStatusFromSet(statuses),
+		Scheme: aggregateScheme,
 	}
-	return outcome
+}
+
+func notificationStatusFromSet(statuses map[string]bool) string {
+	if len(statuses) == 0 {
+		return "skipped_sender"
+	}
+	if len(statuses) > 1 {
+		return "unavailable"
+	}
+	for status := range statuses {
+		return status
+	}
+	return "unavailable"
 }
 
 func notificationSchemeForAddresses(addresses []string) string {

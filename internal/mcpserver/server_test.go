@@ -1487,6 +1487,35 @@ func TestNotifyGroupSubscribersPreservesFailureBeforeUnsupportedTarget(t *testin
 	}
 }
 
+func TestNotifyGroupSubscribersAggregatesMixedUnavailableOutcomes(t *testing.T) {
+	commandRunner := &fakeRunner{t: t, handler: func(args []string, input string) (RunResult, error) {
+		if strings.Join(args, "\x00") != strings.Join([]string{"agent-deck", "session", "show", "missing", "--json"}, "\x00") {
+			t.Fatalf("unexpected command args: %v", args)
+		}
+		return RunResult{ExitCode: 1, Stdout: `{"success":false}`}, nil
+	}}
+	manager := newNotificationManager(commandRunner, newSessionManager(commandRunner, &serverState{}))
+
+	for _, addresses := range [][]string{
+		{"agent-deck/missing", "codex/observer"},
+		{"codex/observer", "agent-deck/missing"},
+	} {
+		outcome := manager.notifyGroupSubscribers(context.Background(), waypostSendInput{
+			FromAddress: "agent-deck/expert",
+		}, addresses)
+
+		if outcome.Status != "unavailable" {
+			t.Fatalf("addresses = %v, status = %q, want unavailable", addresses, outcome.Status)
+		}
+		if outcome.Scheme != "mixed" {
+			t.Fatalf("addresses = %v, scheme = %q, want mixed", addresses, outcome.Scheme)
+		}
+		if outcome.Err != nil {
+			t.Fatalf("addresses = %v, error = %v, want nil", addresses, outcome.Err)
+		}
+	}
+}
+
 func TestNotifyGroupSubscribersAggregatesAllFailuresWithoutSuccess(t *testing.T) {
 	commandRunner := &fakeRunner{t: t, handler: func(args []string, input string) (RunResult, error) {
 		switch {
