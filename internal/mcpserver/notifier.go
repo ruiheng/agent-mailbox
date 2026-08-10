@@ -30,6 +30,7 @@ type notificationProbe struct {
 	Status   string
 	Scheme   string
 	Wakeable bool
+	Err      error
 }
 
 type managerNotifier interface {
@@ -183,15 +184,6 @@ func (m *notificationManager) notifyDirectWakeScope(ctx context.Context, scope w
 			Manager: manager,
 			Target:  target.Target,
 		}
-		probe := m.probeRoute(ctx, route)
-		if !probe.Wakeable {
-			outcome = notificationOutcome{
-				Status: probe.Status,
-				Scheme: probe.Scheme,
-			}
-			continue
-		}
-
 		outcome = m.notifyRouteWithRetry(ctx, notificationEvent{
 			Kind:                 notificationDelivery,
 			Route:                route,
@@ -228,7 +220,7 @@ var notificationRetryDelays = [...]time.Duration{
 }
 
 func (m *notificationManager) notifyRouteWithRetry(ctx context.Context, event notificationEvent) notificationOutcome {
-	outcome := m.notifyRoute(ctx, event)
+	outcome := m.notifyRouteAttempt(ctx, event)
 	for _, delay := range notificationRetryDelays {
 		if outcome.Status != "failed" {
 			return outcome
@@ -240,9 +232,21 @@ func (m *notificationManager) notifyRouteWithRetry(ctx context.Context, event no
 		if err := wait(ctx, delay); err != nil {
 			return outcome
 		}
-		outcome = m.notifyRoute(ctx, event)
+		outcome = m.notifyRouteAttempt(ctx, event)
 	}
 	return outcome
+}
+
+func (m *notificationManager) notifyRouteAttempt(ctx context.Context, event notificationEvent) notificationOutcome {
+	probe := m.probeRoute(ctx, event.Route)
+	if !probe.Wakeable {
+		return notificationOutcome{
+			Status: probe.Status,
+			Scheme: probe.Scheme,
+			Err:    probe.Err,
+		}
+	}
+	return m.notifyRoute(ctx, event)
 }
 
 func waitForNotificationRetry(ctx context.Context, delay time.Duration) error {
@@ -276,17 +280,33 @@ func (n agentDeckNotifier) Name() string {
 }
 
 func (n agentDeckNotifier) Probe(ctx context.Context, route notificationRoute) notificationProbe {
-	targetSession, err := n.sessions.resolveSessionShowBestEffort(ctx, route.Target)
+	probe, err := n.sessions.probeSessionShowBestEffort(ctx, route.Target)
 	if err != nil {
 		return notificationProbe{
 			Status: "failed",
 			Scheme: n.Name(),
+			Err:    err,
 		}
 	}
-	if targetSession == nil {
+	switch probe.Status {
+	case sessionShowProbeUnknown:
+		return notificationProbe{
+			Status: "failed",
+			Scheme: n.Name(),
+			Err:    errors.New("agent-deck session lookup returned an unknown result"),
+		}
+	case sessionShowProbeNotFound:
 		return notificationProbe{
 			Status: "not_found",
 			Scheme: n.Name(),
+		}
+	}
+	targetSession := probe.Data
+	if targetSession == nil {
+		return notificationProbe{
+			Status: "failed",
+			Scheme: n.Name(),
+			Err:    errors.New("agent-deck session lookup returned no session data"),
 		}
 	}
 

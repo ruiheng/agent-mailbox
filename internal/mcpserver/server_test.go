@@ -750,6 +750,70 @@ func TestWaypostSendRetriesFailedNudgeWithoutResendingDelivery(t *testing.T) {
 	}
 }
 
+func TestWaypostSendRetriesUnknownWakeProbeWithoutResendingDelivery(t *testing.T) {
+	waypostService := &fakeWaypostService{t: t}
+	sendCount := 0
+	waypostService.sendFunc = func(_ context.Context, params waypost.SendParams) (waypost.SendResult, error) {
+		sendCount++
+		return waypost.SendResult{DeliveryID: "dlv_probe_retry"}, nil
+	}
+
+	probeAttempts := 0
+	nudgeAttempts := 0
+	commandRunner := &fakeRunner{t: t, handler: func(args []string, input string) (RunResult, error) {
+		switch {
+		case strings.Join(args, "\x00") == strings.Join([]string{"agent-deck", "session", "show", "target", "--json"}, "\x00"):
+			probeAttempts++
+			if probeAttempts == 1 {
+				return RunResult{ExitCode: 1, Stderr: "temporary lookup failure"}, nil
+			}
+			return RunResult{ExitCode: 0, Stdout: `{"id":"target","title":"coder-123","status":"waiting"}`}, nil
+		case len(args) == 6 && args[0] == "agent-deck" && args[1] == "session" && args[2] == "send":
+			nudgeAttempts++
+			return RunResult{ExitCode: 0}, nil
+		default:
+			t.Fatalf("unexpected command args: %v", args)
+			return RunResult{}, nil
+		}
+	}}
+
+	service := newService(Options{
+		WaypostServiceFactory: fakeWaypostServiceFactory{service: waypostService},
+		CommandRunner:         commandRunner,
+		NotifyDelay:           -1,
+	})
+	service.state.boundAddresses = []string{"agent-deck/self"}
+	service.state.defaultSender = "agent-deck/self"
+	service.state.autoBindAttempted = true
+	retryDelays := []time.Duration{}
+	service.notifications.retryWait = func(_ context.Context, delay time.Duration) error {
+		retryDelays = append(retryDelays, delay)
+		return nil
+	}
+
+	output := callServiceTool(t, service, "waypost_send", map[string]any{
+		"to_address": "agent-deck/target",
+		"subject":    "delegate",
+		"body":       "body",
+	})
+
+	if got := output["notify_status"]; got != "sent" {
+		t.Fatalf("notify_status = %v, want sent", got)
+	}
+	if sendCount != 1 {
+		t.Fatalf("durable sends = %d, want 1", sendCount)
+	}
+	if probeAttempts != 2 {
+		t.Fatalf("probe attempts = %d, want 2", probeAttempts)
+	}
+	if nudgeAttempts != 1 {
+		t.Fatalf("nudge attempts = %d, want 1", nudgeAttempts)
+	}
+	if want := []time.Duration{500 * time.Millisecond}; !reflect.DeepEqual(retryDelays, want) {
+		t.Fatalf("retry delays = %v, want %v", retryDelays, want)
+	}
+}
+
 func TestWaypostSendStopsAfterExhaustingNudgeRetries(t *testing.T) {
 	waypostService := &fakeWaypostService{t: t}
 	sendCount := 0
