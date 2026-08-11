@@ -346,7 +346,7 @@ Queue one message for a recipient address, or append one message to a known grou
 address when `--group` is set.
 
 ```bash
-waypost send --to <address> --body-file <path-or-> [--group] [--json | --yaml] [--full]
+waypost send --to <address> --body-file <path-or-> [--group] [--notify] [--json | --yaml] [--full]
 ```
 
 Use `--json` or `--yaml` for scripts and agents.
@@ -358,6 +358,7 @@ Common options:
 - `--content-type <mime-type>`
 - `--schema-version <version>`
 - `--group`
+- `--notify` requests a best-effort immediate wakeup after the durable send
 
 Notes:
 
@@ -377,6 +378,13 @@ Notes:
   `group_address`, `eligible_count`, and `message_created_at`
 - group send plain-text output is
   `message_id=<id> group=<address> eligible_count=<n>`
+
+When `--notify` is set, structured output additionally includes
+`notify_status`, `notify_scheme`, and `notify_error`. A notification failure is
+reported in those fields but does not undo the durable delivery or make the
+command fail. Plain-text output appends the same status fields. Supported
+remote targets include `agent-deck/<session-id>` and `thurbox/<session-id>`;
+unsupported or local targets are reported without a notification side effect.
 
 ### `recv`
 

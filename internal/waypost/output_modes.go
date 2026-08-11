@@ -14,6 +14,19 @@ func (a *App) writeSendOutput(format outputFormat, full bool, result SendResult)
 	return writeFormattedOutput(a, format, CompactSendResult(result), a.writeSendResultText)
 }
 
+func (a *App) writeSendOutputWithNotification(format outputFormat, full bool, result SendResult, outcome SendNotificationOutcome) error {
+	if format != outputFormatText {
+		if full {
+			return a.writeStructuredOutput(format, FullSendResultWithNotification(result, outcome))
+		}
+		return a.writeStructuredOutput(format, CompactSendResultWithNotification(result, outcome))
+	}
+	if full {
+		return a.writeSendResultFullTextWithNotification(FullSendResultWithNotification(result, outcome))
+	}
+	return a.writeSendResultTextWithNotification(CompactSendResultWithNotification(result, outcome))
+}
+
 func (a *App) writeForwardOutput(format outputFormat, full bool, result ForwardResult) error {
 	if full {
 		return writeFormattedOutput(a, format, FullForwardResult(result), a.writeForwardResultFullText)

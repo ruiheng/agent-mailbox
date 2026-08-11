@@ -266,3 +266,33 @@ func TestRunDelegatesWaypostCommandsWithStateDir(t *testing.T) {
 		t.Fatalf("list output = %q, want empty JSON array", stdout.String())
 	}
 }
+
+func TestRunSendNotifyUsesConfiguredNotifier(t *testing.T) {
+	t.Parallel()
+
+	stateDir := t.TempDir()
+	var stdout bytes.Buffer
+	app := New(strings.NewReader("body\n"), &stdout, &bytes.Buffer{})
+	app.notifyWaypostSend = func(_ context.Context, _ *waypost.Store, request waypost.SendNotificationRequest) waypost.SendNotificationOutcome {
+		if request.Params.ToAddress != "agent-deck/coder" || request.Params.FromAddress != "agent-deck/supervisor" {
+			t.Fatalf("notify request params = %+v", request.Params)
+		}
+		return waypost.SendNotificationOutcome{Status: "sent", Scheme: "agent-deck"}
+	}
+
+	err := app.Run(context.Background(), []string{
+		"--state-dir", stateDir,
+		"send",
+		"--to", "agent-deck/coder",
+		"--from", "agent-deck/supervisor",
+		"--body-file", "-",
+		"--notify",
+		"--json",
+	})
+	if err != nil {
+		t.Fatalf("Run(send --notify) error = %v", err)
+	}
+	if !strings.Contains(stdout.String(), `"notify_status": "sent"`) || !strings.Contains(stdout.String(), `"notify_scheme": "agent-deck"`) || !strings.Contains(stdout.String(), `"notify_error": null`) {
+		t.Fatalf("send --notify output = %q", stdout.String())
+	}
+}

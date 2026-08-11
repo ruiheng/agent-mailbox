@@ -377,9 +377,15 @@ waypost --state-dir /tmp/waypost-demo \
 `send` requires a non-empty message body. Empty stdin and empty files are
 rejected.
 
-By default, `send` prints only `delivery_id=...`. Add `--full` when you also
-need the legacy `message_id` and `blob_id`, or add `--json` / `--yaml` for the
-same compact or full payloads in structured form.
+By default, `send` prints only `delivery_id=...`. Add `--notify` to request a
+best-effort immediate wakeup of a supported remote recipient after the durable
+send succeeds. Add `--full` when you also need the legacy `message_id` and
+`blob_id`, or add `--json` / `--yaml` for the same compact or full payloads in
+structured form.
+
+With `--notify`, structured output includes `notify_status`,
+`notify_scheme`, and `notify_error`. Notification failure is informational and
+never rolls back the durable delivery.
 
 Group delivery is explicit. Create a group address first, then send with
 `--group`:

@@ -1723,7 +1723,7 @@ func TestCLIHelpExitsZeroAndPrintsUsage(t *testing.T) {
 		{
 			name:         "send help",
 			args:         []string{"send", "--help"},
-			wantContains: "Usage:\n  waypost send --to ADDRESS --body-file PATH [options] [--json | --yaml] [--full]",
+			wantContains: "Usage:\n  waypost send --to ADDRESS --body-file PATH [options] [--json | --yaml] [--full] [--notify]",
 		},
 		{
 			name:         "renew help",
