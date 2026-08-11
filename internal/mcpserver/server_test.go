@@ -887,6 +887,38 @@ func TestAgentDeckNotifyRetriesStoppedAndErrorTargets(t *testing.T) {
 	}
 }
 
+func TestCLINotifyWaypostSendUsesMCPNotificationPath(t *testing.T) {
+	waypostService := &fakeWaypostService{t: t}
+	commandRunner := &fakeRunner{t: t, handler: func(args []string, input string) (RunResult, error) {
+		switch {
+		case strings.Join(args, "\x00") == strings.Join([]string{"agent-deck", "session", "show", "coder", "--json"}, "\x00"):
+			return RunResult{ExitCode: 0, Stdout: `{"id":"coder","status":"waiting"}`}, nil
+		case reflect.DeepEqual(args, agentDeckDeferredSendArgs("coder", defaultNotifyMessage)):
+			return RunResult{ExitCode: 0}, nil
+		default:
+			t.Fatalf("unexpected command args: %v", args)
+			return RunResult{}, nil
+		}
+	}}
+
+	outcome := notifyWaypostSendWithOptions(context.Background(), waypostService, waypost.SendNotificationRequest{
+		Params: waypost.SendParams{
+			ToAddress:   "agent-deck/coder",
+			FromAddress: "agent-deck/supervisor",
+			Subject:     "delegate",
+			Body:        []byte("body"),
+		},
+		Result: waypost.SendResult{DeliveryID: "dlv_cli_notify"},
+	}, Options{
+		CommandRunner: commandRunner,
+		NotifyDelay:   -1,
+	})
+
+	if outcome.Status != "sent" || outcome.Scheme != "agent-deck" || outcome.Err != nil {
+		t.Fatalf("CLI notify outcome = %+v, want sent agent-deck outcome", outcome)
+	}
+}
+
 func TestWaypostSendDoesNotRetryFailedNudge(t *testing.T) {
 	waypostService := &fakeWaypostService{t: t}
 	sendCount := 0

@@ -10,16 +10,45 @@ import (
 var ErrHelpRequested = errors.New("help requested")
 
 type App struct {
-	stdin  io.Reader
-	stdout io.Writer
-	stderr io.Writer
+	stdin        io.Reader
+	stdout       io.Writer
+	stderr       io.Writer
+	sendNotifier SendNotifier
+}
+
+// SendNotificationRequest contains the durable send details needed by an
+// optional best-effort wakeup notifier.
+type SendNotificationRequest struct {
+	Params SendParams
+	Result SendResult
+}
+
+// SendNotificationOutcome describes the result of a post-send wakeup attempt.
+// An error here is informational: the durable send has already completed and
+// must remain successful.
+type SendNotificationOutcome struct {
+	Status string
+	Scheme string
+	Err    error
+}
+
+// SendNotifier is called only when `waypost send --notify` is requested.
+type SendNotifier func(context.Context, *Store, SendNotificationRequest) SendNotificationOutcome
+
+type AppOptions struct {
+	SendNotifier SendNotifier
 }
 
 func NewApp(stdin io.Reader, stdout, stderr io.Writer) *App {
+	return NewAppWithOptions(stdin, stdout, stderr, AppOptions{})
+}
+
+func NewAppWithOptions(stdin io.Reader, stdout, stderr io.Writer, options AppOptions) *App {
 	return &App{
-		stdin:  stdin,
-		stdout: stdout,
-		stderr: stderr,
+		stdin:        stdin,
+		stdout:       stdout,
+		stderr:       stderr,
+		sendNotifier: options.SendNotifier,
 	}
 }
 

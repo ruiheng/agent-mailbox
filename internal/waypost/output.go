@@ -108,6 +108,47 @@ func (a *App) writeSendResultFullText(result SendResultFull) error {
 	return err
 }
 
+func formatSendNotificationText(status string, scheme, notifyError *string) string {
+	text := fmt.Sprintf("notify_status=%s", status)
+	if scheme != nil {
+		text += fmt.Sprintf(" notify_scheme=%s", *scheme)
+	}
+	if notifyError != nil {
+		text += fmt.Sprintf(" notify_error=%q", *notifyError)
+	}
+	return text
+}
+
+func (a *App) writeSendResultTextWithNotification(result SendResultCompactWithNotification) error {
+	line := ""
+	if result.Mode == SendModeGroup {
+		eligibleCount := 0
+		if result.EligibleCount != nil {
+			eligibleCount = *result.EligibleCount
+		}
+		line = fmt.Sprintf("message_id=%s group=%s eligible_count=%d", result.MessageID, result.GroupAddress, eligibleCount)
+	} else {
+		line = fmt.Sprintf("delivery_id=%s", result.DeliveryID)
+	}
+	_, err := fmt.Fprintf(a.stdout, "%s %s\n", line, formatSendNotificationText(result.NotifyStatus, result.NotifyScheme, result.NotifyError))
+	return err
+}
+
+func (a *App) writeSendResultFullTextWithNotification(result SendResultFullWithNotification) error {
+	line := ""
+	if result.Mode == SendModeGroup {
+		eligibleCount := 0
+		if result.EligibleCount != nil {
+			eligibleCount = *result.EligibleCount
+		}
+		line = fmt.Sprintf("message_id=%s group=%s eligible_count=%d", result.MessageID, result.GroupAddress, eligibleCount)
+	} else {
+		line = fmt.Sprintf("message_id=%s delivery_id=%s blob_id=%s", result.MessageID, result.DeliveryID, result.BlobID)
+	}
+	_, err := fmt.Fprintf(a.stdout, "%s %s\n", line, formatSendNotificationText(result.NotifyStatus, result.NotifyScheme, result.NotifyError))
+	return err
+}
+
 func (a *App) writeForwardResultText(result ForwardResultCompact) error {
 	if result.Mode == SendModeGroup {
 		eligibleCount := 0

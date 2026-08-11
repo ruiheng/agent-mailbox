@@ -29,7 +29,8 @@ not a general cross-session wake transport.
 
 Current notification behavior is split and under-modeled:
 
-- `waypost_send` performs an immediate notify attempt through `agent-deck`
+- MCP `waypost_send` and CLI `send --notify` perform an immediate notify
+  attempt through the shared notification path
 - stale unread delivery later triggers a separate unread-push loop
 - the two paths have different intent, timing, and state
 - MCP currently has no waypost resource that exposes summary pending-delivery state
@@ -92,7 +93,7 @@ So the right design is:
 Use one notification model with two distinct execution paths:
 
 1. direct notify path
-   - triggered immediately by `waypost_send`
+   - triggered immediately by MCP `waypost_send` or CLI `send --notify`
    - active sender intent
    - tries only cross-session-routable channels in priority order until one
      delivery attempt succeeds
@@ -655,7 +656,7 @@ These may begin as structured logs, but they are not optional design detail.
 This design is additive.
 
 - waypost delivery semantics remain unchanged
-- `waypost_send` still supports immediate notify behavior
+- MCP `waypost_send` and CLI `send --notify` support immediate notify behavior
 - notification results remain advisory
 - clients that do not support MCP resources or subscriptions still work
 - external session-manager wake paths still work without MCP subscription

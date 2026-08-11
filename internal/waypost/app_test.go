@@ -665,6 +665,71 @@ func TestSendAndListHappyPath(t *testing.T) {
 	}
 }
 
+func TestAppSendNotifyReportsFailureWithoutRollingBackDelivery(t *testing.T) {
+	t.Parallel()
+
+	stateDir := filepath.Join(t.TempDir(), "waypost-state")
+	var stdout bytes.Buffer
+	notifyCalls := 0
+	app := NewAppWithOptions(strings.NewReader("delegate body\n"), &stdout, &bytes.Buffer{}, AppOptions{
+		SendNotifier: func(_ context.Context, _ *Store, request SendNotificationRequest) SendNotificationOutcome {
+			notifyCalls++
+			if request.Params.ToAddress != "agent-deck/coder" || request.Params.FromAddress != "agent-deck/supervisor" {
+				t.Fatalf("notify send params = %+v", request.Params)
+			}
+			if request.Result.DeliveryID == "" {
+				t.Fatal("notify delivery ID = empty")
+			}
+			return SendNotificationOutcome{
+				Status: "failed",
+				Scheme: "agent-deck",
+				Err:    errors.New("wakeup failed"),
+			}
+		},
+	})
+
+	err := app.RunWithStateDir(context.Background(), stateDir, []string{
+		"send",
+		"--to", "agent-deck/coder",
+		"--from", "agent-deck/supervisor",
+		"--subject", "delegate",
+		"--body-file", "-",
+		"--notify",
+		"--json",
+	})
+	if err != nil {
+		t.Fatalf("RunWithStateDir(send --notify) error = %v", err)
+	}
+	if notifyCalls != 1 {
+		t.Fatalf("notify calls = %d, want 1", notifyCalls)
+	}
+
+	var output map[string]any
+	if err := json.Unmarshal(stdout.Bytes(), &output); err != nil {
+		t.Fatalf("json.Unmarshal(send output) error = %v; output = %q", err, stdout.String())
+	}
+	deliveryID, _ := output["delivery_id"].(string)
+	if deliveryID == "" {
+		t.Fatalf("delivery_id = %v, want non-empty", output["delivery_id"])
+	}
+	if output["notify_status"] != "failed" || output["notify_scheme"] != "agent-deck" || output["notify_error"] != "wakeup failed" {
+		t.Fatalf("send --notify output = %v", output)
+	}
+
+	runtime, err := OpenRuntime(context.Background(), stateDir)
+	if err != nil {
+		t.Fatalf("OpenRuntime() error = %v", err)
+	}
+	defer runtime.Close()
+	deliveries, err := runtime.Store().ReadDeliveries(context.Background(), []string{deliveryID})
+	if err != nil {
+		t.Fatalf("ReadDeliveries() error = %v", err)
+	}
+	if len(deliveries) != 1 || deliveries[0].State != "queued" {
+		t.Fatalf("deliveries after notify failure = %+v, want one queued delivery", deliveries)
+	}
+}
+
 func TestAppStaleReturnsStructuredResults(t *testing.T) {
 	t.Parallel()
 
@@ -1253,7 +1318,7 @@ func TestHelpCLIPathsDoNotCreateRuntimeState(t *testing.T) {
 		{
 			name:         "send help",
 			args:         []string{"send", "--help"},
-			wantContains: "Usage:\n  waypost send --to ADDRESS --body-file PATH [options] [--json | --yaml] [--full]",
+			wantContains: "Usage:\n  waypost send --to ADDRESS --body-file PATH [options] [--json | --yaml] [--full] [--notify]",
 		},
 		{
 			name:         "forward help",

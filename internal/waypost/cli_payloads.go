@@ -21,6 +21,33 @@ type SendResultFull struct {
 	MessageCreatedAt string `json:"message_created_at,omitempty"`
 }
 
+type SendResultCompactWithNotification struct {
+	Mode             string  `json:"mode,omitempty"`
+	DeliveryID       string  `json:"delivery_id,omitempty"`
+	MessageID        string  `json:"message_id,omitempty"`
+	GroupID          string  `json:"group_id,omitempty"`
+	GroupAddress     string  `json:"group_address,omitempty"`
+	EligibleCount    *int    `json:"eligible_count,omitempty"`
+	MessageCreatedAt string  `json:"message_created_at,omitempty"`
+	NotifyStatus     string  `json:"notify_status"`
+	NotifyScheme     *string `json:"notify_scheme"`
+	NotifyError      *string `json:"notify_error"`
+}
+
+type SendResultFullWithNotification struct {
+	Mode             string  `json:"mode,omitempty"`
+	MessageID        string  `json:"message_id,omitempty"`
+	DeliveryID       string  `json:"delivery_id,omitempty"`
+	BlobID           string  `json:"blob_id,omitempty"`
+	GroupID          string  `json:"group_id,omitempty"`
+	GroupAddress     string  `json:"group_address,omitempty"`
+	EligibleCount    *int    `json:"eligible_count,omitempty"`
+	MessageCreatedAt string  `json:"message_created_at,omitempty"`
+	NotifyStatus     string  `json:"notify_status"`
+	NotifyScheme     *string `json:"notify_scheme"`
+	NotifyError      *string `json:"notify_error"`
+}
+
 type ForwardResultCompact struct {
 	Mode             string `json:"mode,omitempty"`
 	DeliveryID       string `json:"delivery_id,omitempty"`
@@ -157,6 +184,59 @@ func FullSendResult(result SendResult) SendResultFull {
 		MessageID:  result.MessageID,
 		DeliveryID: result.DeliveryID,
 		BlobID:     result.BodyBlobRef,
+	}
+}
+
+func notificationOutputFields(outcome SendNotificationOutcome) (string, *string, *string) {
+	status := outcome.Status
+	if status == "" {
+		status = "unknown"
+	}
+	var scheme *string
+	if outcome.Scheme != "" {
+		value := outcome.Scheme
+		scheme = &value
+	}
+	var notifyError *string
+	if outcome.Err != nil {
+		value := outcome.Err.Error()
+		notifyError = &value
+	}
+	return status, scheme, notifyError
+}
+
+func CompactSendResultWithNotification(result SendResult, outcome SendNotificationOutcome) SendResultCompactWithNotification {
+	compact := CompactSendResult(result)
+	status, scheme, notifyError := notificationOutputFields(outcome)
+	return SendResultCompactWithNotification{
+		Mode:             compact.Mode,
+		DeliveryID:       compact.DeliveryID,
+		MessageID:        compact.MessageID,
+		GroupID:          compact.GroupID,
+		GroupAddress:     compact.GroupAddress,
+		EligibleCount:    compact.EligibleCount,
+		MessageCreatedAt: compact.MessageCreatedAt,
+		NotifyStatus:     status,
+		NotifyScheme:     scheme,
+		NotifyError:      notifyError,
+	}
+}
+
+func FullSendResultWithNotification(result SendResult, outcome SendNotificationOutcome) SendResultFullWithNotification {
+	full := FullSendResult(result)
+	status, scheme, notifyError := notificationOutputFields(outcome)
+	return SendResultFullWithNotification{
+		Mode:             full.Mode,
+		MessageID:        full.MessageID,
+		DeliveryID:       full.DeliveryID,
+		BlobID:           full.BlobID,
+		GroupID:          full.GroupID,
+		GroupAddress:     full.GroupAddress,
+		EligibleCount:    full.EligibleCount,
+		MessageCreatedAt: full.MessageCreatedAt,
+		NotifyStatus:     status,
+		NotifyScheme:     scheme,
+		NotifyError:      notifyError,
 	}
 }
 

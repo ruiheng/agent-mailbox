@@ -15,11 +15,12 @@ import (
 )
 
 type App struct {
-	stdin  io.Reader
-	stdout io.Writer
-	stderr io.Writer
-	runMCP func(context.Context, mcpserver.Options) error
-	runWeb func(context.Context, webui.Options) error
+	stdin             io.Reader
+	stdout            io.Writer
+	stderr            io.Writer
+	runMCP            func(context.Context, mcpserver.Options) error
+	runWeb            func(context.Context, webui.Options) error
+	notifyWaypostSend waypost.SendNotifier
 }
 
 func New(stdin io.Reader, stdout, stderr io.Writer) *App {
@@ -32,7 +33,8 @@ func New(stdin io.Reader, stdout, stderr io.Writer) *App {
 			defer service.Close()
 			return service.Server().Run(ctx, &mcp.StdioTransport{})
 		},
-		runWeb: webui.Run,
+		runWeb:            webui.Run,
+		notifyWaypostSend: mcpserver.NotifyWaypostSend,
 	}
 }
 
@@ -59,7 +61,9 @@ func (a *App) Run(ctx context.Context, args []string) error {
 	}
 
 	forwarded := append([]string(nil), rest...)
-	return waypost.NewApp(a.stdin, a.stdout, a.stderr).RunWithStateDir(ctx, stateDir, forwarded)
+	return waypost.NewAppWithOptions(a.stdin, a.stdout, a.stderr, waypost.AppOptions{
+		SendNotifier: a.notifyWaypostSend,
+	}).RunWithStateDir(ctx, stateDir, forwarded)
 }
 
 func parseGlobalArgs(args []string) (string, []string, bool, error) {
