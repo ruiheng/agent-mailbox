@@ -1312,7 +1312,7 @@ func TestWaypostGroupSubscribersReportHostNeutralNotificationScheme(t *testing.T
 					return RunResult{ExitCode: 0}, nil
 				case reflect.DeepEqual(args, []string{"agent-deck", "session", "show", "moderator", "--json"}):
 					return RunResult{ExitCode: 0, Stdout: `{"id":"moderator","title":"moderator","status":"waiting"}`}, nil
-				case reflect.DeepEqual(args, []string{"agent-deck", "session", "send", "--no-wait", "moderator", defaultNotifyMessage}):
+				case reflect.DeepEqual(args, agentDeckDeferredSendArgs("moderator", defaultNotifyMessage)):
 					return RunResult{ExitCode: 0}, nil
 				default:
 					t.Fatalf("unexpected command args: %v", args)

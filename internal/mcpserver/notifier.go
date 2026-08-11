@@ -3,7 +3,9 @@ package mcpserver
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -40,9 +42,11 @@ type managerNotifier interface {
 }
 
 type notificationManager struct {
-	notifiers map[string]managerNotifier
-	sessions  *sessionManager
-	retryWait func(context.Context, time.Duration) error
+	notifiers              map[string]managerNotifier
+	sessions               *sessionManager
+	retryWait              func(context.Context, time.Duration) error
+	groupNotifyTimeout     time.Duration
+	groupNotifyConcurrency int
 }
 
 type agentDeckNotifier struct {
@@ -56,9 +60,11 @@ type thurboxNotifier struct {
 
 func newNotificationManager(runner Runner, sessions *sessionManager) *notificationManager {
 	manager := &notificationManager{
-		notifiers: map[string]managerNotifier{},
-		sessions:  sessions,
-		retryWait: waitForNotificationRetry,
+		notifiers:              map[string]managerNotifier{},
+		sessions:               sessions,
+		retryWait:              waitForNotificationRetry,
+		groupNotifyTimeout:     groupNotifyFanoutTimeout,
+		groupNotifyConcurrency: groupNotifyFanoutConcurrency,
 	}
 	manager.notifiers["agent-deck"] = agentDeckNotifier{
 		runner:   runner,
@@ -95,40 +101,111 @@ func (m *notificationManager) notifyGroupSubscribers(ctx context.Context, input 
 		}
 	}
 
+	timeout := m.groupNotifyTimeout
+	if timeout <= 0 {
+		timeout = groupNotifyFanoutTimeout
+	}
+	fanoutCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	results := make([]groupSubscriberNotificationResult, len(notifyAddresses))
+	workerCount := m.groupNotifyConcurrency
+	if workerCount <= 0 {
+		workerCount = groupNotifyFanoutConcurrency
+	}
+	if workerCount > len(notifyAddresses) {
+		workerCount = len(notifyAddresses)
+	}
+	jobs := make(chan int, len(notifyAddresses))
+	for index := range notifyAddresses {
+		jobs <- index
+	}
+	close(jobs)
+
+	var workers sync.WaitGroup
+	workers.Add(workerCount)
+	for range workerCount {
+		go func() {
+			defer workers.Done()
+			for index := range jobs {
+				results[index] = m.notifyGroupSubscriber(fanoutCtx, input, notifyAddresses[index])
+			}
+		}()
+	}
+	workers.Wait()
+
+	return aggregateGroupSubscriberNotifications(results)
+}
+
+type groupSubscriberNotificationResult struct {
+	attempted bool
+	schemes   []string
+	status    string
+	delivered bool
+	err       error
+}
+
+func (m *notificationManager) notifyGroupSubscriber(ctx context.Context, input waypostSendInput, notifyAddress string) groupSubscriberNotificationResult {
+	result := groupSubscriberNotificationResult{}
+	if strings.TrimSpace(notifyAddress) == strings.TrimSpace(input.FromAddress) {
+		return result
+	}
+	result.attempted = true
+
+	scope, scheme, err := directWakeScopeForAddress(notifyAddress)
+	if scheme != "" {
+		result.schemes = append(result.schemes, scheme)
+	}
+	if err != nil {
+		result.status = "failed"
+		result.err = err
+		return result
+	}
+	if scope == nil {
+		result.status = "unsupported"
+		return result
+	}
+	if err := ctx.Err(); err != nil {
+		result.status = "failed"
+		result.err = fmt.Errorf("notify %s: group notification budget exhausted: %w", strings.TrimSpace(notifyAddress), err)
+		return result
+	}
+
+	candidate := m.notifyDirectWakeScope(ctx, *scope, input)
+	if candidate.Scheme != "" {
+		result.schemes = append(result.schemes, candidate.Scheme)
+	}
+	result.status = strings.TrimSpace(candidate.Status)
+	result.delivered = notificationOutcomeDelivered(candidate)
+	if !result.delivered {
+		result.err = candidate.Err
+	}
+	return result
+}
+
+func aggregateGroupSubscriberNotifications(results []groupSubscriberNotificationResult) notificationOutcome {
 	attemptedCount := 0
 	sentCount := 0
 	schemes := map[string]bool{}
 	statuses := map[string]bool{}
 	var failures []error
-	for _, notifyAddress := range notifyAddresses {
-		if strings.TrimSpace(notifyAddress) == strings.TrimSpace(input.FromAddress) {
+	for _, result := range results {
+		if !result.attempted {
 			continue
 		}
 		attemptedCount++
-		scope, scheme, err := directWakeScopeForAddress(notifyAddress)
-		if err != nil {
-			statuses["failed"] = true
-			failures = append(failures, err)
-			continue
+		for _, scheme := range result.schemes {
+			if scheme != "" {
+				schemes[scheme] = true
+			}
 		}
-		if scheme != "" {
-			schemes[scheme] = true
+		if result.status != "" {
+			statuses[result.status] = true
 		}
-		if scope == nil {
-			statuses["unsupported"] = true
-			continue
-		}
-		candidate := m.notifyDirectWakeScope(ctx, *scope, input)
-		if candidate.Scheme != "" {
-			schemes[candidate.Scheme] = true
-		}
-		if status := strings.TrimSpace(candidate.Status); status != "" {
-			statuses[status] = true
-		}
-		if notificationOutcomeDelivered(candidate) {
+		if result.delivered {
 			sentCount++
-		} else if candidate.Err != nil {
-			failures = append(failures, candidate.Err)
+		} else if result.err != nil {
+			failures = append(failures, result.err)
 		}
 	}
 	aggregateScheme := notificationSchemeFromSet(schemes)
@@ -237,22 +314,34 @@ var notificationRetryDelays = [...]time.Duration{
 	2 * time.Second,
 }
 
+const (
+	groupNotifyFanoutTimeout      = 15 * time.Second
+	groupNotifyFanoutConcurrency  = 4
+	agentDeckNotifyDeferTimeout   = 5 * time.Second
+	agentDeckNotifyReadyTimeout   = 5 * time.Second
+	agentDeckNotifyCommandTimeout = agentDeckNotifyDeferTimeout + agentDeckNotifyReadyTimeout + time.Second
+)
+
 func (m *notificationManager) notifyRouteWithRetry(ctx context.Context, event notificationEvent) notificationOutcome {
+	probe := m.probeRouteWithRetry(ctx, event.Route)
+	if probe.Wakeable {
+		// Notify is a non-idempotent side effect. Once it has been attempted,
+		// its error is ambiguous: the target may already have received the
+		// message. Only retry failures that happen before Notify is called.
+		return m.notifyRoute(ctx, event)
+	}
+	return notificationOutcome{
+		Status: probe.Status,
+		Scheme: probe.Scheme,
+		Err:    probe.Err,
+	}
+}
+
+func (m *notificationManager) probeRouteWithRetry(ctx context.Context, route notificationRoute) notificationProbe {
 	for attempt := 0; ; attempt++ {
-		probe := m.probeRoute(ctx, event.Route)
-		if probe.Wakeable {
-			// Notify is a non-idempotent side effect. Once it has been attempted,
-			// its error is ambiguous: the target may already have received the
-			// message. Only retry failures that happen before Notify is called.
-			return m.notifyRoute(ctx, event)
-		}
-		outcome := notificationOutcome{
-			Status: probe.Status,
-			Scheme: probe.Scheme,
-			Err:    probe.Err,
-		}
-		if !notificationProbeRetryable(probe) || attempt == len(notificationRetryDelays) {
-			return outcome
+		probe := m.probeRoute(ctx, route)
+		if probe.Wakeable || !notificationProbeRetryable(probe) || attempt == len(notificationRetryDelays) {
+			return probe
 		}
 		delay := notificationRetryDelays[attempt]
 		wait := m.retryWait
@@ -260,16 +349,20 @@ func (m *notificationManager) notifyRouteWithRetry(ctx context.Context, event no
 			wait = waitForNotificationRetry
 		}
 		if err := wait(ctx, delay); err != nil {
-			return outcome
+			return probe
 		}
 	}
 }
 
 func notificationProbeRetryable(probe notificationProbe) bool {
-	if probe.Status != "failed" {
+	switch probe.Status {
+	case "target_stopped", "target_error":
+		return true
+	case "failed":
+		return !errors.Is(probe.Err, context.Canceled) && !errors.Is(probe.Err, context.DeadlineExceeded)
+	default:
 		return false
 	}
-	return !errors.Is(probe.Err, context.Canceled) && !errors.Is(probe.Err, context.DeadlineExceeded)
 }
 
 func waitForNotificationRetry(ctx context.Context, delay time.Duration) error {
@@ -333,17 +426,24 @@ func (n agentDeckNotifier) Probe(ctx context.Context, route notificationRoute) n
 		}
 	}
 
-	switch strings.TrimSpace(targetSession.Status) {
-	case "waiting", "idle":
+	status := strings.ToLower(strings.TrimSpace(targetSession.Status))
+	switch status {
+	case "queued":
+		return notificationProbe{
+			Status: "target_queued",
+			Scheme: n.Name(),
+		}
+	case "stopped", "error":
+		return notificationProbe{
+			Status: "target_" + status,
+			Scheme: n.Name(),
+			Err:    errors.New("agent-deck target session is " + status),
+		}
+	default:
 		return notificationProbe{
 			Status:   "wakeable",
 			Scheme:   n.Name(),
 			Wakeable: true,
-		}
-	default:
-		return notificationProbe{
-			Status: "suppressed_local_activity",
-			Scheme: n.Name(),
 		}
 	}
 }
@@ -370,8 +470,12 @@ func (n agentDeckNotifier) Notify(ctx context.Context, event notificationEvent) 
 	}
 
 	_, err := runCommand(ctx, n.runner, []string{
-		"agent-deck", "session", "send", "--no-wait", event.Route.Target, notifyMessage,
-	}, runOptions{timeout: syncCmdTimeout})
+		"agent-deck", "session", "send",
+		"-defer-if-busy",
+		"-defer-timeout", agentDeckNotifyDeferTimeout.String(),
+		"-timeout", agentDeckNotifyReadyTimeout.String(),
+		event.Route.Target, notifyMessage,
+	}, runOptions{timeout: agentDeckNotifyCommandTimeout})
 	if err != nil {
 		return notificationOutcome{
 			Status: "failed",

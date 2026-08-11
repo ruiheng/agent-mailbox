@@ -151,8 +151,20 @@ func (s *Service) tryWakeChannel(ctx context.Context, snapshot wakeSnapshot, run
 		}
 		return false
 	case WakeChannelAgentDeck, WakeChannelThurbox:
+		timeout := s.targetedWakeTimeout
+		if timeout <= 0 {
+			timeout = defaultTargetedWakeTimeout
+		}
+		wakeCtx, cancel := context.WithTimeout(ctx, timeout)
+		defer cancel()
+
 		attemptedWakeableTarget := false
+		budgetExhausted := false
 		for _, target := range snapshotTargetsForChannel(snapshot, channel) {
+			if wakeCtx.Err() != nil {
+				budgetExhausted = true
+				break
+			}
 			manager := notificationManagerForWakeChannel(target.Channel)
 			if manager == "" {
 				continue
@@ -161,13 +173,21 @@ func (s *Service) tryWakeChannel(ctx context.Context, snapshot wakeSnapshot, run
 				Manager: manager,
 				Target:  target.Target,
 			}
-			probe := s.notifications.probeRoute(ctx, route)
+			probe := s.notifications.probeRouteWithRetry(wakeCtx, route)
 			if !probe.Wakeable {
-				logWakeSuppressed(snapshot, runtime, now, channel, config.Category, target.Target, "unavailable:"+probe.Status)
+				reason := "unavailable:" + probe.Status
+				if wakeCtx.Err() != nil {
+					reason = "unavailable:channel_budget_exhausted"
+					budgetExhausted = true
+				}
+				logWakeSuppressed(snapshot, runtime, now, channel, config.Category, target.Target, reason)
+				if budgetExhausted {
+					break
+				}
 				continue
 			}
 			attemptedWakeableTarget = true
-			outcome := s.notifications.notifyRoute(ctx, notificationEvent{
+			outcome := s.notifications.notifyRoute(wakeCtx, notificationEvent{
 				Kind:  notificationFallbackWake,
 				Route: route,
 			})
@@ -176,6 +196,14 @@ func (s *Service) tryWakeChannel(ctx context.Context, snapshot wakeSnapshot, run
 				s.wakeSchedulerState.markDelivered(snapshot.ScopeID, channel, now, snapshot.PendingSince)
 				return true
 			}
+			if wakeCtx.Err() != nil {
+				budgetExhausted = true
+				break
+			}
+		}
+		if budgetExhausted {
+			logWakeSuppressed(snapshot, runtime, now, channel, config.Category, "", "unavailable:channel_budget_exhausted")
+			return false
 		}
 		if attemptedWakeableTarget {
 			logWakeSuppressed(snapshot, runtime, now, channel, config.Category, "", "delivery_failed:all_targets")

@@ -27,6 +27,7 @@ const (
 	notificationFallbackWake     = "fallback_wake"
 	waypostOverviewURI           = "waypost://bound/overview"
 	defaultWakePollInterval      = 30 * time.Second
+	defaultTargetedWakeTimeout   = 15 * time.Second
 	defaultWakeInterChannelGap   = 1 * time.Minute
 	defaultMCPHintInitialDelay   = 1 * time.Minute
 	defaultMCPHintCooldown       = 2 * time.Minute
@@ -216,6 +217,7 @@ type Service struct {
 	leaseRenewInterval     time.Duration
 	disableLeaseRenewLoop  bool
 	wakePollInterval       time.Duration
+	targetedWakeTimeout    time.Duration
 	notifyDelay            time.Duration
 	disableWakeScheduler   bool
 	wakeSchedulerState     *wakeSchedulerState
@@ -304,6 +306,7 @@ func newService(opts Options) *Service {
 		leaseRenewInterval:    opts.LeaseRenewInterval,
 		disableLeaseRenewLoop: opts.DisableLeaseRenewLoop,
 		wakePollInterval:      opts.WakePollInterval,
+		targetedWakeTimeout:   defaultTargetedWakeTimeout,
 		notifyDelay:           opts.NotifyDelay,
 		disableWakeScheduler:  opts.DisableWakeScheduler,
 		configuredStateDir:    opts.StateDir,
