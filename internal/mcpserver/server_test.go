@@ -5872,6 +5872,7 @@ func TestServerInstructionsScopeStatusGateToWaypostTools(t *testing.T) {
 		"This server automatically renews leases for personal deliveries claimed by waypost_recv until it stops or restarts",
 		"Waypost is for durable asynchronous work, not real-time communication.",
 		"<executable> doc\n",
+		"<executable> doc <topic>...\n",
 		"Use the reported executable and resolved_state_dir for stateful CLI commands; never guess either.",
 	} {
 		if !strings.Contains(serverInstructions, want) {

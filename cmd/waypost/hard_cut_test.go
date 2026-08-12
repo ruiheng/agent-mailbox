@@ -250,6 +250,29 @@ func TestCLIJSONErrorsAndEmbeddedDocs(t *testing.T) {
 			}
 		})
 	}
+
+	multiple := runCLI(t, "", "doc", "recovery", "diagnostics")
+	if multiple.exitCode != 0 || multiple.stderr != "" {
+		t.Fatalf("doc multiple topics result = %+v, want combined prompt on stdout", multiple)
+	}
+	for _, required := range []string{
+		"waypost: recovery\n  # Recover persisted input\n",
+		"\n\nwaypost: diagnostics\n  # Diagnose an address\n",
+		"  ## Required context\n",
+		"  ## Stop\n",
+	} {
+		if !strings.Contains(multiple.stdout, required) {
+			t.Fatalf("doc multiple topics = %q, missing %q", multiple.stdout, required)
+		}
+	}
+	if strings.Index(multiple.stdout, "waypost: recovery") > strings.Index(multiple.stdout, "waypost: diagnostics") {
+		t.Fatalf("doc multiple topics = %q, topics are not in requested order", multiple.stdout)
+	}
+
+	unknownMultiple := runCLI(t, "", "doc", "recovery", "missing", "diagnostics")
+	if unknownMultiple.exitCode != 1 || unknownMultiple.stdout != "" || !strings.Contains(unknownMultiple.stderr, `unknown doc topic "missing"`) {
+		t.Fatalf("doc multiple topics with unknown topic result = %+v, want atomic failure", unknownMultiple)
+	}
 }
 
 func TestCLIReceiveRecoveryErrorWritesStructuredJSON(t *testing.T) {

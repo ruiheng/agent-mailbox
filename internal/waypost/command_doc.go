@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"sort"
+	"strings"
 )
 
 const cliDocOverview = `# Waypost workflow
@@ -20,7 +21,7 @@ Use when: you need to exchange durable messages or inspect or change Waypost sta
 1. Use MCP for the common live flow: waypost_send, waypost_recv, waypost_claim_history, waypost_ack, waypost_release, and waypost_defer.
 2. After a personal recv, settle its lease exactly once: ack after success; release for immediate retry without recording failure; defer until a known time; or CLI fail for a processing failure that increments attempts and may dead-letter.
 3. Use CLI --json for wait, list, read, forward, fail, undefer, group, and address inspection. A successful CLI forward is durable-only; it does not guarantee notification or wakeup.
-4. Run WAYPOST doc --list, then WAYPOST doc TOPIC when a task needs specific recovery, history, group, or diagnostic guidance.
+4. Run WAYPOST doc --list, then WAYPOST doc TOPIC... when a task needs specific recovery, history, group, or diagnostic guidance.
 
 ## Interpret
 - CLI success: exit 0 and one JSON document on stdout.
@@ -158,7 +159,7 @@ func (a *App) runDocCommand(args []string) error {
 	remaining := fs.Args()
 	if list {
 		if len(remaining) != 0 {
-			return errors.New("doc --list does not accept a topic")
+			return errors.New("doc --list does not accept topics")
 		}
 		return a.writeDocTopics()
 	}
@@ -166,15 +167,41 @@ func (a *App) runDocCommand(args []string) error {
 		_, err := fmt.Fprint(a.stdout, cliDocOverview)
 		return err
 	}
-	if len(remaining) != 1 {
-		return errors.New("doc accepts exactly one topic")
+	if len(remaining) == 1 {
+		topic, ok := cliDocTopics[remaining[0]]
+		if !ok {
+			return fmt.Errorf("unknown doc topic %q", remaining[0])
+		}
+		_, err := fmt.Fprint(a.stdout, topic)
+		return err
 	}
-	topic, ok := cliDocTopics[remaining[0]]
-	if !ok {
-		return fmt.Errorf("unknown doc topic %q", remaining[0])
+
+	output, err := formatDocTopicBlocks(remaining)
+	if err != nil {
+		return err
 	}
-	_, err := fmt.Fprint(a.stdout, topic)
+	_, err = fmt.Fprint(a.stdout, output)
 	return err
+}
+
+func formatDocTopicBlocks(topics []string) (string, error) {
+	var output strings.Builder
+	for index, topicName := range topics {
+		topic, ok := cliDocTopics[topicName]
+		if !ok {
+			return "", fmt.Errorf("unknown doc topic %q", topicName)
+		}
+		if index > 0 {
+			output.WriteString("\n\n")
+		}
+		fmt.Fprintf(&output, "waypost: %s\n", topicName)
+		for _, line := range strings.Split(strings.TrimSuffix(topic, "\n"), "\n") {
+			output.WriteString("  ")
+			output.WriteString(line)
+			output.WriteByte('\n')
+		}
+	}
+	return output.String(), nil
 }
 
 func (a *App) writeDocTopics() error {
@@ -196,6 +223,6 @@ func (a *App) writeDocHelp() {
 		"Usage:",
 		"  waypost doc",
 		"  waypost doc --list",
-		"  waypost doc TOPIC",
+		"  waypost doc TOPIC...",
 	})
 }

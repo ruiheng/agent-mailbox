@@ -331,7 +331,7 @@ Show concise workflow guidance for agent CLI operations.
 ```bash
 waypost doc
 waypost doc --list
-waypost doc <topic>
+waypost doc <topic>...
 ```
 
 `waypost doc` prints the overall agent workflow: MCP/CLI routing, personal lease
@@ -339,6 +339,9 @@ settlement, structured error handling, and stop conditions. Use it after
 `waypost_status` reports the authoritative executable and state directory for
 an MCP process. `--list` shows the available focused topics; initial topics are
 `mcp-cli-boundary`, `recovery`, `history`, `groups`, and `diagnostics`.
+One topic retains the plain prompt output. With multiple topics, each prompt is
+emitted in argument order as a `waypost: <topic>` block whose body is indented
+by two spaces.
 
 ### `send`
 

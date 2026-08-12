@@ -228,7 +228,7 @@ Waypost is for durable asynchronous work, not real-time communication. MCP
 covers common operations. For complete Waypost guidance:
   <executable> doc
   <executable> doc --list
-  <executable> doc <topic>
+  <executable> doc <topic>...
 Use the reported executable and resolved_state_dir for stateful CLI commands;
 never guess either.
 ```
@@ -501,7 +501,7 @@ Add:
 ```text
 waypost doc
 waypost doc --list
-waypost doc <topic>
+waypost doc <topic>...
 ```
 
 Initial topics:
@@ -595,8 +595,8 @@ Automated checks cover:
 - send, recv, claim history, and `ack`/`release`/`defer` through MCP
 - Agent Deck resolve/create/require behavior remains unchanged
 - Agent Deck resolve/create/require can run before `waypost_status`
-- MCP server instructions identify `waypost doc --list` and the per-topic
-  `waypost doc TOPIC` form as the complete CLI guidance entry points and require
+- MCP server instructions identify `waypost doc --list` and the one-or-more-topic
+  `waypost doc TOPIC...` form as the complete CLI guidance entry points and require
   the binary and state directory reported by `waypost_status`
 - one end-to-end replacement test calls `waypost_status`, invokes its reported
   executable with its reported state directory, and completes a removed
