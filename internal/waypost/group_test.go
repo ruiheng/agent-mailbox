@@ -1638,6 +1638,9 @@ func TestGroupListWaitAndRecvPreserveForwardedFromAddress(t *testing.T) {
 	if received.ForwardedFromAddress == nil || *received.ForwardedFromAddress != "agent/sender" {
 		t.Fatalf("received forwarded_from_address = %v, want agent/sender", received.ForwardedFromAddress)
 	}
+	if received.SenderAddress == nil || *received.SenderAddress != "agent/sender" {
+		t.Fatalf("received sender_address = %v, want agent/sender", received.SenderAddress)
+	}
 }
 
 func TestGroupHistoryVisibilityJoinLeaveRejoinAndStableCounts(t *testing.T) {

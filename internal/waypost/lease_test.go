@@ -28,6 +28,9 @@ func TestReceiveReclaimsExpiredLeaseAndRejectsStaleToken(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Receive(first) error = %v", err)
 	}
+	if first.SenderAddress == nil || *first.SenderAddress != "agent/sender" {
+		t.Fatalf("Receive(first) sender_address = %v, want agent/sender", first.SenderAddress)
+	}
 	if first.DeliveryID != sent.DeliveryID {
 		t.Fatalf("Receive(first) delivery id = %q, want %q", first.DeliveryID, sent.DeliveryID)
 	}

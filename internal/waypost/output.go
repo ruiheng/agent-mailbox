@@ -254,6 +254,9 @@ func (a *App) writeReceivedMessageText(message ReceivedMessageCompact) error {
 	if message.ForwardedFromAddress != nil {
 		header += fmt.Sprintf(" forwarded_from_address=%s", *message.ForwardedFromAddress)
 	}
+	if message.SenderAddress != nil {
+		header += fmt.Sprintf(" sender_address=%s", *message.SenderAddress)
+	}
 	if _, err := fmt.Fprintln(a.stdout, header); err != nil {
 		return err
 	}
@@ -280,6 +283,9 @@ func (a *App) writeReceivedMessageFullText(message ReceivedMessage) error {
 	)
 	if message.ForwardedFromAddress != nil {
 		header += fmt.Sprintf(" forwarded_from_address=%s", *message.ForwardedFromAddress)
+	}
+	if message.SenderAddress != nil {
+		header += fmt.Sprintf(" sender_address=%s", *message.SenderAddress)
 	}
 	if _, err := fmt.Fprintln(a.stdout, header); err != nil {
 		return err
@@ -309,6 +315,9 @@ func (a *App) writeGroupReceivedMessageText(message GroupReceivedMessageCompact)
 	)
 	if message.ForwardedFromAddress != nil {
 		header += fmt.Sprintf(" forwarded_from_address=%s", *message.ForwardedFromAddress)
+	}
+	if message.SenderAddress != nil {
+		header += fmt.Sprintf(" sender_address=%s", *message.SenderAddress)
 	}
 	if _, err := fmt.Fprintln(a.stdout, header); err != nil {
 		return err

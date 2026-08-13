@@ -45,6 +45,7 @@ type personalDeliveryRecord struct {
 	RecipientAddress     string
 	RecipientEndpointID  string
 	SenderEndpointID     sql.NullString
+	SenderAddress        sql.NullString
 	State                string
 	VisibleAt            string
 	AckedAt              sql.NullString
@@ -74,6 +75,7 @@ type groupMessageRecord struct {
 	ForwardedMessageID   sql.NullString
 	ForwardedFromAddress sql.NullString
 	SenderEndpointID     sql.NullString
+	SenderAddress        sql.NullString
 	MessageCreatedAt     string
 	Subject              string
 	ContentType          string
@@ -242,6 +244,13 @@ SELECT
 	  m.forwarded_from_address,
 	  d.recipient_endpoint_id,
 	  m.sender_endpoint_id,
+	  (
+	    SELECT sender_ea.address
+	    FROM endpoint_addresses AS sender_ea
+	    WHERE sender_ea.endpoint_id = m.sender_endpoint_id
+	    ORDER BY sender_ea.created_at ASC, sender_ea.address ASC
+	    LIMIT 1
+	  ) AS sender_address,
   d.state,
   d.visible_at,
   d.attempt_count,
@@ -265,6 +274,7 @@ LIMIT 1
 		&record.ForwardedFromAddress,
 		&record.RecipientEndpointID,
 		&record.SenderEndpointID,
+		&record.SenderAddress,
 		&record.State,
 		&record.VisibleAt,
 		&record.AttemptCount,
@@ -545,6 +555,13 @@ SELECT
   m.forwarded_message_id,
   m.forwarded_from_address,
   m.sender_endpoint_id,
+  (
+    SELECT sender_ea.address
+    FROM endpoint_addresses AS sender_ea
+    WHERE sender_ea.endpoint_id = m.sender_endpoint_id
+    ORDER BY sender_ea.created_at ASC, sender_ea.address ASC
+    LIMIT 1
+  ) AS sender_address,
   gm.created_at,
   m.subject,
   m.content_type,
@@ -613,6 +630,7 @@ LIMIT ?
 			&record.ForwardedMessageID,
 			&record.ForwardedFromAddress,
 			&record.SenderEndpointID,
+			&record.SenderAddress,
 			&record.MessageCreatedAt,
 			&record.Subject,
 			&record.ContentType,
