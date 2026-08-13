@@ -145,7 +145,7 @@ func TestWaypostRecvSchemaOmitsTimeout(t *testing.T) {
 	}
 }
 
-func TestActiveLeaseHintIsPaginatedWithoutLosingTotal(t *testing.T) {
+func TestActiveLeaseHintIsPaginatedWithoutLosingTotalOrAddressOrder(t *testing.T) {
 	service := newService(Options{
 		WaypostServiceFactory: fakeWaypostServiceFactory{service: &fakeWaypostService{t: t}},
 		CommandRunner:         &fakeRunner{t: t},
@@ -156,22 +156,26 @@ func TestActiveLeaseHintIsPaginatedWithoutLosingTotal(t *testing.T) {
 	service.state.autoBindAttempted = true
 	messages := make([]waypost.ReceivedMessage, 0, waypost.MaxPageSize+1)
 	for index := 0; index < waypost.MaxPageSize+1; index++ {
+		recipient := "agent-deck/one"
+		if index%2 == 1 {
+			recipient = "agent-deck/two"
+		}
 		messages = append(messages, waypost.ReceivedMessage{
 			DeliveryID:       fmt.Sprintf("dlv_%03d", index),
 			LeaseToken:       fmt.Sprintf("lease_%03d", index),
-			RecipientAddress: "agent-deck/self",
+			RecipientAddress: recipient,
 		})
 	}
 	service.activeLeases.trackReceive(waypost.ReceiveResult{Messages: messages}, time.Now().UTC().Format(time.RFC3339Nano))
 
-	first, err := service.activeLeaseHintPage([]string{"agent-deck/self"}, nil, "")
+	first, err := service.activeLeaseHintPage([]string{"agent-deck/one", "agent-deck/two"}, nil, "")
 	if err != nil {
 		t.Fatalf("activeLeaseHintPage(first) error = %v", err)
 	}
 	if first.Total != waypost.MaxPageSize+1 || len(first.DeliveryIDs) != waypost.MaxPageSize || first.NextCursor == "" {
 		t.Fatalf("activeLeaseHintPage(first) = %+v", first)
 	}
-	second, err := service.activeLeaseHintPage([]string{"agent-deck/self"}, nil, first.NextCursor)
+	second, err := service.activeLeaseHintPage([]string{"agent-deck/two", "agent-deck/one"}, nil, first.NextCursor)
 	if err != nil {
 		t.Fatalf("activeLeaseHintPage(second) error = %v", err)
 	}

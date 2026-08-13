@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strings"
 	"syscall"
 	"time"
@@ -1296,7 +1297,9 @@ func (s *Store) ReadLatestDeliveriesPage(ctx context.Context, params ReadLatestP
 	if state == "acked" {
 		orderKind = "acked"
 	}
-	scopeKey := cursorScope(strings.Join(addresses, "\x00"), state, senderAddress, orderKind)
+	scopeAddresses := append([]string(nil), addresses...)
+	sort.Strings(scopeAddresses)
+	scopeKey := cursorScope(strings.Join(scopeAddresses, "\x00"), state, senderAddress, orderKind)
 	cursorKeyCount := 2
 	if orderKind != "created" {
 		cursorKeyCount = 3

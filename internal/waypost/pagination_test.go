@@ -97,6 +97,42 @@ func TestLatestStatePageUsesVisibilityOrderAndCursor(t *testing.T) {
 	}
 }
 
+func TestLatestPageCursorTreatsAddressesAsAnUnorderedUnion(t *testing.T) {
+	t.Parallel()
+
+	runtime, store := newLeaseTestStore(t)
+	defer runtime.Close()
+
+	current := time.Date(2026, 8, 13, 12, 0, 0, 0, time.UTC)
+	store.now = func() time.Time { return current }
+	older := mustSendMessage(t, store, "workflow/union-a", "agent/sender", "older", "older body")
+	current = current.Add(time.Second)
+	newer := mustSendMessage(t, store, "workflow/union-b", "agent/sender", "newer", "newer body")
+
+	first, err := store.ReadLatestDeliveriesPage(context.Background(), ReadLatestParams{
+		Addresses: []string{"workflow/union-a", "workflow/union-b"},
+		Limit:     1,
+	})
+	if err != nil {
+		t.Fatalf("ReadLatestDeliveriesPage(first) error = %v", err)
+	}
+	if len(first.Items) != 1 || first.Items[0].DeliveryID != newer.DeliveryID || first.NextCursor == "" {
+		t.Fatalf("ReadLatestDeliveriesPage(first) = %+v, want newer delivery and cursor", first)
+	}
+
+	second, err := store.ReadLatestDeliveriesPage(context.Background(), ReadLatestParams{
+		Addresses: []string{"workflow/union-b", "workflow/union-a"},
+		Limit:     1,
+		Cursor:    first.NextCursor,
+	})
+	if err != nil {
+		t.Fatalf("ReadLatestDeliveriesPage(reordered) error = %v", err)
+	}
+	if len(second.Items) != 1 || second.Items[0].DeliveryID != older.DeliveryID || second.NextCursor != "" {
+		t.Fatalf("ReadLatestDeliveriesPage(reordered) = %+v, want older delivery and no cursor", second)
+	}
+}
+
 func TestPaginationRejectsOversizedPagesAndInputs(t *testing.T) {
 	t.Parallel()
 

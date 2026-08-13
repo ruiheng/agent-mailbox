@@ -630,7 +630,9 @@ func (s *Service) activeLeaseHintPage(addresses []string, knownDeliveryIDs []str
 		addressSet[address] = struct{}{}
 	}
 	knownSet := knownDeliveryIDSet(knownDeliveryIDs)
-	scope := memoryCursorScope("active-lease-hint", strings.Join(addresses, "\x00"), strings.Join(normalizedKnownDeliveryIDs(knownDeliveryIDs), "\x00"))
+	scopeAddresses := append([]string(nil), addresses...)
+	sort.Strings(scopeAddresses)
+	scope := memoryCursorScope("active-lease-hint", strings.Join(scopeAddresses, "\x00"), strings.Join(normalizedKnownDeliveryIDs(knownDeliveryIDs), "\x00"))
 	limit := waypost.MaxPageSize
 	_, after, err := normalizeMemoryPage(&limit, rawCursor, "active-lease-hint", scope)
 	if err != nil {
