@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -57,7 +58,7 @@ func TestGroupsEndpointListsGroups(t *testing.T) {
 
 	var payload struct {
 		DefaultGroup string                `json:"default_group"`
-		Groups       []waypost.GroupRecord `json:"groups"`
+		Groups       []waypost.GroupRecord `json:"items"`
 	}
 	if err := json.NewDecoder(response.Body).Decode(&payload); err != nil {
 		t.Fatalf("Decode(groups) error = %v", err)
@@ -67,6 +68,130 @@ func TestGroupsEndpointListsGroups(t *testing.T) {
 	}
 	if len(payload.Groups) != 1 || payload.Groups[0].Address != "group/web" {
 		t.Fatalf("groups = %+v, want group/web", payload.Groups)
+	}
+}
+
+func TestTranscriptHTMLKeepsHistoryBeforeLiveMessages(t *testing.T) {
+	t.Parallel()
+
+	history := strings.Index(indexHTML, `id="history-messages"`)
+	more := strings.Index(indexHTML, `id="more-messages"`)
+	live := strings.Index(indexHTML, `id="live-messages"`)
+	if history < 0 || more < 0 || live < 0 || !(history < more && more < live) {
+		t.Fatalf("transcript containers are not ordered history, more, live")
+	}
+	if !strings.Contains(indexHTML, "appendMessage(message, historyMessagesEl, false)") {
+		t.Fatal("history pages are not appended to the history container")
+	}
+	if !strings.Contains(indexHTML, "appendMessage(message, liveMessagesEl, true)") {
+		t.Fatal("SSE messages are not appended to the live container")
+	}
+}
+
+func TestLoadingMoreGroupsDoesNotResetTranscript(t *testing.T) {
+	t.Parallel()
+
+	start := strings.Index(indexHTML, "async function loadGroups(cursor)")
+	if start < 0 {
+		t.Fatal("loadGroups function not found")
+	}
+	end := strings.Index(indexHTML[start:], "function renderGroups(groups)")
+	if end < 0 {
+		t.Fatal("renderGroups function not found")
+	}
+	functionBody := indexHTML[start : start+end]
+	if !strings.Contains(functionBody, "if (initialLoad) {") {
+		t.Fatal("loadGroups does not isolate transcript initialization to the first page")
+	}
+	if strings.Contains(functionBody, "if (initialLoad && selectedGroup)") {
+		t.Fatal("loadGroups still sends subsequent pages through the empty-state branch")
+	}
+	if strings.Index(functionBody, "if (initialLoad) {") > strings.Index(functionBody, "await loadTranscript(selectedGroup)") {
+		t.Fatal("loadTranscript is not guarded by initialLoad")
+	}
+	for _, fragment := range []string{
+		"if (groupsPageLoading) return",
+		"groupsPageLoading = true",
+		"moreGroupsEl.disabled = true",
+		"groupsPageLoading = false",
+		"moreGroupsEl.disabled = false",
+	} {
+		if !strings.Contains(functionBody, fragment) {
+			t.Fatalf("group pagination request guard missing %q", fragment)
+		}
+	}
+}
+
+func TestTranscriptRequestsDiscardStaleGroupResponses(t *testing.T) {
+	t.Parallel()
+
+	for _, fragment := range []string{
+		"const generation = ++transcriptGeneration",
+		"cancelTranscriptRequests()",
+		"const group = selectedGroup",
+		"const generation = transcriptGeneration",
+		"if (!isCurrentTranscript(group, generation)) return",
+		"{signal: controller.signal}",
+		"source !== eventSource || !isCurrentTranscript(group, generation)",
+	} {
+		if !strings.Contains(indexHTML, fragment) {
+			t.Fatalf("transcript stale-response guard missing %q", fragment)
+		}
+	}
+}
+
+func TestGroupsEndpointEnforcesPageLimit(t *testing.T) {
+	t.Parallel()
+
+	stateDir := filepath.Join(t.TempDir(), "waypost-state")
+	runtime, err := waypost.OpenRuntime(context.Background(), stateDir)
+	if err != nil {
+		t.Fatalf("OpenRuntime() error = %v", err)
+	}
+	for _, address := range []string{"group/a", "group/b"} {
+		if _, err := runtime.Store().CreateGroup(context.Background(), address); err != nil {
+			t.Fatalf("CreateGroup(%q) error = %v", address, err)
+		}
+	}
+	runtime.Close()
+
+	handler := NewServer(stateDir, "")
+	defer handler.Close()
+	server := httptest.NewServer(handler)
+	defer server.Close()
+
+	response, err := http.Get(server.URL + "/api/groups?limit=1")
+	if err != nil {
+		t.Fatalf("GET /api/groups error = %v", err)
+	}
+	defer response.Body.Close()
+	var page struct {
+		Items      []waypost.GroupRecord `json:"items"`
+		NextCursor string                `json:"next_cursor"`
+	}
+	if err := json.NewDecoder(response.Body).Decode(&page); err != nil {
+		t.Fatalf("Decode(groups page) error = %v", err)
+	}
+	if len(page.Items) != 1 || page.NextCursor == "" {
+		t.Fatalf("groups page = %+v, want one item and cursor", page)
+	}
+
+	tooLarge, err := http.Get(server.URL + "/api/groups?limit=101")
+	if err != nil {
+		t.Fatalf("GET /api/groups?limit=101 error = %v", err)
+	}
+	defer tooLarge.Body.Close()
+	if tooLarge.StatusCode != http.StatusBadRequest {
+		t.Fatalf("limit=101 status = %d, want 400", tooLarge.StatusCode)
+	}
+
+	zero, err := http.Get(server.URL + "/api/groups?limit=0")
+	if err != nil {
+		t.Fatalf("GET /api/groups?limit=0 error = %v", err)
+	}
+	defer zero.Body.Close()
+	if zero.StatusCode != http.StatusBadRequest {
+		t.Fatalf("limit=0 status = %d, want 400", zero.StatusCode)
 	}
 }
 
@@ -258,7 +383,7 @@ func TestTranscriptEndpointReturnsBodies(t *testing.T) {
 	}
 
 	var payload struct {
-		Messages []waypost.GroupTranscriptMessage `json:"messages"`
+		Messages []waypost.GroupTranscriptMessage `json:"items"`
 	}
 	if err := json.NewDecoder(response.Body).Decode(&payload); err != nil {
 		t.Fatalf("Decode(transcript) error = %v", err)
@@ -392,5 +517,99 @@ func TestEventsEndpointStreamsNewMessages(t *testing.T) {
 		case <-deadline:
 			t.Fatal("timed out waiting for streamed message")
 		}
+	}
+}
+
+func TestEventsEndpointReplaysBoundedHistoryForUnknownAfter(t *testing.T) {
+	t.Parallel()
+
+	stateDir := filepath.Join(t.TempDir(), "waypost-state")
+	runtime, err := waypost.OpenRuntime(context.Background(), stateDir)
+	if err != nil {
+		t.Fatalf("OpenRuntime() error = %v", err)
+	}
+	store := runtime.Store()
+	group, err := store.CreateGroup(context.Background(), "group/web-events-replay")
+	if err != nil {
+		t.Fatalf("CreateGroup() error = %v", err)
+	}
+	foreignGroup, err := store.CreateGroup(context.Background(), "group/web-events-foreign")
+	if err != nil {
+		t.Fatalf("CreateGroup(foreign) error = %v", err)
+	}
+	for index := 0; index < waypost.MaxPageSize+1; index++ {
+		_, err := store.Send(context.Background(), waypost.SendParams{
+			ToAddress:     group.Address,
+			FromAddress:   "agent/sse",
+			Subject:       fmt.Sprintf("history-%03d", index),
+			ContentType:   "text/plain",
+			SchemaVersion: "v1",
+			Body:          []byte(fmt.Sprintf("history-body-%03d", index)),
+			Group:         true,
+		})
+		if err != nil {
+			t.Fatalf("Send(history %d) error = %v", index, err)
+		}
+	}
+	lastMessageID, err := store.LatestGroupMessageID(context.Background(), group.Address)
+	if err != nil {
+		t.Fatalf("LatestGroupMessageID() error = %v", err)
+	}
+	foreign, err := store.Send(context.Background(), waypost.SendParams{
+		ToAddress:     foreignGroup.Address,
+		FromAddress:   "agent/sse",
+		Subject:       "foreign",
+		ContentType:   "text/plain",
+		SchemaVersion: "v1",
+		Body:          []byte("foreign-body"),
+		Group:         true,
+	})
+	if err != nil {
+		t.Fatalf("Send(foreign) error = %v", err)
+	}
+	runtime.Close()
+
+	handler := NewServer(stateDir, "")
+	defer handler.Close()
+	server := httptest.NewServer(handler)
+	defer server.Close()
+
+	for _, after := range []string{"mistyped-message-id", foreign.MessageID} {
+		t.Run(after, func(t *testing.T) {
+			requestURL := server.URL + "/api/groups/" + url.PathEscape(group.Address) + "/events?after=" + url.QueryEscape(after)
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			request, err := http.NewRequestWithContext(ctx, http.MethodGet, requestURL, nil)
+			if err != nil {
+				t.Fatalf("NewRequest(events) error = %v", err)
+			}
+			response, err := http.DefaultClient.Do(request)
+			if err != nil {
+				t.Fatalf("GET events error = %v", err)
+			}
+			defer response.Body.Close()
+			if response.StatusCode != http.StatusOK {
+				t.Fatalf("status = %d, want 200", response.StatusCode)
+			}
+
+			scanner := bufio.NewScanner(response.Body)
+			deadline := time.After(3 * time.Second)
+			lines := make(chan string, 16)
+			go func() {
+				for scanner.Scan() {
+					lines <- scanner.Text()
+				}
+			}()
+			for {
+				select {
+				case line := <-lines:
+					if strings.HasPrefix(line, "data: ") && strings.Contains(line, lastMessageID) {
+						return
+					}
+				case <-deadline:
+					t.Fatalf("timed out waiting for history replay after %q", after)
+				}
+			}
+		})
 	}
 }

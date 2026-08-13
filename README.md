@@ -548,6 +548,25 @@ waypost --state-dir /tmp/waypost-demo \
   read --latest --for workflow/reviewer/task-123 --json
 ```
 
+Filter personal history by sender with `--from`; the same filter works for
+group history visible to a person:
+
+```bash
+waypost --state-dir /tmp/waypost-demo \
+  read --latest --for workflow/reviewer/task-123 --from agent/sender --json
+waypost --state-dir /tmp/waypost-demo \
+  list --for group/eng --as alice --from agent/sender --json
+```
+
+Sender filtering matches the current sender or forwarder. Forwarded messages
+report the original source separately in `forwarded_from_address`.
+
+All potentially unbounded list surfaces are cursor-paginated. `list`,
+`read --latest`, `group list`, `group members`, and `group subscribers` accept
+`--limit` and `--cursor`; the default page is 50 items and the hard maximum is
+100. Structured results use `items` plus optional `next_cursor`. Reuse a cursor
+only with the exact same query scope and filters.
+
 For the full command reference, see [`docs/cli.md`](docs/cli.md).
 
 `recv` v1 contract for multiple `--for` flags:
@@ -556,8 +575,8 @@ For the full command reference, see [`docs/cli.md`](docs/cli.md).
 - `--max` limits how many deliveries one command will claim, up to `10`
 - default output returns a compact leased message view
 - `--full` returns the full legacy leased-message payload
-- when `--max` is provided, structured output returns `messages` plus `has_more`
-- when `has_more=true`, additional claimable deliveries still remain after this batch
+- when `--max` is provided, structured output returns `messages` plus sparse
+  `remaining_by_state`; receive output does not use pagination cursors
 - unseen addresses behave like empty queues
 - selection is deterministic global oldest-first by `visible_at`, then
   `message_created_at`, then `delivery_id`

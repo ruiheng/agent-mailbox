@@ -3,6 +3,7 @@ package waypost
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 )
@@ -246,6 +247,39 @@ func TestListStaleAddressesReturnsStaleGroupViewUsingUnreadVisibility(t *testing
 
 	if duringMembership.MessageCreatedAt <= stale[0].OldestEligibleAt {
 		t.Fatalf("during-membership timestamp = %q, want newer than %q", duringMembership.MessageCreatedAt, stale[0].OldestEligibleAt)
+	}
+}
+
+func TestListStaleAddressesCountsAllUnreadGroupMessagesBeyondPageSize(t *testing.T) {
+	t.Parallel()
+
+	runtime, store := newLeaseTestStore(t)
+	defer runtime.Close()
+
+	current := time.Date(2026, 8, 13, 10, 0, 0, 0, time.UTC)
+	store.now = func() time.Time { return current }
+	group, err := store.CreateGroup(context.Background(), "group/stale-many")
+	if err != nil {
+		t.Fatalf("CreateGroup() error = %v", err)
+	}
+	if _, err := store.AddGroupMember(context.Background(), group.Address, "reader"); err != nil {
+		t.Fatalf("AddGroupMember() error = %v", err)
+	}
+	for index := 0; index < DefaultPageSize+1; index++ {
+		mustSendGroupMessage(t, store, group.Address, "agent/sender", fmt.Sprintf("message-%d", index), "body")
+		current = current.Add(time.Second)
+	}
+	current = current.Add(time.Hour)
+
+	stale, err := store.ListStaleAddresses(context.Background(), StaleAddressesParams{
+		GroupViews: []GroupStaleView{{Address: group.Address, Person: "reader"}},
+		OlderThan:  time.Minute,
+	})
+	if err != nil {
+		t.Fatalf("ListStaleAddresses() error = %v", err)
+	}
+	if len(stale) != 1 || stale[0].ClaimableCount != DefaultPageSize+1 {
+		t.Fatalf("ListStaleAddresses() = %+v, want full unread count %d", stale, DefaultPageSize+1)
 	}
 }
 

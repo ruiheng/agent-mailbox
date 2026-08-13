@@ -84,17 +84,34 @@ const (
 )
 
 type ListParams struct {
-	Address string
-	State   string
+	Address     string
+	FromAddress string
+	State       string
+	Limit       int
+	Cursor      string
 }
 
 type GroupListParams struct {
-	Address string
-	Person  string
+	Address     string
+	Person      string
+	FromAddress string
+	Limit       int
+	Cursor      string
+}
+
+type ReadLatestParams struct {
+	Addresses   []string
+	FromAddress string
+	State       string
+	Limit       int
+	Cursor      string
 }
 
 type GroupTranscriptParams struct {
-	Address string
+	Address        string
+	AfterMessageID string
+	Limit          int
+	Cursor         string
 }
 
 type ListedDelivery struct {
@@ -105,6 +122,7 @@ type ListedDelivery struct {
 	RecipientAddress     string  `json:"recipient_address"`
 	RecipientEndpointID  string  `json:"recipient_endpoint_id"`
 	SenderEndpointID     *string `json:"sender_endpoint_id,omitempty"`
+	SenderAddress        *string `json:"sender_address,omitempty"`
 	State                string  `json:"state"`
 	VisibleAt            string  `json:"visible_at"`
 	AckedAt              *string `json:"acked_at,omitempty"`
@@ -125,7 +143,7 @@ type ReadDelivery struct {
 	RecipientAddress     string  `json:"recipient_address"`
 	RecipientEndpointID  string  `json:"recipient_endpoint_id"`
 	SenderEndpointID     *string `json:"sender_endpoint_id,omitempty"`
-	SenderAddress        *string `json:"-"`
+	SenderAddress        *string `json:"sender_address,omitempty"`
 	State                string  `json:"state"`
 	VisibleAt            string  `json:"visible_at"`
 	AckedAt              *string `json:"acked_at,omitempty"`
@@ -144,7 +162,7 @@ type ReadMessage struct {
 	ForwardedMessageID   *string `json:"-"`
 	ForwardedFromAddress *string `json:"forwarded_from_address,omitempty"`
 	SenderEndpointID     *string `json:"sender_endpoint_id,omitempty"`
-	SenderAddress        *string `json:"-"`
+	SenderAddress        *string `json:"sender_address,omitempty"`
 	MessageCreatedAt     string  `json:"message_created_at"`
 	Subject              string  `json:"subject"`
 	ContentType          string  `json:"content_type"`
@@ -163,6 +181,7 @@ type GroupListedMessage struct {
 	GroupAddress         string  `json:"group_address"`
 	Person               string  `json:"person"`
 	SenderEndpointID     *string `json:"sender_endpoint_id,omitempty"`
+	SenderAddress        *string `json:"sender_address,omitempty"`
 	MessageCreatedAt     string  `json:"message_created_at"`
 	Subject              string  `json:"subject"`
 	ContentType          string  `json:"content_type"`
@@ -980,20 +999,65 @@ func fromAddressOrNil(fromAddress string) any {
 }
 
 func (s *Store) List(ctx context.Context, params ListParams) ([]ListedDelivery, error) {
+	if params.Limit == 0 {
+		params.Limit = MaxPageSize
+	}
+	page, err := s.ListPage(ctx, params)
+	if err != nil {
+		return nil, err
+	}
+	return completeCompatibilityPage(page, "List")
+}
+
+func (s *Store) ListPage(ctx context.Context, params ListParams) (Page[ListedDelivery], error) {
+	pageParams, err := normalizePageParams(PageParams{Limit: params.Limit, Cursor: params.Cursor})
+	if err != nil {
+		return Page[ListedDelivery]{}, err
+	}
 	rawAddress := params.Address
 	address, err := NormalizeAddress(rawAddress)
 	if err != nil {
 		if strings.TrimSpace(rawAddress) == "" {
-			return nil, errors.New("recipient address is required")
+			return Page[ListedDelivery]{}, errors.New("recipient address is required")
 		}
-		return nil, err
+		return Page[ListedDelivery]{}, err
+	}
+	state := strings.TrimSpace(params.State)
+	senderAddress, err := normalizeSenderAddress(params.FromAddress)
+	if err != nil {
+		return Page[ListedDelivery]{}, err
+	}
+	scopeKey := cursorScope(address, state, senderAddress, "created")
+	cursorKeys, err := decodePageCursor(pageParams.Cursor, "personal-list", scopeKey, 2)
+	if err != nil {
+		return Page[ListedDelivery]{}, err
 	}
 
 	scope, err := s.resolvePersonal(ctx, s.readDB, []string{address})
 	if err != nil {
-		return nil, err
+		return Page[ListedDelivery]{}, err
 	}
-	return s.listPersonalDeliveries(ctx, s.readDB, scope, strings.TrimSpace(params.State), formatTimestamp(s.now()))
+	senderEndpointID, found, err := s.resolveSenderEndpointID(ctx, s.readDB, senderAddress)
+	if err != nil {
+		return Page[ListedDelivery]{}, err
+	}
+	if senderAddress != "" && !found {
+		return Page[ListedDelivery]{Items: []ListedDelivery{}}, nil
+	}
+	deliveries, err := s.listPersonalDeliveriesPage(ctx, s.readDB, scope, state, formatTimestamp(s.now()), senderEndpointID, cursorKeys, pageParams.Limit+1, true)
+	if err != nil {
+		return Page[ListedDelivery]{}, err
+	}
+	page := Page[ListedDelivery]{Items: deliveries}
+	if len(deliveries) > pageParams.Limit {
+		page.Items = deliveries[:pageParams.Limit]
+		last := page.Items[len(page.Items)-1]
+		page.NextCursor, err = encodePageCursor("personal-list", scopeKey, last.MessageCreatedAt, last.DeliveryID)
+		if err != nil {
+			return Page[ListedDelivery]{}, err
+		}
+	}
+	return page, nil
 }
 
 func (s *Store) ReadDelivery(ctx context.Context, deliveryID string) (ReadDelivery, error) {
@@ -1165,6 +1229,9 @@ WHERE m.message_id = ?
 }
 
 func (s *Store) ReadDeliveries(ctx context.Context, deliveryIDs []string) ([]ReadDelivery, error) {
+	if err := validateInputItemCount("delivery ids", len(deliveryIDs)); err != nil {
+		return nil, err
+	}
 	results := make([]ReadDelivery, 0, len(deliveryIDs))
 	for _, deliveryID := range deliveryIDs {
 		delivery, err := s.ReadDelivery(ctx, deliveryID)
@@ -1177,6 +1244,9 @@ func (s *Store) ReadDeliveries(ctx context.Context, deliveryIDs []string) ([]Rea
 }
 
 func (s *Store) ReadMessages(ctx context.Context, messageIDs []string) ([]ReadMessage, error) {
+	if err := validateInputItemCount("message ids", len(messageIDs)); err != nil {
+		return nil, err
+	}
 	results := make([]ReadMessage, 0, len(messageIDs))
 	for _, messageID := range messageIDs {
 		message, err := s.ReadMessage(ctx, messageID)
@@ -1189,45 +1259,106 @@ func (s *Store) ReadMessages(ctx context.Context, messageIDs []string) ([]ReadMe
 }
 
 func (s *Store) ReadLatestDeliveries(ctx context.Context, addresses []string, state string, limit int) ([]ReadDelivery, bool, error) {
-	addresses, err := NormalizeAddressList(addresses)
+	page, err := s.ReadLatestDeliveriesPage(ctx, ReadLatestParams{
+		Addresses: addresses,
+		State:     state,
+		Limit:     limit,
+	})
+	return page.Items, page.NextCursor != "", err
+}
+
+func (s *Store) ReadLatestDeliveriesFiltered(ctx context.Context, params ReadLatestParams) ([]ReadDelivery, bool, error) {
+	page, err := s.ReadLatestDeliveriesPage(ctx, params)
+	return page.Items, page.NextCursor != "", err
+}
+
+func (s *Store) ReadLatestDeliveriesPage(ctx context.Context, params ReadLatestParams) (Page[ReadDelivery], error) {
+	pageParams, err := normalizePageParams(PageParams{Limit: params.Limit, Cursor: params.Cursor})
 	if err != nil {
-		return nil, false, err
+		return Page[ReadDelivery]{}, err
+	}
+	if err := validateInputItemCount("addresses", len(params.Addresses)); err != nil {
+		return Page[ReadDelivery]{}, err
+	}
+	addresses, err := NormalizeAddressList(params.Addresses)
+	if err != nil {
+		return Page[ReadDelivery]{}, err
+	}
+	state := strings.TrimSpace(params.State)
+	senderAddress, err := normalizeSenderAddress(params.FromAddress)
+	if err != nil {
+		return Page[ReadDelivery]{}, err
+	}
+	orderKind := "created"
+	if state != "" {
+		orderKind = "visible"
+	}
+	if state == "acked" {
+		orderKind = "acked"
+	}
+	scopeKey := cursorScope(strings.Join(addresses, "\x00"), state, senderAddress, orderKind)
+	cursorKeyCount := 2
+	if orderKind != "created" {
+		cursorKeyCount = 3
+	}
+	cursorKeys, err := decodePageCursor(pageParams.Cursor, "latest-deliveries", scopeKey, cursorKeyCount)
+	if err != nil {
+		return Page[ReadDelivery]{}, err
 	}
 	if len(addresses) == 0 {
-		return []ReadDelivery{}, false, nil
+		return Page[ReadDelivery]{Items: []ReadDelivery{}}, nil
 	}
-	if limit <= 0 {
-		return nil, false, errors.New("limit must be greater than 0")
-	}
-	state = strings.TrimSpace(state)
 
 	scope, err := s.resolvePersonal(ctx, s.readDB, addresses)
 	if err != nil {
-		return nil, false, err
+		return Page[ReadDelivery]{}, err
+	}
+	senderEndpointID, found, err := s.resolveSenderEndpointID(ctx, s.readDB, senderAddress)
+	if err != nil {
+		return Page[ReadDelivery]{}, err
+	}
+	if senderAddress != "" && !found {
+		return Page[ReadDelivery]{Items: []ReadDelivery{}}, nil
 	}
 	if scope.empty() {
-		return []ReadDelivery{}, false, nil
+		return Page[ReadDelivery]{Items: []ReadDelivery{}}, nil
 	}
 
 	placeholders := strings.TrimSuffix(strings.Repeat("?,", len(scope.recipientEndpointIDs)), ",")
-	args := make([]any, 0, len(scope.recipientEndpointIDs)+2)
+	args := make([]any, 0, len(scope.recipientEndpointIDs)+10)
 	for _, recipientEndpointID := range scope.recipientEndpointIDs {
 		args = append(args, recipientEndpointID)
 	}
 
-	orderClause := "ORDER BY d.visible_at DESC, m.created_at DESC, d.delivery_id DESC"
-	if state == "acked" {
-		orderClause = "ORDER BY d.acked_at DESC, m.created_at DESC, d.delivery_id DESC"
-	} else if state == "" {
-		orderClause = "ORDER BY m.created_at DESC, d.delivery_id DESC"
-	}
-
 	whereClause := "WHERE d.recipient_endpoint_id IN (%s)"
+	if senderEndpointID != "" {
+		whereClause += "\n  AND m.sender_endpoint_id = ?"
+		args = append(args, senderEndpointID)
+	}
 	if state != "" {
 		whereClause += "\n  AND d.state = ?"
 		args = append(args, state)
 	}
-	args = append(args, limit+1)
+	if len(cursorKeys) > 0 {
+		switch orderKind {
+		case "created":
+			whereClause += "\n  AND (m.created_at < ? OR (m.created_at = ? AND d.delivery_id < ?))"
+			args = append(args, cursorKeys[0], cursorKeys[0], cursorKeys[1])
+		case "visible":
+			whereClause += "\n  AND (d.visible_at < ? OR (d.visible_at = ? AND m.created_at < ?) OR (d.visible_at = ? AND m.created_at = ? AND d.delivery_id < ?))"
+			args = append(args, cursorKeys[0], cursorKeys[0], cursorKeys[1], cursorKeys[0], cursorKeys[1], cursorKeys[2])
+		case "acked":
+			whereClause += "\n  AND (COALESCE(d.acked_at, d.visible_at) < ? OR (COALESCE(d.acked_at, d.visible_at) = ? AND m.created_at < ?) OR (COALESCE(d.acked_at, d.visible_at) = ? AND m.created_at = ? AND d.delivery_id < ?))"
+			args = append(args, cursorKeys[0], cursorKeys[0], cursorKeys[1], cursorKeys[0], cursorKeys[1], cursorKeys[2])
+		}
+	}
+	args = append(args, pageParams.Limit+1)
+	orderClause := "ORDER BY m.created_at DESC, d.delivery_id DESC"
+	if orderKind == "visible" {
+		orderClause = "ORDER BY d.visible_at DESC, m.created_at DESC, d.delivery_id DESC"
+	} else if orderKind == "acked" {
+		orderClause = "ORDER BY COALESCE(d.acked_at, d.visible_at) DESC, m.created_at DESC, d.delivery_id DESC"
+	}
 
 	rows, err := s.readDB.QueryContext(ctx, fmt.Sprintf(`
 SELECT
@@ -1264,15 +1395,15 @@ SELECT
 FROM deliveries AS d
 JOIN messages AS m ON m.message_id = d.message_id
 `+whereClause+`
-%s
+`+orderClause+`
 LIMIT ?
-`, placeholders, orderClause), args...)
+`, placeholders), args...)
 	if err != nil {
-		return nil, false, fmt.Errorf("load latest deliveries for state %q: %w", state, err)
+		return Page[ReadDelivery]{}, fmt.Errorf("load latest deliveries for state %q: %w", state, err)
 	}
 	defer rows.Close()
 
-	deliveries := make([]ReadDelivery, 0, limit+1)
+	deliveries := make([]ReadDelivery, 0, pageParams.Limit+1)
 	for rows.Next() {
 		var delivery ReadDelivery
 		var forwardedMessageID sql.NullString
@@ -1300,7 +1431,7 @@ LIMIT ?
 			&delivery.BodySize,
 			&delivery.BodySHA256,
 		); err != nil {
-			return nil, false, fmt.Errorf("scan latest delivery: %w", err)
+			return Page[ReadDelivery]{}, fmt.Errorf("scan latest delivery: %w", err)
 		}
 		if forwardedMessageID.Valid {
 			delivery.ForwardedMessageID = &forwardedMessageID.String
@@ -1320,22 +1451,66 @@ LIMIT ?
 		deliveries = append(deliveries, delivery)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, false, fmt.Errorf("iterate latest deliveries: %w", err)
+		return Page[ReadDelivery]{}, fmt.Errorf("iterate latest deliveries: %w", err)
 	}
 
-	hasMore := len(deliveries) > limit
-	if hasMore {
-		deliveries = deliveries[:limit]
-	}
-
-	for i := range deliveries {
-		body, err := s.readBlob(deliveries[i].BodyBlobRef, deliveries[i].BodySize, deliveries[i].BodySHA256)
-		if err != nil {
-			return nil, false, err
+	page := Page[ReadDelivery]{Items: deliveries}
+	if len(deliveries) > pageParams.Limit {
+		page.Items = deliveries[:pageParams.Limit]
+		last := page.Items[len(page.Items)-1]
+		var keys []string
+		switch orderKind {
+		case "created":
+			keys = []string{last.MessageCreatedAt, last.DeliveryID}
+		case "visible":
+			keys = []string{last.VisibleAt, last.MessageCreatedAt, last.DeliveryID}
+		case "acked":
+			transitionAt := last.VisibleAt
+			if last.AckedAt != nil {
+				transitionAt = *last.AckedAt
+			}
+			keys = []string{transitionAt, last.MessageCreatedAt, last.DeliveryID}
 		}
-		deliveries[i].Body = string(body)
+		page.NextCursor, err = encodePageCursor("latest-deliveries", scopeKey, keys...)
+		if err != nil {
+			return Page[ReadDelivery]{}, err
+		}
 	}
-	return deliveries, hasMore, nil
+
+	for i := range page.Items {
+		body, err := s.readBlob(page.Items[i].BodyBlobRef, page.Items[i].BodySize, page.Items[i].BodySHA256)
+		if err != nil {
+			return Page[ReadDelivery]{}, err
+		}
+		page.Items[i].Body = string(body)
+	}
+	return page, nil
+}
+
+func (s *Store) resolveSenderEndpointID(ctx context.Context, querier rowQuerier, rawAddress string) (string, bool, error) {
+	address, err := normalizeSenderAddress(rawAddress)
+	if err != nil {
+		return "", false, err
+	}
+	if address == "" {
+		return "", false, nil
+	}
+	endpointID, found, err := s.lookupEndpointID(ctx, querier, address)
+	if err != nil {
+		return "", false, fmt.Errorf("resolve sender address %q: %w", address, err)
+	}
+	return endpointID, found, nil
+}
+
+func normalizeSenderAddress(rawAddress string) (string, error) {
+	address, err := NormalizeOptionalAddress(rawAddress)
+	if err != nil {
+		return "", err
+	}
+	if IsGroupAddress(address) {
+		return "", fmt.Errorf("sender address %q uses reserved group/ prefix", address)
+	}
+	return address, nil
 }
 
 func (s *Store) lookupEndpointID(ctx context.Context, querier interface {

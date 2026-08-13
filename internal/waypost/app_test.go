@@ -67,6 +67,15 @@ WHERE type = 'table' AND name = ?
 		}
 	}
 
+	var groupPageIndex string
+	if err := runtime.DB().QueryRow(`
+SELECT name
+FROM sqlite_master
+WHERE type = 'index' AND name = 'idx_groups_created_address'
+`).Scan(&groupPageIndex); err != nil {
+		t.Fatalf("group pagination index missing: %v", err)
+	}
+
 	rows, err := runtime.DB().Query(`PRAGMA table_info(endpoints)`)
 	if err != nil {
 		t.Fatalf("PRAGMA table_info(endpoints) error = %v", err)
@@ -603,10 +612,11 @@ func TestSendAndListHappyPath(t *testing.T) {
 				t.Fatalf("list error = %v", err)
 			}
 
-			var deliveries []ListedDelivery
-			if err := json.Unmarshal(listStdout.Bytes(), &deliveries); err != nil {
+			var page Page[ListedDelivery]
+			if err := json.Unmarshal(listStdout.Bytes(), &page); err != nil {
 				t.Fatalf("json.Unmarshal(list output) error = %v", err)
 			}
+			deliveries := page.Items
 			if len(deliveries) != 1 {
 				t.Fatalf("len(deliveries) = %d, want 1", len(deliveries))
 			}
@@ -1368,7 +1378,7 @@ func TestHelpCLIPathsDoNotCreateRuntimeState(t *testing.T) {
 		{
 			name:         "group list help",
 			args:         []string{"group", "list", "--help"},
-			wantContains: "Usage:\n  waypost group list [--json | --yaml]",
+			wantContains: "Usage:\n  waypost group list [--limit N] [--cursor CURSOR] [--json | --yaml]",
 		},
 		{
 			name:         "group create help",

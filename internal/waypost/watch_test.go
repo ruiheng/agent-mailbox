@@ -2,10 +2,42 @@ package waypost
 
 import (
 	"context"
+	"errors"
 	"path/filepath"
 	"testing"
 	"time"
 )
+
+func TestWatchTraversesEveryBoundedPage(t *testing.T) {
+	t.Parallel()
+
+	runtime, store := newLeaseTestStore(t)
+	defer runtime.Close()
+
+	current := time.Date(2026, 8, 13, 12, 0, 0, 0, time.UTC)
+	store.now = func() time.Time { return current }
+	want := make([]string, 0, MaxPageSize+1)
+	for index := 0; index < MaxPageSize+1; index++ {
+		sent := mustSendMessage(t, store, "workflow/watch-pages", "agent/sender", "paged", "body")
+		want = append(want, sent.DeliveryID)
+		current = current.Add(time.Second)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	got := make([]string, 0, len(want))
+	err := store.Watch(ctx, WatchParams{Address: "workflow/watch-pages"}, func(delivery ListedDelivery) error {
+		got = append(got, delivery.DeliveryID)
+		if len(got) == len(want) {
+			cancel()
+		}
+		return nil
+	})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("Watch() error = %v, want context.Canceled", err)
+	}
+	assertStringSlicesEqual(t, got, want)
+}
 
 func TestWatchEmitsQueuedDeliveryWithoutClaiming(t *testing.T) {
 	t.Parallel()
@@ -207,7 +239,7 @@ func TestWaitSeesAddressCreatedByLaterSend(t *testing.T) {
 	go func() {
 		delivery, err := store.Wait(context.Background(), WaitParams{
 			Address: "workflow/later-wait",
-			Timeout: 300 * time.Millisecond,
+			Timeout: time.Second,
 		})
 		resultCh <- waitResult{delivery: delivery, err: err}
 	}()

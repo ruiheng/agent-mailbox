@@ -505,6 +505,61 @@ func TestReadLatestDeliveriesDefaultsToAnyState(t *testing.T) {
 	}
 }
 
+func TestPersonalHistoryFiltersBySenderAddress(t *testing.T) {
+	t.Parallel()
+
+	runtime, store := newLeaseTestStore(t)
+	defer runtime.Close()
+
+	current := time.Date(2026, 8, 13, 12, 0, 0, 0, time.UTC)
+	store.now = func() time.Time { return current }
+
+	fromAlice := mustSendMessage(t, store, "workflow/inbox", "agent/alice", "alice", "alice body")
+	current = current.Add(time.Second)
+	fromBob := mustSendMessage(t, store, "workflow/inbox", "agent/bob", "bob", "bob body")
+
+	listed, err := store.List(context.Background(), ListParams{
+		Address:     "workflow/inbox",
+		FromAddress: "agent/alice",
+	})
+	if err != nil {
+		t.Fatalf("List(from alice) error = %v", err)
+	}
+	if len(listed) != 1 || listed[0].DeliveryID != fromAlice.DeliveryID {
+		t.Fatalf("List(from alice) = %+v, want only %q", listed, fromAlice.DeliveryID)
+	}
+	if listed[0].SenderAddress == nil || *listed[0].SenderAddress != "agent/alice" {
+		t.Fatalf("List(from alice) sender_address = %v, want agent/alice", listed[0].SenderAddress)
+	}
+
+	read, hasMore, err := store.ReadLatestDeliveriesFiltered(context.Background(), ReadLatestParams{
+		Addresses:   []string{"workflow/inbox"},
+		FromAddress: "agent/bob",
+		Limit:       1,
+	})
+	if err != nil {
+		t.Fatalf("ReadLatestDeliveries(from bob) error = %v", err)
+	}
+	if hasMore || len(read) != 1 || read[0].DeliveryID != fromBob.DeliveryID || read[0].Body != "bob body" {
+		t.Fatalf("ReadLatestDeliveries(from bob) = %+v hasMore=%t", read, hasMore)
+	}
+	if read[0].SenderAddress == nil || *read[0].SenderAddress != "agent/bob" {
+		t.Fatalf("ReadLatestDeliveries(from bob) sender_address = %v, want agent/bob", read[0].SenderAddress)
+	}
+
+	missing, missingHasMore, err := store.ReadLatestDeliveriesFiltered(context.Background(), ReadLatestParams{
+		Addresses:   []string{"workflow/inbox"},
+		FromAddress: "agent/missing",
+		Limit:       1,
+	})
+	if err != nil {
+		t.Fatalf("ReadLatestDeliveries(from missing) error = %v", err)
+	}
+	if len(missing) != 0 || missing == nil || missingHasMore {
+		t.Fatalf("ReadLatestDeliveries(from missing) = %+v hasMore=%t, want empty", missing, missingHasMore)
+	}
+}
+
 func TestReleaseDeferAndReceiveTimeout(t *testing.T) {
 	t.Parallel()
 
@@ -1295,8 +1350,6 @@ func TestReceiveRetriesClaimContentionUntilLockClears(t *testing.T) {
 }
 
 func TestReceiveBatchReturnsClaimContentionWhenLockRetriesExhausted(t *testing.T) {
-	t.Parallel()
-
 	stateDir := filepath.Join(t.TempDir(), "waypost-state")
 	lockerRuntime, err := OpenRuntime(context.Background(), stateDir)
 	if err != nil {

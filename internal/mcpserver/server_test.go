@@ -140,6 +140,91 @@ func TestWaypostRecvSchemaOmitsTimeout(t *testing.T) {
 	if _, ok := schema.Properties["known_delivery_ids"]; !ok {
 		t.Fatalf("schema.Properties missing known_delivery_ids: %v", schema.Properties)
 	}
+	if _, ok := schema.Properties["active_lease_cursor"]; !ok {
+		t.Fatalf("schema.Properties missing active_lease_cursor: %v", schema.Properties)
+	}
+}
+
+func TestActiveLeaseHintIsPaginatedWithoutLosingTotal(t *testing.T) {
+	service := newService(Options{
+		WaypostServiceFactory: fakeWaypostServiceFactory{service: &fakeWaypostService{t: t}},
+		CommandRunner:         &fakeRunner{t: t},
+		DisableWakeScheduler:  true,
+		DisableLeaseRenewLoop: true,
+	})
+	service.state.boundAddresses = []string{"agent-deck/self"}
+	service.state.autoBindAttempted = true
+	messages := make([]waypost.ReceivedMessage, 0, waypost.MaxPageSize+1)
+	for index := 0; index < waypost.MaxPageSize+1; index++ {
+		messages = append(messages, waypost.ReceivedMessage{
+			DeliveryID:       fmt.Sprintf("dlv_%03d", index),
+			LeaseToken:       fmt.Sprintf("lease_%03d", index),
+			RecipientAddress: "agent-deck/self",
+		})
+	}
+	service.activeLeases.trackReceive(waypost.ReceiveResult{Messages: messages}, time.Now().UTC().Format(time.RFC3339Nano))
+
+	first, err := service.activeLeaseHintPage([]string{"agent-deck/self"}, nil, "")
+	if err != nil {
+		t.Fatalf("activeLeaseHintPage(first) error = %v", err)
+	}
+	if first.Total != waypost.MaxPageSize+1 || len(first.DeliveryIDs) != waypost.MaxPageSize || first.NextCursor == "" {
+		t.Fatalf("activeLeaseHintPage(first) = %+v", first)
+	}
+	second, err := service.activeLeaseHintPage([]string{"agent-deck/self"}, nil, first.NextCursor)
+	if err != nil {
+		t.Fatalf("activeLeaseHintPage(second) error = %v", err)
+	}
+	if second.Total != waypost.MaxPageSize+1 || len(second.DeliveryIDs) != 1 || second.NextCursor != "" {
+		t.Fatalf("activeLeaseHintPage(second) = %+v", second)
+	}
+}
+
+func TestWaypostRecvReturnsPaginatedActiveLeaseHint(t *testing.T) {
+	fake := &fakeWaypostService{t: t}
+	service := newService(Options{
+		WaypostServiceFactory: fakeWaypostServiceFactory{service: fake},
+		CommandRunner:         &fakeRunner{t: t},
+		DisableWakeScheduler:  true,
+		DisableLeaseRenewLoop: true,
+	})
+	service.state.boundAddresses = []string{"agent-deck/self"}
+	service.state.autoBindAttempted = true
+	messages := make([]waypost.ReceivedMessage, 0, waypost.MaxPageSize+1)
+	for index := 0; index < waypost.MaxPageSize+1; index++ {
+		messages = append(messages, waypost.ReceivedMessage{
+			DeliveryID:       fmt.Sprintf("dlv_%03d", index),
+			LeaseToken:       fmt.Sprintf("lease_%03d", index),
+			RecipientAddress: "agent-deck/self",
+		})
+	}
+	fake.recordLeases(messages)
+	service.activeLeases.trackReceive(waypost.ReceiveResult{Messages: messages}, time.Now().UTC().Format(time.RFC3339Nano))
+
+	first := callServiceTool(t, service, "waypost_recv", map[string]any{
+		"addresses": []string{"agent-deck/self"},
+	})
+	if first["status"] != "active_leases" || first["active_lease_count"] != float64(waypost.MaxPageSize+1) || first["returned_lease_count"] != float64(waypost.MaxPageSize) {
+		t.Fatalf("first active lease response = %+v", first)
+	}
+	if ids := first["claimed_delivery_ids"].([]any); len(ids) != waypost.MaxPageSize {
+		t.Fatalf("first claimed_delivery_ids length = %d, want %d", len(ids), waypost.MaxPageSize)
+	}
+	cursor, ok := first["next_cursor"].(string)
+	if !ok || cursor == "" {
+		t.Fatalf("first next_cursor = %v, want non-empty", first["next_cursor"])
+	}
+
+	second := callServiceTool(t, service, "waypost_recv", map[string]any{
+		"addresses":           []string{"agent-deck/self"},
+		"active_lease_cursor": cursor,
+	})
+	if second["active_lease_count"] != float64(waypost.MaxPageSize+1) || second["returned_lease_count"] != float64(1) {
+		t.Fatalf("second active lease response = %+v", second)
+	}
+	if _, ok := second["next_cursor"]; ok {
+		t.Fatalf("second response unexpectedly has next_cursor: %+v", second)
+	}
 }
 
 func TestWaypostClaimHistorySchemaExposesRecoveryFields(t *testing.T) {
@@ -151,6 +236,40 @@ func TestWaypostClaimHistorySchemaExposesRecoveryFields(t *testing.T) {
 		if _, ok := schema.Properties[field]; !ok {
 			t.Fatalf("schema.Properties missing %s: %v", field, schema.Properties)
 		}
+	}
+}
+
+func TestWaypostClaimHistoryReportsTotalAndReturnedCounts(t *testing.T) {
+	fake := &fakeWaypostService{t: t}
+	service := newService(Options{
+		WaypostServiceFactory: fakeWaypostServiceFactory{service: fake},
+		CommandRunner:         &fakeRunner{t: t},
+		DisableWakeScheduler:  true,
+		DisableLeaseRenewLoop: true,
+	})
+	service.state.autoBindAttempted = true
+	messages := make([]waypost.ReceivedMessage, 0, waypost.DefaultPageSize+1)
+	for index := 0; index < waypost.DefaultPageSize+1; index++ {
+		messages = append(messages, waypost.ReceivedMessage{
+			DeliveryID:       fmt.Sprintf("dlv_history_%03d", index),
+			LeaseToken:       fmt.Sprintf("lease_history_%03d", index),
+			RecipientAddress: "agent-deck/self",
+		})
+	}
+	fake.recordLeases(messages)
+	service.activeLeases.trackReceive(waypost.ReceiveResult{Messages: messages}, time.Now().UTC().Format(time.RFC3339Nano))
+
+	first := callServiceTool(t, service, "waypost_claim_history", map[string]any{})
+	if first["claimed_delivery_count"] != float64(waypost.DefaultPageSize+1) || first["returned_claim_count"] != float64(waypost.DefaultPageSize) {
+		t.Fatalf("first claim history counts = total %v returned %v", first["claimed_delivery_count"], first["returned_claim_count"])
+	}
+	cursor, ok := first["next_cursor"].(string)
+	if !ok || cursor == "" {
+		t.Fatalf("first claim history next_cursor = %v", first["next_cursor"])
+	}
+	second := callServiceTool(t, service, "waypost_claim_history", map[string]any{"cursor": cursor})
+	if second["claimed_delivery_count"] != float64(waypost.DefaultPageSize+1) || second["returned_claim_count"] != float64(1) {
+		t.Fatalf("second claim history counts = total %v returned %v", second["claimed_delivery_count"], second["returned_claim_count"])
 	}
 }
 
@@ -5817,9 +5936,9 @@ func TestOnlyWaypostToolsRequireWaypostStatus(t *testing.T) {
 	statusExempt := map[string]bool{
 		"waypost_status":             true,
 		"waypost_debug":              true,
-		"session_resolve":             true,
-		"session_create":              true,
-		"session_require":             true,
+		"session_resolve":            true,
+		"session_create":             true,
+		"session_require":            true,
 		"agent_deck_resolve_session": true,
 		"agent_deck_create_session":  true,
 		"agent_deck_require_session": true,
@@ -5854,9 +5973,9 @@ func TestOnlyWaypostToolsRequireWaypostStatus(t *testing.T) {
 		"waypost_ack":                true,
 		"waypost_release":            true,
 		"waypost_defer":              true,
-		"session_resolve":             true,
-		"session_create":              true,
-		"session_require":             true,
+		"session_resolve":            true,
+		"session_create":             true,
+		"session_require":            true,
 		"agent_deck_resolve_session": true,
 		"agent_deck_create_session":  true,
 		"agent_deck_require_session": true,

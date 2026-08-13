@@ -142,6 +142,9 @@ CREATE TABLE IF NOT EXISTS events (
 CREATE INDEX IF NOT EXISTS idx_endpoint_addresses_endpoint_id
   ON endpoint_addresses (endpoint_id);
 
+CREATE INDEX IF NOT EXISTS idx_groups_created_address
+  ON groups (created_at, address);
+
 CREATE INDEX IF NOT EXISTS idx_group_memberships_group_joined
   ON group_memberships (group_id, joined_at, membership_id);
 

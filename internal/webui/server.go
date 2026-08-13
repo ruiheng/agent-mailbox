@@ -12,6 +12,7 @@ import (
 	"net/url"
 	"os/exec"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -266,13 +267,23 @@ func (s *Server) handleGroups(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	groups, err := runtime.Store().ListGroups(r.Context())
+	pageParams, err := pageParamsFromRequest(r)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err)
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	page, err := runtime.Store().ListGroupsPage(r.Context(), pageParams)
+	if err != nil {
+		status := http.StatusInternalServerError
+		if errors.Is(err, waypost.ErrInvalidPaginationCursor) {
+			status = http.StatusBadRequest
+		}
+		writeError(w, status, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"groups":        groups,
+		"items":         page.Items,
+		"next_cursor":   nilIfEmpty(page.NextCursor),
 		"default_group": nilIfEmpty(s.group),
 	})
 }
@@ -300,14 +311,30 @@ func (s *Server) handleTranscript(w http.ResponseWriter, r *http.Request, groupA
 		return
 	}
 
-	messages, err := runtime.Store().ListGroupTranscript(r.Context(), waypost.GroupTranscriptParams{Address: groupAddress})
+	pageParams, err := pageParamsFromRequest(r)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	latestMessageID, err := runtime.Store().LatestGroupMessageID(r.Context(), groupAddress)
+	if err != nil {
+		writeError(w, statusForWaypostError(err), err)
+		return
+	}
+	page, err := runtime.Store().ListGroupTranscriptPage(r.Context(), waypost.GroupTranscriptParams{
+		Address: groupAddress,
+		Limit:   pageParams.Limit,
+		Cursor:  pageParams.Cursor,
+	})
 	if err != nil {
 		writeError(w, statusForWaypostError(err), err)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"group_address": groupAddress,
-		"messages":      messages,
+		"group_address":     groupAddress,
+		"items":             page.Items,
+		"next_cursor":       nilIfEmpty(page.NextCursor),
+		"latest_message_id": nilIfEmpty(latestMessageID),
 	})
 }
 
@@ -324,24 +351,45 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request, groupAddre
 	_, _ = io.WriteString(w, ": connected\n\n")
 	flusher.Flush()
 
-	after := strings.TrimSpace(r.URL.Query().Get("after"))
+	afterValues, afterProvided := r.URL.Query()["after"]
+	after := ""
+	if len(afterValues) > 0 {
+		after = strings.TrimSpace(afterValues[0])
+	}
+	if !afterProvided {
+		runtime, err := s.waypostRuntime(r.Context())
+		if err != nil {
+			writeSSE(w, "error", map[string]string{"error": err.Error()})
+			flusher.Flush()
+			return
+		}
+		after, err = runtime.Store().LatestGroupMessageID(r.Context(), groupAddress)
+		if err != nil {
+			writeSSE(w, "error", map[string]string{"error": err.Error()})
+			flusher.Flush()
+			return
+		}
+	}
 	ticker := time.NewTicker(ssePollInterval)
 	defer ticker.Stop()
 
 	for {
-		messages, err := s.transcript(r.Context(), groupAddress)
+		page, err := s.transcript(r.Context(), groupAddress, after)
 		if err != nil {
 			writeSSE(w, "error", map[string]string{"error": err.Error()})
 			flusher.Flush()
 			return
 		}
 
-		for _, message := range messagesAfter(messages, after) {
+		for _, message := range page.Items {
 			writeSSE(w, "message", message)
 			after = message.MessageID
 			flusher.Flush()
 		}
 
+		if page.NextCursor != "" {
+			continue
+		}
 		select {
 		case <-r.Context().Done():
 			return
@@ -350,12 +398,30 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request, groupAddre
 	}
 }
 
-func (s *Server) transcript(ctx context.Context, groupAddress string) ([]waypost.GroupTranscriptMessage, error) {
+func (s *Server) transcript(ctx context.Context, groupAddress, after string) (waypost.Page[waypost.GroupTranscriptMessage], error) {
 	runtime, err := s.waypostRuntime(ctx)
 	if err != nil {
-		return nil, err
+		return waypost.Page[waypost.GroupTranscriptMessage]{}, err
 	}
-	return runtime.Store().ListGroupTranscript(ctx, waypost.GroupTranscriptParams{Address: groupAddress})
+	return runtime.Store().ListGroupTranscriptPage(ctx, waypost.GroupTranscriptParams{
+		Address:        groupAddress,
+		AfterMessageID: after,
+		Limit:          waypost.MaxPageSize,
+	})
+}
+
+func pageParamsFromRequest(r *http.Request) (waypost.PageParams, error) {
+	params := waypost.PageParams{Limit: waypost.DefaultPageSize, Cursor: strings.TrimSpace(r.URL.Query().Get("cursor"))}
+	rawLimit := strings.TrimSpace(r.URL.Query().Get("limit"))
+	if rawLimit == "" {
+		return params, nil
+	}
+	limit, err := strconv.Atoi(rawLimit)
+	if err != nil || limit < 1 || limit > waypost.MaxPageSize {
+		return waypost.PageParams{}, fmt.Errorf("limit must be between 1 and %d", waypost.MaxPageSize)
+	}
+	params.Limit = limit
+	return params, nil
 }
 
 func splitGroupAction(escapedPath string) (string, string, bool) {
@@ -375,18 +441,6 @@ func splitGroupAction(escapedPath string) (string, string, bool) {
 		return "", "", false
 	}
 	return group, action, group != "" && action != ""
-}
-
-func messagesAfter(messages []waypost.GroupTranscriptMessage, after string) []waypost.GroupTranscriptMessage {
-	if after == "" {
-		return messages
-	}
-	for i, message := range messages {
-		if message.MessageID == after {
-			return messages[i+1:]
-		}
-	}
-	return messages
 }
 
 func writeJSON(w http.ResponseWriter, status int, value any) {
@@ -411,6 +465,9 @@ func writeSSE(w io.Writer, event string, value any) {
 func statusForWaypostError(err error) int {
 	if errors.Is(err, waypost.ErrGroupNotFound) {
 		return http.StatusNotFound
+	}
+	if errors.Is(err, waypost.ErrInvalidPaginationCursor) {
+		return http.StatusBadRequest
 	}
 	return http.StatusBadRequest
 }

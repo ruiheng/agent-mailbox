@@ -289,6 +289,35 @@ func TestTrackedLeaseInspectionErrorDoesNotReturnCachedHint(t *testing.T) {
 	}
 }
 
+func TestInvalidStatusPaginationDoesNotOpenStatusGate(t *testing.T) {
+	service := newService(Options{
+		WaypostServiceFactory: fakeWaypostServiceFactory{service: &fakeWaypostService{t: t}},
+		CommandRunner:         &fakeRunner{t: t},
+		DisableWakeScheduler:  true,
+		DisableLeaseRenewLoop: true,
+	})
+
+	err := callServiceToolExpectErrorWithoutStatusBootstrap(t, service, "waypost_status", map[string]any{
+		"limit": waypost.MaxPageSize + 1,
+	})
+	if err == nil || !strings.Contains(err.Error(), "limit must be between") {
+		t.Fatalf("waypost_status invalid pagination error = %v", err)
+	}
+	if service.state.statusToolCalled {
+		t.Fatal("invalid waypost_status opened the status gate")
+	}
+
+	err = callServiceToolExpectErrorWithoutStatusBootstrap(t, service, "waypost_send", map[string]any{
+		"from_address": "codex/source",
+		"to_address":   "codex/target",
+		"subject":      "hello",
+		"body":         "body",
+	})
+	if err == nil || !strings.Contains(err.Error(), "waypost_status") {
+		t.Fatalf("waypost_send error after failed status = %v, want status gate", err)
+	}
+}
+
 func TestReceiveRecoveryTracksAndRenewsEveryUnreleasedClaim(t *testing.T) {
 	claims := []waypost.ReceivedMessage{
 		{

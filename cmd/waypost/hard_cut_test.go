@@ -73,10 +73,13 @@ func TestCLIOwnedLifecycleAndSubscriberCommandsEmitJSON(t *testing.T) {
 	if listSubscribers.exitCode != 0 {
 		t.Fatalf("group subscribers exit code = %d, stderr = %q", listSubscribers.exitCode, listSubscribers.stderr)
 	}
-	var subscribers []map[string]any
-	if err := json.Unmarshal([]byte(listSubscribers.stdout), &subscribers); err != nil {
+	var subscribersPage struct {
+		Items []map[string]any `json:"items"`
+	}
+	if err := json.Unmarshal([]byte(listSubscribers.stdout), &subscribersPage); err != nil {
 		t.Fatalf("json.Unmarshal(subscribers) error = %v", err)
 	}
+	subscribers := subscribersPage.Items
 	if len(subscribers) != 1 || subscribers[0]["person"] != "moderator" {
 		t.Fatalf("subscribers = %v, want active moderator", subscribers)
 	}
@@ -135,6 +138,127 @@ func TestCLIOwnedLifecycleAndSubscriberCommandsEmitJSON(t *testing.T) {
 	}
 	if transition["delivery_id"] != message.DeliveryID || transition["state"] != "queued" || transition["attempt_count"] != float64(1) {
 		t.Fatalf("fail payload = %v", transition)
+	}
+}
+
+func TestCLIHistoryFiltersPersonalAndGroupMessagesBySender(t *testing.T) {
+	stateDir := filepath.Join(t.TempDir(), "waypost-state")
+
+	for _, sender := range []string{"agent/alice", "agent/bob"} {
+		send := runCLI(t, sender+" body\n", "--state-dir", stateDir,
+			"send", "--to", "workflow/inbox", "--from", sender,
+			"--subject", sender, "--body-file", "-")
+		if send.exitCode != 0 {
+			t.Fatalf("personal send from %s exit code = %d, stderr = %q", sender, send.exitCode, send.stderr)
+		}
+	}
+
+	list := runCLI(t, "", "--state-dir", stateDir,
+		"list", "--for", "workflow/inbox", "--from", "agent/alice", "--json")
+	if list.exitCode != 0 {
+		t.Fatalf("personal list by sender exit code = %d, stderr = %q", list.exitCode, list.stderr)
+	}
+	var listedPage struct {
+		Items []map[string]any `json:"items"`
+	}
+	if err := json.Unmarshal([]byte(list.stdout), &listedPage); err != nil {
+		t.Fatalf("json.Unmarshal(personal list) error = %v; stdout = %q", err, list.stdout)
+	}
+	listed := listedPage.Items
+	if len(listed) != 1 || listed[0]["sender_address"] != "agent/alice" || listed[0]["subject"] != "agent/alice" {
+		t.Fatalf("personal list by sender = %v", listed)
+	}
+	invalidSender := runCLI(t, "", "--state-dir", stateDir,
+		"list", "--for", "workflow/inbox", "--from", "group/not-a-sender", "--json")
+	if invalidSender.exitCode != 1 || invalidSender.stdout != "" || !strings.Contains(invalidSender.stderr, "reserved group/ prefix") {
+		t.Fatalf("personal list invalid sender result = %+v", invalidSender)
+	}
+
+	read := runCLI(t, "", "--state-dir", stateDir,
+		"read", "--latest", "--for", "workflow/inbox", "--from", "agent/bob", "--limit", "1", "--json")
+	if read.exitCode != 0 {
+		t.Fatalf("personal read by sender exit code = %d, stderr = %q", read.exitCode, read.stderr)
+	}
+	var readResult struct {
+		Items []map[string]any `json:"items"`
+	}
+	if err := json.Unmarshal([]byte(read.stdout), &readResult); err != nil {
+		t.Fatalf("json.Unmarshal(personal read) error = %v; stdout = %q", err, read.stdout)
+	}
+	if len(readResult.Items) != 1 || readResult.Items[0]["sender_address"] != "agent/bob" || readResult.Items[0]["body"] != "agent/bob body\n" {
+		t.Fatalf("personal read by sender = %v", readResult.Items)
+	}
+	readByIDWithFrom := runCLI(t, "", "--state-dir", stateDir,
+		"read", "--delivery", readResult.Items[0]["delivery_id"].(string), "--from", "agent/bob", "--json")
+	if readByIDWithFrom.exitCode != 1 || readByIDWithFrom.stdout != "" || !strings.Contains(readByIDWithFrom.stderr, "--from requires --latest") {
+		t.Fatalf("read by ID with --from result = %+v", readByIDWithFrom)
+	}
+
+	source := runCLI(t, "source body\n", "--state-dir", stateDir,
+		"send", "--to", "workflow/source", "--from", "agent/origin", "--body-file", "-", "--json")
+	if source.exitCode != 0 {
+		t.Fatalf("source send exit code = %d, stderr = %q", source.exitCode, source.stderr)
+	}
+	var sourceResult map[string]any
+	if err := json.Unmarshal([]byte(source.stdout), &sourceResult); err != nil {
+		t.Fatalf("json.Unmarshal(source send) error = %v; stdout = %q", err, source.stdout)
+	}
+	forward := runCLI(t, "", "--state-dir", stateDir,
+		"forward", "--delivery", sourceResult["delivery_id"].(string),
+		"--to", "workflow/forwarded", "--from", "agent/forwarder", "--json")
+	if forward.exitCode != 0 {
+		t.Fatalf("forward exit code = %d, stderr = %q", forward.exitCode, forward.stderr)
+	}
+
+	forwarderList := runCLI(t, "", "--state-dir", stateDir,
+		"list", "--for", "workflow/forwarded", "--from", "agent/forwarder", "--json")
+	if forwarderList.exitCode != 0 {
+		t.Fatalf("forwarder list exit code = %d, stderr = %q", forwarderList.exitCode, forwarderList.stderr)
+	}
+	listedPage.Items = nil
+	if err := json.Unmarshal([]byte(forwarderList.stdout), &listedPage); err != nil {
+		t.Fatalf("json.Unmarshal(forwarder list) error = %v; stdout = %q", err, forwarderList.stdout)
+	}
+	listed = listedPage.Items
+	if len(listed) != 1 || listed[0]["sender_address"] != "agent/forwarder" || listed[0]["forwarded_from_address"] != "agent/origin" {
+		t.Fatalf("forwarder list = %v, want current and original sender separated", listed)
+	}
+	originList := runCLI(t, "", "--state-dir", stateDir,
+		"list", "--for", "workflow/forwarded", "--from", "agent/origin", "--json")
+	if originList.exitCode != 0 || originList.stdout != "{\n  \"items\": []\n}\n" {
+		t.Fatalf("origin list result = %+v, want no match for forwarded delivery", originList)
+	}
+
+	for _, args := range [][]string{
+		{"group", "create", "--group", "group/review", "--json"},
+		{"group", "add-member", "--group", "group/review", "--person", "reader", "--json"},
+	} {
+		result := runCLI(t, "", append([]string{"--state-dir", stateDir}, args...)...)
+		if result.exitCode != 0 {
+			t.Fatalf("group setup %v exit code = %d, stderr = %q", args, result.exitCode, result.stderr)
+		}
+	}
+	for _, sender := range []string{"agent/alice", "agent/bob"} {
+		send := runCLI(t, sender+" group body\n", "--state-dir", stateDir,
+			"send", "--to", "group/review", "--group", "--from", sender,
+			"--subject", sender, "--body-file", "-")
+		if send.exitCode != 0 {
+			t.Fatalf("group send from %s exit code = %d, stderr = %q", sender, send.exitCode, send.stderr)
+		}
+	}
+
+	groupList := runCLI(t, "", "--state-dir", stateDir,
+		"list", "--for", "group/review", "--as", "reader", "--from", "agent/bob", "--json")
+	if groupList.exitCode != 0 {
+		t.Fatalf("group list by sender exit code = %d, stderr = %q", groupList.exitCode, groupList.stderr)
+	}
+	listedPage.Items = nil
+	if err := json.Unmarshal([]byte(groupList.stdout), &listedPage); err != nil {
+		t.Fatalf("json.Unmarshal(group list) error = %v; stdout = %q", err, groupList.stdout)
+	}
+	listed = listedPage.Items
+	if len(listed) != 1 || listed[0]["sender_address"] != "agent/bob" || listed[0]["subject"] != "agent/bob" {
+		t.Fatalf("group list by sender = %v", listed)
 	}
 }
 

@@ -132,6 +132,9 @@ func newSessionManager(runner Runner, state *serverState) *sessionManager {
 }
 
 func (m *sessionManager) bind(ctx context.Context, input waypostBindInput) (boundState, error) {
+	if err := validateMCPItems("addresses", len(input.Addresses)); err != nil {
+		return boundState{}, err
+	}
 	boundAddresses, err := waypost.NormalizeAddressList(input.Addresses)
 	if err != nil {
 		return boundState{}, err
@@ -706,6 +709,9 @@ func (m *sessionManager) extractCodexSessionIDFromLsof(ctx context.Context, pid 
 }
 
 func (m *sessionManager) waypostAddresses(ctx context.Context, addresses []string) ([]string, error) {
+	if err := validateMCPItems("addresses", len(addresses)); err != nil {
+		return nil, err
+	}
 	if len(addresses) > 0 {
 		return waypost.NormalizeAddressList(addresses)
 	}

@@ -142,6 +142,15 @@ func writeYAMLField(w io.Writer, indent int, name string, value reflect.Value) e
 		_, err := fmt.Fprintf(w, "%s%s: %s", indentText, name, scalar)
 		return err
 	}
+	concrete := yamlConcreteValue(value)
+	if concrete.IsValid() && (concrete.Kind() == reflect.Array || concrete.Kind() == reflect.Slice) && concrete.Len() == 0 {
+		_, err := fmt.Fprintf(w, "%s%s: []", indentText, name)
+		return err
+	}
+	if concrete.IsValid() && concrete.Kind() == reflect.Map && concrete.Len() == 0 {
+		_, err := fmt.Fprintf(w, "%s%s: {}", indentText, name)
+		return err
+	}
 
 	if _, err := fmt.Fprintf(w, "%s%s:\n", indentText, name); err != nil {
 		return err

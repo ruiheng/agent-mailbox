@@ -287,41 +287,67 @@ WHERE membership_id = ?
 }
 
 func (s *Store) ListGroupMembers(ctx context.Context, groupAddress string) ([]GroupMembershipRecord, error) {
+	page, err := s.ListGroupMembersPage(ctx, groupAddress, PageParams{Limit: MaxPageSize})
+	if err != nil {
+		return nil, err
+	}
+	return completeCompatibilityPage(page, "ListGroupMembers")
+}
+
+func (s *Store) ListGroupMembersPage(ctx context.Context, groupAddress string, params PageParams) (Page[GroupMembershipRecord], error) {
+	pageParams, err := normalizePageParams(params)
+	if err != nil {
+		return Page[GroupMembershipRecord]{}, err
+	}
 	rawGroupAddress := groupAddress
-	groupAddress, err := NormalizeGroupAddress(rawGroupAddress)
+	groupAddress, err = NormalizeGroupAddress(rawGroupAddress)
 	if err != nil {
 		if strings.TrimSpace(rawGroupAddress) == "" {
-			return nil, errors.New("group address is required")
+			return Page[GroupMembershipRecord]{}, errors.New("group address is required")
 		}
-		return nil, err
+		return Page[GroupMembershipRecord]{}, err
 	}
 
 	group, found, err := lookupGroupRecord(ctx, s.readDB, groupAddress)
 	if err != nil {
-		return nil, fmt.Errorf("load group %q: %w", groupAddress, err)
+		return Page[GroupMembershipRecord]{}, fmt.Errorf("load group %q: %w", groupAddress, err)
 	}
 	if !found {
-		return nil, fmt.Errorf("group %q: %w", groupAddress, ErrGroupNotFound)
+		return Page[GroupMembershipRecord]{}, fmt.Errorf("group %q: %w", groupAddress, ErrGroupNotFound)
 	}
+	scopeKey := cursorScope(group.Address)
+	cursorKeys, err := decodePageCursor(pageParams.Cursor, "group-members", scopeKey, 2)
+	if err != nil {
+		return Page[GroupMembershipRecord]{}, err
+	}
+	args := []any{group.GroupID}
+	cursorClause := ""
+	if len(cursorKeys) > 0 {
+		cursorClause = "\n  AND (gm.joined_at > ? OR (gm.joined_at = ? AND gm.membership_id > ?))"
+		args = append(args, cursorKeys[0], cursorKeys[0], cursorKeys[1])
+	}
+	args = append(args, pageParams.Limit+1)
 
 	rows, err := s.readDB.QueryContext(ctx, `
 SELECT gm.membership_id, gm.person_id, p.person, gm.joined_at, gm.left_at
 FROM group_memberships AS gm
 JOIN persons AS p ON p.person_id = gm.person_id
 WHERE gm.group_id = ?
+`+cursorClause+`
 ORDER BY gm.joined_at ASC, gm.membership_id ASC
-`, group.GroupID)
+LIMIT ?
+`, args...)
 	if err != nil {
-		return nil, fmt.Errorf("list members for group %q: %w", groupAddress, err)
+		return Page[GroupMembershipRecord]{}, fmt.Errorf("list members for group %q: %w", groupAddress, err)
 	}
 	defer rows.Close()
 
-	var memberships []GroupMembershipRecord
+	memberships := make([]GroupMembershipRecord, 0, pageParams.Limit+1)
 	for rows.Next() {
 		var record GroupMembershipRecord
 		var leftAt sql.NullString
 		if err := rows.Scan(&record.MembershipID, &record.PersonID, &record.Person, &record.JoinedAt, &leftAt); err != nil {
-			return nil, fmt.Errorf("scan member for group %q: %w", groupAddress, err)
+			return Page[GroupMembershipRecord]{}, fmt.Errorf("scan member for group %q: %w", groupAddress, err)
 		}
 		record.GroupID = group.GroupID
 		record.GroupAddress = group.Address
@@ -332,19 +358,54 @@ ORDER BY gm.joined_at ASC, gm.membership_id ASC
 		memberships = append(memberships, record)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate members for group %q: %w", groupAddress, err)
+		return Page[GroupMembershipRecord]{}, fmt.Errorf("iterate members for group %q: %w", groupAddress, err)
 	}
-	return memberships, nil
+	page := Page[GroupMembershipRecord]{Items: memberships}
+	if len(memberships) > pageParams.Limit {
+		page.Items = memberships[:pageParams.Limit]
+		last := page.Items[len(page.Items)-1]
+		page.NextCursor, err = encodePageCursor("group-members", scopeKey, last.JoinedAt, last.MembershipID)
+		if err != nil {
+			return Page[GroupMembershipRecord]{}, err
+		}
+	}
+	return page, nil
 }
 
 func (s *Store) ListGroups(ctx context.Context) ([]GroupRecord, error) {
+	page, err := s.ListGroupsPage(ctx, PageParams{Limit: MaxPageSize})
+	if err != nil {
+		return nil, err
+	}
+	return completeCompatibilityPage(page, "ListGroups")
+}
+
+func (s *Store) ListGroupsPage(ctx context.Context, params PageParams) (Page[GroupRecord], error) {
+	pageParams, err := normalizePageParams(params)
+	if err != nil {
+		return Page[GroupRecord]{}, err
+	}
+	scopeKey := cursorScope("groups")
+	cursorKeys, err := decodePageCursor(pageParams.Cursor, "groups", scopeKey, 2)
+	if err != nil {
+		return Page[GroupRecord]{}, err
+	}
+	args := make([]any, 0, 4)
+	cursorClause := ""
+	if len(cursorKeys) > 0 {
+		cursorClause = "\nWHERE created_at > ? OR (created_at = ? AND address > ?)"
+		args = append(args, cursorKeys[0], cursorKeys[0], cursorKeys[1])
+	}
+	args = append(args, pageParams.Limit+1)
 	rows, err := s.readDB.QueryContext(ctx, `
 SELECT group_id, address, created_at
 FROM groups
+`+cursorClause+`
 ORDER BY created_at ASC, address ASC
-`)
+LIMIT ?
+`, args...)
 	if err != nil {
-		return nil, fmt.Errorf("query groups: %w", err)
+		return Page[GroupRecord]{}, fmt.Errorf("query groups: %w", err)
 	}
 	defer rows.Close()
 
@@ -352,14 +413,23 @@ ORDER BY created_at ASC, address ASC
 	for rows.Next() {
 		var record GroupRecord
 		if err := rows.Scan(&record.GroupID, &record.Address, &record.CreatedAt); err != nil {
-			return nil, fmt.Errorf("scan group row: %w", err)
+			return Page[GroupRecord]{}, fmt.Errorf("scan group row: %w", err)
 		}
 		records = append(records, record)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate groups: %w", err)
+		return Page[GroupRecord]{}, fmt.Errorf("iterate groups: %w", err)
 	}
-	return records, nil
+	page := Page[GroupRecord]{Items: records}
+	if len(records) > pageParams.Limit {
+		page.Items = records[:pageParams.Limit]
+		last := page.Items[len(page.Items)-1]
+		page.NextCursor, err = encodePageCursor("groups", scopeKey, last.CreatedAt, last.Address)
+		if err != nil {
+			return Page[GroupRecord]{}, err
+		}
+	}
+	return page, nil
 }
 
 func (s *Store) AddGroupNotificationSubscriber(ctx context.Context, groupAddress, notifyAddress, person string) (GroupNotificationSubscriberRecord, error) {
@@ -541,31 +611,83 @@ WHERE subscriber_id = ?
 }
 
 func (s *Store) ListGroupNotificationSubscribers(ctx context.Context, groupAddress string) ([]GroupNotificationSubscriberRecord, error) {
+	page, err := s.ListGroupNotificationSubscribersPage(ctx, groupAddress, PageParams{Limit: MaxPageSize})
+	if err != nil {
+		return nil, err
+	}
+	return completeCompatibilityPage(page, "ListGroupNotificationSubscribers")
+}
+
+func (s *Store) ListGroupNotificationSubscribersPage(ctx context.Context, groupAddress string, params PageParams) (Page[GroupNotificationSubscriberRecord], error) {
+	pageParams, err := normalizePageParams(params)
+	if err != nil {
+		return Page[GroupNotificationSubscriberRecord]{}, err
+	}
 	rawGroupAddress := groupAddress
-	groupAddress, err := NormalizeGroupAddress(rawGroupAddress)
+	groupAddress, err = NormalizeGroupAddress(rawGroupAddress)
 	if err != nil {
 		if strings.TrimSpace(rawGroupAddress) == "" {
-			return nil, errors.New("group address is required")
+			return Page[GroupNotificationSubscriberRecord]{}, errors.New("group address is required")
 		}
-		return nil, err
+		return Page[GroupNotificationSubscriberRecord]{}, err
 	}
 
 	group, found, err := lookupGroupRecord(ctx, s.readDB, groupAddress)
 	if err != nil {
-		return nil, fmt.Errorf("load group %q: %w", groupAddress, err)
+		return Page[GroupNotificationSubscriberRecord]{}, fmt.Errorf("load group %q: %w", groupAddress, err)
 	}
 	if !found {
-		return nil, fmt.Errorf("group %q: %w", groupAddress, ErrGroupNotFound)
+		return Page[GroupNotificationSubscriberRecord]{}, fmt.Errorf("group %q: %w", groupAddress, ErrGroupNotFound)
 	}
-
-	subscribers, err := listActiveGroupNotificationSubscribers(ctx, s.readDB, group.GroupID)
+	scopeKey := cursorScope(group.Address)
+	cursorKeys, err := decodePageCursor(pageParams.Cursor, "group-subscribers", scopeKey, 2)
 	if err != nil {
-		return nil, fmt.Errorf("list subscribers for group %q: %w", groupAddress, err)
+		return Page[GroupNotificationSubscriberRecord]{}, err
 	}
-	for i := range subscribers {
-		subscribers[i].GroupAddress = group.Address
+	args := []any{group.GroupID}
+	cursorClause := ""
+	if len(cursorKeys) > 0 {
+		cursorClause = "\n  AND (created_at > ? OR (created_at = ? AND subscriber_id > ?))"
+		args = append(args, cursorKeys[0], cursorKeys[0], cursorKeys[1])
 	}
-	return subscribers, nil
+	args = append(args, pageParams.Limit+1)
+	rows, err := s.readDB.QueryContext(ctx, `
+SELECT subscriber_id, notify_address, person, created_at
+FROM group_notification_subscribers
+WHERE group_id = ?
+  AND removed_at IS NULL
+`+cursorClause+`
+ORDER BY created_at ASC, subscriber_id ASC
+LIMIT ?
+`, args...)
+	if err != nil {
+		return Page[GroupNotificationSubscriberRecord]{}, fmt.Errorf("list subscribers for group %q: %w", groupAddress, err)
+	}
+	defer rows.Close()
+	subscribers := make([]GroupNotificationSubscriberRecord, 0, pageParams.Limit+1)
+	for rows.Next() {
+		var subscriber GroupNotificationSubscriberRecord
+		if err := rows.Scan(&subscriber.SubscriberID, &subscriber.NotifyAddress, &subscriber.Person, &subscriber.CreatedAt); err != nil {
+			return Page[GroupNotificationSubscriberRecord]{}, fmt.Errorf("scan subscriber for group %q: %w", groupAddress, err)
+		}
+		subscriber.GroupID = group.GroupID
+		subscriber.GroupAddress = group.Address
+		subscriber.Active = true
+		subscribers = append(subscribers, subscriber)
+	}
+	if err := rows.Err(); err != nil {
+		return Page[GroupNotificationSubscriberRecord]{}, fmt.Errorf("iterate subscribers for group %q: %w", groupAddress, err)
+	}
+	page := Page[GroupNotificationSubscriberRecord]{Items: subscribers}
+	if len(subscribers) > pageParams.Limit {
+		page.Items = subscribers[:pageParams.Limit]
+		last := page.Items[len(page.Items)-1]
+		page.NextCursor, err = encodePageCursor("group-subscribers", scopeKey, last.CreatedAt, last.SubscriberID)
+		if err != nil {
+			return Page[GroupNotificationSubscriberRecord]{}, err
+		}
+	}
+	return page, nil
 }
 
 func (s *Store) InspectAddress(ctx context.Context, address string) (AddressInspection, error) {
@@ -610,39 +732,121 @@ func (s *Store) InspectAddress(ctx context.Context, address string) (AddressInsp
 }
 
 func (s *Store) ListGroupMessages(ctx context.Context, params GroupListParams) ([]GroupListedMessage, error) {
-	scope, err := s.resolveGroup(ctx, s.readDB, params.Address, params.Person)
+	if params.Limit == 0 {
+		params.Limit = MaxPageSize
+	}
+	page, err := s.ListGroupMessagesPage(ctx, params)
 	if err != nil {
 		return nil, err
 	}
-	records, err := s.listGroupMessages(ctx, s.readDB, scope, false, 0)
+	return completeCompatibilityPage(page, "ListGroupMessages")
+}
+
+func (s *Store) ListGroupMessagesPage(ctx context.Context, params GroupListParams) (Page[GroupListedMessage], error) {
+	pageParams, err := normalizePageParams(PageParams{Limit: params.Limit, Cursor: params.Cursor})
 	if err != nil {
-		return nil, err
+		return Page[GroupListedMessage]{}, err
+	}
+	scope, err := s.resolveGroup(ctx, s.readDB, params.Address, params.Person)
+	if err != nil {
+		return Page[GroupListedMessage]{}, err
+	}
+	senderAddress, err := normalizeSenderAddress(params.FromAddress)
+	if err != nil {
+		return Page[GroupListedMessage]{}, err
+	}
+	scopeKey := cursorScope(scope.viewer.Group.Address, scope.viewer.Person, senderAddress)
+	cursorKeys, err := decodePageCursor(pageParams.Cursor, "group-list", scopeKey, 2)
+	if err != nil {
+		return Page[GroupListedMessage]{}, err
+	}
+	senderEndpointID, found, err := s.resolveSenderEndpointID(ctx, s.readDB, senderAddress)
+	if err != nil {
+		return Page[GroupListedMessage]{}, err
+	}
+	if senderAddress != "" && !found {
+		return Page[GroupListedMessage]{Items: []GroupListedMessage{}}, nil
+	}
+	records, err := s.listGroupMessagesPage(ctx, s.readDB, scope, false, senderEndpointID, cursorKeys, pageParams.Limit+1)
+	if err != nil {
+		return Page[GroupListedMessage]{}, err
 	}
 
 	messages := make([]GroupListedMessage, 0, len(records))
 	for _, record := range records {
 		messages = append(messages, buildGroupListedMessage(scope.viewer, record))
 	}
-	return messages, nil
+	page := Page[GroupListedMessage]{Items: messages}
+	if len(messages) > pageParams.Limit {
+		page.Items = messages[:pageParams.Limit]
+		last := page.Items[len(page.Items)-1]
+		page.NextCursor, err = encodePageCursor("group-list", scopeKey, last.MessageCreatedAt, last.MessageID)
+		if err != nil {
+			return Page[GroupListedMessage]{}, err
+		}
+	}
+	return page, nil
 }
 
 func (s *Store) ListGroupTranscript(ctx context.Context, params GroupTranscriptParams) ([]GroupTranscriptMessage, error) {
+	if params.Limit == 0 {
+		params.Limit = MaxPageSize
+	}
+	page, err := s.ListGroupTranscriptPage(ctx, params)
+	if err != nil {
+		return nil, err
+	}
+	return completeCompatibilityPage(page, "ListGroupTranscript")
+}
+
+func (s *Store) ListGroupTranscriptPage(ctx context.Context, params GroupTranscriptParams) (Page[GroupTranscriptMessage], error) {
+	pageParams, err := normalizePageParams(PageParams{Limit: params.Limit, Cursor: params.Cursor})
+	if err != nil {
+		return Page[GroupTranscriptMessage]{}, err
+	}
 	rawAddress := params.Address
 	groupAddress, err := NormalizeGroupAddress(rawAddress)
 	if err != nil {
 		if strings.TrimSpace(rawAddress) == "" {
-			return nil, errors.New("group address is required")
+			return Page[GroupTranscriptMessage]{}, errors.New("group address is required")
 		}
-		return nil, err
+		return Page[GroupTranscriptMessage]{}, err
 	}
 
 	group, found, err := lookupGroupRecord(ctx, s.readDB, groupAddress)
 	if err != nil {
-		return nil, fmt.Errorf("load group %q: %w", groupAddress, err)
+		return Page[GroupTranscriptMessage]{}, fmt.Errorf("load group %q: %w", groupAddress, err)
 	}
 	if !found {
-		return nil, fmt.Errorf("group %q: %w", groupAddress, ErrGroupNotFound)
+		return Page[GroupTranscriptMessage]{}, fmt.Errorf("group %q: %w", groupAddress, ErrGroupNotFound)
 	}
+	scopeKey := cursorScope(group.Address)
+	cursorKeys, err := decodePageCursor(pageParams.Cursor, "group-transcript", scopeKey, 2)
+	if err != nil {
+		return Page[GroupTranscriptMessage]{}, err
+	}
+	if len(cursorKeys) == 0 && strings.TrimSpace(params.AfterMessageID) != "" {
+		var createdAt string
+		err := s.readDB.QueryRowContext(ctx, `
+SELECT created_at
+FROM group_messages
+WHERE group_id = ? AND message_id = ?
+`, group.GroupID, strings.TrimSpace(params.AfterMessageID)).Scan(&createdAt)
+		if errors.Is(err, sql.ErrNoRows) {
+			cursorKeys = nil
+		} else if err != nil {
+			return Page[GroupTranscriptMessage]{}, fmt.Errorf("locate group transcript message %q: %w", params.AfterMessageID, err)
+		} else {
+			cursorKeys = []string{createdAt, strings.TrimSpace(params.AfterMessageID)}
+		}
+	}
+	args := []any{group.GroupID}
+	cursorClause := ""
+	if len(cursorKeys) > 0 {
+		cursorClause = "\n  AND (gm.created_at > ? OR (gm.created_at = ? AND gm.message_id > ?))"
+		args = append(args, cursorKeys[0], cursorKeys[0], cursorKeys[1])
+	}
+	args = append(args, pageParams.Limit+1)
 
 	rows, err := s.readDB.QueryContext(ctx, `
 SELECT
@@ -676,14 +880,17 @@ SELECT
 FROM group_messages AS gm
 JOIN messages AS m ON m.message_id = gm.message_id
 WHERE gm.group_id = ?
+`+cursorClause+`
 ORDER BY gm.created_at ASC, gm.message_id ASC
-`, group.GroupID)
+LIMIT ?
+`, args...)
 	if err != nil {
-		return nil, fmt.Errorf("query group transcript for %q: %w", group.Address, err)
+		return Page[GroupTranscriptMessage]{}, fmt.Errorf("query group transcript for %q: %w", group.Address, err)
 	}
 	defer rows.Close()
 
-	messages := make([]GroupTranscriptMessage, 0)
+	messages := make([]GroupTranscriptMessage, 0, pageParams.Limit)
+	hasMore := false
 	for rows.Next() {
 		var message GroupTranscriptMessage
 		var forwardedMessageID sql.NullString
@@ -709,11 +916,15 @@ ORDER BY gm.created_at ASC, gm.message_id ASC
 			&message.ReadCount,
 			&message.EligibleCount,
 		); err != nil {
-			return nil, fmt.Errorf("scan group transcript row: %w", err)
+			return Page[GroupTranscriptMessage]{}, fmt.Errorf("scan group transcript row: %w", err)
+		}
+		if len(messages) == pageParams.Limit {
+			hasMore = true
+			continue
 		}
 		body, err := s.readBlob(bodyBlobRef, bodySize, bodySHA256)
 		if err != nil {
-			return nil, err
+			return Page[GroupTranscriptMessage]{}, err
 		}
 		message.GroupID = group.GroupID
 		message.GroupAddress = group.Address
@@ -738,9 +949,46 @@ ORDER BY gm.created_at ASC, gm.message_id ASC
 		messages = append(messages, message)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate group transcript: %w", err)
+		return Page[GroupTranscriptMessage]{}, fmt.Errorf("iterate group transcript: %w", err)
 	}
-	return messages, nil
+	page := Page[GroupTranscriptMessage]{Items: messages}
+	if hasMore {
+		last := messages[len(messages)-1]
+		page.NextCursor, err = encodePageCursor("group-transcript", scopeKey, last.MessageCreatedAt, last.MessageID)
+		if err != nil {
+			return Page[GroupTranscriptMessage]{}, err
+		}
+	}
+	return page, nil
+}
+
+func (s *Store) LatestGroupMessageID(ctx context.Context, rawAddress string) (string, error) {
+	groupAddress, err := NormalizeGroupAddress(rawAddress)
+	if err != nil {
+		return "", err
+	}
+	group, found, err := lookupGroupRecord(ctx, s.readDB, groupAddress)
+	if err != nil {
+		return "", fmt.Errorf("load group %q: %w", groupAddress, err)
+	}
+	if !found {
+		return "", fmt.Errorf("group %q: %w", groupAddress, ErrGroupNotFound)
+	}
+	var messageID string
+	err = s.readDB.QueryRowContext(ctx, `
+SELECT message_id
+FROM group_messages
+WHERE group_id = ?
+ORDER BY created_at DESC, message_id DESC
+LIMIT 1
+`, group.GroupID).Scan(&messageID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("load latest group message for %q: %w", groupAddress, err)
+	}
+	return messageID, nil
 }
 
 func (s *Store) WaitGroupMessage(ctx context.Context, params GroupWaitParams) (GroupListedMessage, error) {
@@ -925,6 +1173,9 @@ func buildGroupListedMessage(viewer groupViewerState, record groupMessageRecord)
 	}
 	if record.SenderEndpointID.Valid {
 		message.SenderEndpointID = &record.SenderEndpointID.String
+	}
+	if record.SenderAddress.Valid {
+		message.SenderAddress = &record.SenderAddress.String
 	}
 	if record.FirstReadAt.Valid {
 		message.FirstReadAt = &record.FirstReadAt.String

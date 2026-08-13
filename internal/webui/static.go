@@ -48,6 +48,15 @@ const indexHTML = `<!doctype html>
       display: grid;
       gap: 6px;
     }
+    .load-more {
+      margin-top: 10px;
+      border: 1px solid var(--line);
+      border-radius: 5px;
+      background: var(--panel);
+      color: var(--ink);
+      cursor: pointer;
+      padding: 8px 10px;
+    }
     .group-button {
       width: 100%;
       border: 0;
@@ -228,6 +237,7 @@ const indexHTML = `<!doctype html>
     <aside>
       <div class="brand">waypost</div>
       <div id="groups" class="group-list"></div>
+      <button id="more-groups" class="load-more" type="button" hidden>More groups</button>
     </aside>
     <main>
       <header>
@@ -237,7 +247,11 @@ const indexHTML = `<!doctype html>
         </div>
         <div id="meta" class="meta"></div>
       </header>
-      <section id="timeline" class="timeline"></section>
+      <section id="timeline" class="timeline">
+        <div id="history-messages"></div>
+        <button id="more-messages" class="load-more" type="button" hidden>More messages</button>
+        <div id="live-messages"></div>
+      </section>
     </main>
   </div>
   <script>
@@ -247,9 +261,21 @@ const indexHTML = `<!doctype html>
     const metaEl = document.querySelector("#meta");
     const statusEl = document.querySelector("#status");
     const timelineEl = document.querySelector("#timeline");
+    const historyMessagesEl = document.querySelector("#history-messages");
+    const liveMessagesEl = document.querySelector("#live-messages");
+    const moreGroupsEl = document.querySelector("#more-groups");
+    const moreMessagesEl = document.querySelector("#more-messages");
     let selectedGroup = defaultGroup || "";
     let source = null;
     const rendered = new Set();
+    const groups = [];
+    let groupsCursor = "";
+    let groupsPageLoading = false;
+    let transcriptCursor = "";
+    let latestMessageID = "";
+    let transcriptGeneration = 0;
+    let transcriptRequestController = null;
+    let moreMessagesController = null;
 
     function setStatus(text, live) {
       statusEl.textContent = text;
@@ -260,17 +286,31 @@ const indexHTML = `<!doctype html>
       return "/api/groups/" + encodeURIComponent(group) + "/" + suffix;
     }
 
-    async function loadGroups() {
-      const response = await fetch("/api/groups");
-      if (!response.ok) throw new Error(await response.text());
-      const payload = await response.json();
-      const groups = payload.groups || [];
-      if (!selectedGroup && groups.length) selectedGroup = groups[0].address;
-      renderGroups(groups);
-      if (selectedGroup) await loadTranscript(selectedGroup);
-      else {
-        setStatus("No groups", false);
-        timelineEl.innerHTML = '<div class="empty">No group wayposts exist yet.</div>';
+    async function loadGroups(cursor) {
+      if (groupsPageLoading) return;
+      groupsPageLoading = true;
+      moreGroupsEl.disabled = true;
+      const initialLoad = !cursor;
+      try {
+        const response = await fetch("/api/groups" + (cursor ? "?cursor=" + encodeURIComponent(cursor) : ""));
+        if (!response.ok) throw new Error(await response.text());
+        const payload = await response.json();
+        groups.push(...(payload.items || []));
+        groupsCursor = payload.next_cursor || "";
+        moreGroupsEl.hidden = !groupsCursor;
+        if (!selectedGroup && groups.length) selectedGroup = groups[0].address;
+        renderGroups(groups);
+        if (initialLoad) {
+          if (selectedGroup) await loadTranscript(selectedGroup);
+          else {
+            setStatus("No groups", false);
+            resetTimeline();
+            showTimelineNotice("empty", "No group wayposts exist yet.");
+          }
+        }
+      } finally {
+        groupsPageLoading = false;
+        moreGroupsEl.disabled = false;
       }
     }
 
@@ -290,38 +330,103 @@ const indexHTML = `<!doctype html>
     }
 
     async function loadTranscript(group) {
+      const generation = ++transcriptGeneration;
+      cancelTranscriptRequests();
+      const controller = new AbortController();
+      transcriptRequestController = controller;
       closeSource();
       rendered.clear();
       titleEl.textContent = group;
       metaEl.textContent = "";
-      timelineEl.innerHTML = "";
+      resetTimeline();
       setStatus("Loading", false);
-      const response = await fetch(groupURL(group, "transcript"));
-      if (!response.ok) {
-        setStatus("Error", false);
-        timelineEl.innerHTML = '<div class="error">Unable to load transcript.</div>';
-        return;
+      try {
+        const response = await fetch(groupURL(group, "transcript"), {signal: controller.signal});
+        if (!isCurrentTranscript(group, generation)) return;
+        if (!response.ok) {
+          setStatus("Error", false);
+          showTimelineNotice("error", "Unable to load transcript.");
+          return;
+        }
+        const payload = await response.json();
+        if (!isCurrentTranscript(group, generation)) return;
+        const messages = payload.items || [];
+        transcriptCursor = payload.next_cursor || "";
+        latestMessageID = payload.latest_message_id || "";
+        for (const message of messages) appendMessage(message, historyMessagesEl, false);
+        if (!messages.length) showTimelineNotice("empty", "No messages yet.");
+        moreMessagesEl.hidden = !transcriptCursor;
+        metaEl.textContent = messages.length + " messages loaded";
+        startEvents(group, latestMessageID, generation);
+      } catch (error) {
+        if (error.name !== "AbortError" && isCurrentTranscript(group, generation)) {
+          setStatus("Error", false);
+          showTimelineNotice("error", "Unable to load transcript.");
+        }
+      } finally {
+        if (transcriptRequestController === controller) transcriptRequestController = null;
       }
-      const payload = await response.json();
-      const messages = payload.messages || [];
-      for (const message of messages) appendMessage(message);
-      if (!messages.length) timelineEl.innerHTML = '<div class="empty">No messages yet.</div>';
-      metaEl.textContent = messages.length + " messages";
-      startEvents(group, messages.length ? messages[messages.length - 1].message_id : "");
     }
 
-    function startEvents(group, after) {
+    async function loadMoreMessages() {
+      if (!selectedGroup || !transcriptCursor || moreMessagesController) return;
+      const group = selectedGroup;
+      const cursor = transcriptCursor;
+      const generation = transcriptGeneration;
+      const controller = new AbortController();
+      moreMessagesController = controller;
+      moreMessagesEl.disabled = true;
+      try {
+        const response = await fetch(groupURL(group, "transcript") + "?cursor=" + encodeURIComponent(cursor), {signal: controller.signal});
+        if (!isCurrentTranscript(group, generation)) return;
+        if (!response.ok) throw new Error(await response.text());
+        const payload = await response.json();
+        if (!isCurrentTranscript(group, generation)) return;
+        transcriptCursor = payload.next_cursor || "";
+        for (const message of (payload.items || [])) appendMessage(message, historyMessagesEl, false);
+        moreMessagesEl.hidden = !transcriptCursor;
+        metaEl.textContent = rendered.size + " messages loaded";
+      } catch (error) {
+        if (error.name !== "AbortError" && isCurrentTranscript(group, generation)) setStatus("Error", false);
+      } finally {
+        if (moreMessagesController === controller) {
+          moreMessagesController = null;
+          moreMessagesEl.disabled = false;
+        }
+      }
+    }
+
+    function isCurrentTranscript(group, generation) {
+      return selectedGroup === group && transcriptGeneration === generation;
+    }
+
+    function cancelTranscriptRequests() {
+      if (transcriptRequestController) transcriptRequestController.abort();
+      if (moreMessagesController) moreMessagesController.abort();
+      transcriptRequestController = null;
+      moreMessagesController = null;
+      moreMessagesEl.disabled = false;
+    }
+
+    function startEvents(group, after, generation) {
       closeSource();
-      const url = groupURL(group, "events") + (after ? "?after=" + encodeURIComponent(after) : "");
-      source = new EventSource(url);
-      source.addEventListener("open", () => setStatus("Live", true));
-      source.addEventListener("message", (event) => {
+      if (!isCurrentTranscript(group, generation)) return;
+      const url = groupURL(group, "events") + "?after=" + encodeURIComponent(after || "");
+      const eventSource = new EventSource(url);
+      source = eventSource;
+      eventSource.addEventListener("open", () => {
+        if (source === eventSource && isCurrentTranscript(group, generation)) setStatus("Live", true);
+      });
+      eventSource.addEventListener("message", (event) => {
+        if (source !== eventSource || !isCurrentTranscript(group, generation)) return;
         const message = JSON.parse(event.data);
-        if (timelineEl.querySelector(".empty")) timelineEl.innerHTML = "";
-        appendMessage(message);
+        removeTimelineNotice();
+        appendMessage(message, liveMessagesEl, true);
         metaEl.textContent = rendered.size + " messages";
       });
-      source.addEventListener("error", () => setStatus("Reconnecting", false));
+      eventSource.addEventListener("error", () => {
+        if (source === eventSource && isCurrentTranscript(group, generation)) setStatus("Reconnecting", false);
+      });
     }
 
     function closeSource() {
@@ -329,7 +434,28 @@ const indexHTML = `<!doctype html>
       source = null;
     }
 
-    function appendMessage(message) {
+    function resetTimeline() {
+      historyMessagesEl.innerHTML = "";
+      liveMessagesEl.innerHTML = "";
+      moreMessagesEl.hidden = true;
+      moreMessagesEl.disabled = false;
+      removeTimelineNotice();
+    }
+
+    function showTimelineNotice(className, text) {
+      removeTimelineNotice();
+      const notice = document.createElement("div");
+      notice.className = className + " timeline-notice";
+      notice.textContent = text;
+      historyMessagesEl.appendChild(notice);
+    }
+
+    function removeTimelineNotice() {
+      const notice = timelineEl.querySelector(".timeline-notice");
+      if (notice) notice.remove();
+    }
+
+    function appendMessage(message, target, scroll) {
       if (rendered.has(message.message_id)) return;
       rendered.add(message.message_id);
       const row = document.createElement("article");
@@ -370,8 +496,8 @@ const indexHTML = `<!doctype html>
       row.querySelector(".copy-button").addEventListener("click", (event) => {
         copyBody(message.body || "", event.currentTarget);
       });
-      timelineEl.appendChild(row);
-      timelineEl.scrollTop = timelineEl.scrollHeight;
+      target.appendChild(row);
+      if (scroll) timelineEl.scrollTop = timelineEl.scrollHeight;
     }
 
     function senderVia(message) {
@@ -431,9 +557,13 @@ const indexHTML = `<!doctype html>
       }, 1100);
     }
 
+    moreGroupsEl.addEventListener("click", () => loadGroups(groupsCursor).catch((error) => setStatus(error.message, false)));
+    moreMessagesEl.addEventListener("click", () => loadMoreMessages());
+
     loadGroups().catch((error) => {
       setStatus("Error", false);
-      timelineEl.innerHTML = '<div class="error">' + error.message + '</div>';
+      resetTimeline();
+      showTimelineNotice("error", error.message);
     });
   </script>
 </body>

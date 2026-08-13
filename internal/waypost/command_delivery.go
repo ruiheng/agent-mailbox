@@ -15,11 +15,17 @@ func (a *App) prepareListCommand(args []string) (preparedCommand, error) {
 	fs.SetOutput(io.Discard)
 
 	var address string
+	var fromAddress string
 	var person string
 	var formats outputFlags
 	var state string
+	var limit int
+	var cursor string
 	fs.StringVar(&address, "for", "", "recipient address")
+	fs.StringVar(&fromAddress, "from", "", "sender address")
 	fs.StringVar(&person, "as", "", "group reader identity")
+	fs.IntVar(&limit, "limit", DefaultPageSize, "maximum items in this page")
+	fs.StringVar(&cursor, "cursor", "", "pagination cursor")
 	formats.register(fs, "emit JSON", "emit YAML")
 	fs.StringVar(&state, "state", "", "filter by delivery state")
 
@@ -35,8 +41,14 @@ func (a *App) prepareListCommand(args []string) (preparedCommand, error) {
 	}
 
 	params := ListParams{
-		Address: address,
-		State:   state,
+		Address:     address,
+		FromAddress: fromAddress,
+		State:       state,
+		Limit:       limit,
+		Cursor:      cursor,
+	}
+	if _, err := normalizePageParams(PageParams{Limit: limit, Cursor: cursor}); err != nil {
+		return nil, err
 	}
 
 	return func(ctx context.Context, store *Store) error {
@@ -44,41 +56,48 @@ func (a *App) prepareListCommand(args []string) (preparedCommand, error) {
 			if strings.TrimSpace(state) != "" {
 				return errors.New("--state is not supported with --as")
 			}
-			messages, err := store.ListGroupMessages(ctx, GroupListParams{
-				Address: address,
-				Person:  person,
+			page, err := store.ListGroupMessagesPage(ctx, GroupListParams{
+				Address:     address,
+				Person:      person,
+				FromAddress: fromAddress,
+				Limit:       limit,
+				Cursor:      cursor,
 			})
 			if err != nil {
 				return err
 			}
 			if format != outputFormatText {
-				summaries := make([]GroupListedMessageCompact, 0, len(messages))
-				for _, message := range messages {
+				summaries := make([]GroupListedMessageCompact, 0, len(page.Items))
+				for _, message := range page.Items {
 					summaries = append(summaries, CompactGroupListedMessage(message))
 				}
-				return a.writeStructuredOutput(format, summaries)
+				return a.writeStructuredOutput(format, Page[GroupListedMessageCompact]{Items: summaries, NextCursor: page.NextCursor})
 			}
-			for _, message := range messages {
+			for _, message := range page.Items {
 				if err := a.writeGroupListedMessageText(message); err != nil {
 					return err
 				}
 			}
-			return nil
+			return writeNextCursor(a.stdout, page.NextCursor)
 		}
 
-		deliveries, err := store.List(ctx, params)
+		page, err := store.ListPage(ctx, params)
 		if err != nil {
 			return err
 		}
 
 		if format != outputFormatText {
-			return a.writeStructuredOutput(format, deliveries)
+			return a.writeStructuredOutput(format, page)
 		}
 
-		for _, delivery := range deliveries {
-			fmt.Fprintf(a.stdout, "%s %s %s %s\n", delivery.DeliveryID, delivery.State, delivery.VisibleAt, delivery.Subject)
+		for _, delivery := range page.Items {
+			sender := ""
+			if delivery.SenderAddress != nil {
+				sender = " sender_address=" + *delivery.SenderAddress
+			}
+			fmt.Fprintf(a.stdout, "%s %s %s %s%s\n", delivery.DeliveryID, delivery.State, delivery.VisibleAt, delivery.Subject, sender)
 		}
-		return nil
+		return writeNextCursor(a.stdout, page.NextCursor)
 	}, nil
 }
 
@@ -381,16 +400,20 @@ func (a *App) prepareReadCommand(args []string) (preparedCommand, error) {
 	var deliveryIDs stringListFlag
 	var messageIDs stringListFlag
 	var addresses stringListFlag
+	var fromAddress string
 	var latest bool
 	var state string
 	var limit int
+	var cursor string
 	var formats outputFlags
 	fs.Var(&deliveryIDs, "delivery", "delivery id (repeatable)")
 	fs.Var(&messageIDs, "message", "message id (repeatable)")
 	fs.Var(&addresses, "for", "recipient address (repeatable)")
+	fs.StringVar(&fromAddress, "from", "", "sender address for --latest")
 	fs.BoolVar(&latest, "latest", false, "read the latest deliveries for one or more queues")
 	fs.StringVar(&state, "state", "", "delivery state for --latest (defaults to acked)")
 	fs.IntVar(&limit, "limit", 1, "maximum number of latest deliveries to read")
+	fs.StringVar(&cursor, "cursor", "", "pagination cursor for --latest")
 	formats.register(fs, "emit JSON", "emit YAML")
 
 	flagArgs, directIDs := splitReadCommandArgs(fs, args)
@@ -440,14 +463,26 @@ func (a *App) prepareReadCommand(args []string) (preparedCommand, error) {
 		return nil, errors.New("--delivery, --message, and --latest are mutually exclusive")
 	case !latest && len(normalizedAddresses) > 0:
 		return nil, errors.New("--for requires --latest")
+	case !latest && strings.TrimSpace(fromAddress) != "":
+		return nil, errors.New("--from requires --latest")
 	case !latest && strings.TrimSpace(state) != "":
 		return nil, errors.New("--state requires --latest")
 	case !latest && flagWasProvided(fs, "limit"):
 		return nil, errors.New("--limit requires --latest")
+	case !latest && strings.TrimSpace(cursor) != "":
+		return nil, errors.New("--cursor requires --latest")
 	case latest && len(normalizedAddresses) == 0:
 		return nil, errors.New("--latest requires at least one --for address")
-	case latest && limit <= 0:
-		return nil, errors.New("--limit must be greater than 0")
+	case latest:
+		if _, err := normalizePageParams(PageParams{Limit: limit, Cursor: cursor}); err != nil {
+			return nil, err
+		}
+	}
+	if err := validateInputItemCount("read ids", len(normalizedDeliveryIDs)+len(normalizedMessageIDs)); err != nil {
+		return nil, err
+	}
+	if err := validateInputItemCount("--for", len(normalizedAddresses)); err != nil {
+		return nil, err
 	}
 	format, err := formats.resolve()
 	if err != nil {
@@ -469,13 +504,20 @@ func (a *App) prepareReadCommand(args []string) (preparedCommand, error) {
 		}
 
 		if latest {
-			deliveries, hasMore, err := store.ReadLatestDeliveries(ctx, normalizedAddresses, state, limit)
+			page, err := store.ReadLatestDeliveriesPage(ctx, ReadLatestParams{
+				Addresses:   normalizedAddresses,
+				FromAddress: fromAddress,
+				State:       state,
+				Limit:       limit,
+				Cursor:      cursor,
+			})
 			if err != nil {
 				return err
 			}
 			result := readDeliveryResult{
-				Items:   deliveries,
-				HasMore: hasMore,
+				Items:      page.Items,
+				HasMore:    page.NextCursor != "",
+				NextCursor: page.NextCursor,
 			}
 			if format != outputFormatText {
 				return a.writeStructuredOutput(format, result)
@@ -566,13 +608,16 @@ func normalizeDirectReadIDs(values []string) ([]string, []string, error) {
 func (a *App) writeListHelp() {
 	writeHelp(a.stdout, []string{
 		"Usage:",
-		"  waypost list --for ADDRESS [--state STATE] [--json | --yaml]",
-		"  waypost list --for GROUP_ADDRESS --as PERSON [--json | --yaml]",
+		"  waypost list --for ADDRESS [--from ADDRESS] [--state STATE] [--limit N] [--cursor CURSOR] [--json | --yaml]",
+		"  waypost list --for GROUP_ADDRESS --as PERSON [--from ADDRESS] [--limit N] [--cursor CURSOR] [--json | --yaml]",
 		"",
 		"Options:",
 		"  --for ADDRESS      Recipient address",
+		"  --from ADDRESS     Filter by sender address",
 		"  --as PERSON        Group reader identity",
 		"  --state STATE      Filter by delivery state (queued, leased, acked, dead_letter)",
+		fmt.Sprintf("  --limit N          Page size (default %d, maximum %d)", DefaultPageSize, MaxPageSize),
+		"  --cursor CURSOR    Continue from a prior next_cursor",
 		"  --json             Emit JSON",
 		"  --yaml             Emit YAML",
 	})
@@ -615,7 +660,7 @@ func (a *App) writeReadHelp() {
 		"  waypost read ID [ID ...] [--json | --yaml]",
 		"  waypost read --message ID [--message ID ...] [--json | --yaml]",
 		"  waypost read --delivery ID [--delivery ID ...] [--json | --yaml]",
-		"  waypost read --latest --for ADDRESS [--for ADDRESS ...] [--state STATE] [--limit N] [--json | --yaml]",
+		"  waypost read --latest --for ADDRESS [--for ADDRESS ...] [--from ADDRESS] [--state STATE] [--limit N] [--cursor CURSOR] [--json | --yaml]",
 		"",
 		"Options:",
 		"  ID                  Read by id; dlv_ ids are deliveries, all others are messages (repeatable)",
@@ -623,8 +668,10 @@ func (a *App) writeReadHelp() {
 		"  --delivery ID       Delivery id to read (repeatable)",
 		"  --latest            Read the latest deliveries for one or more queues",
 		"  --for ADDRESS       Recipient address for --latest (repeatable)",
+		"  --from ADDRESS      Filter --latest by sender address",
 		"  --state STATE       Optional delivery state filter for --latest (defaults to any)",
-		"  --limit N           Maximum number of latest deliveries to read",
+		fmt.Sprintf("  --limit N           Page size (default 1, maximum %d)", MaxPageSize),
+		"  --cursor CURSOR     Continue from a prior next_cursor",
 		"  --json              Emit JSON",
 		"  --yaml              Emit YAML",
 	})

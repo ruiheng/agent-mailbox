@@ -77,10 +77,13 @@ func TestCLISendRecvAckFlow(t *testing.T) {
 		t.Fatalf("list acked exit code = %d, stderr = %q", list.exitCode, list.stderr)
 	}
 
-	var deliveries []map[string]any
-	if err := json.Unmarshal([]byte(list.stdout), &deliveries); err != nil {
+	var page struct {
+		Items []map[string]any `json:"items"`
+	}
+	if err := json.Unmarshal([]byte(list.stdout), &page); err != nil {
 		t.Fatalf("json.Unmarshal(list acked stdout) error = %v; stdout = %q", err, list.stdout)
 	}
+	deliveries := page.Items
 	if len(deliveries) != 1 {
 		t.Fatalf("len(list acked deliveries) = %d, want 1", len(deliveries))
 	}
@@ -518,10 +521,13 @@ func TestCLIForwardToGroupInboxPreservesGroupMode(t *testing.T) {
 	if list.exitCode != 0 {
 		t.Fatalf("group list exit code = %d, stderr = %q", list.exitCode, list.stderr)
 	}
-	var listed []map[string]any
-	if err := json.Unmarshal([]byte(list.stdout), &listed); err != nil {
+	var listedPage struct {
+		Items []map[string]any `json:"items"`
+	}
+	if err := json.Unmarshal([]byte(list.stdout), &listedPage); err != nil {
 		t.Fatalf("json.Unmarshal(group list stdout) error = %v; stdout = %q", err, list.stdout)
 	}
+	listed := listedPage.Items
 	if len(listed) != 1 {
 		t.Fatalf("len(group listed messages) = %d, want 1", len(listed))
 	}
@@ -545,6 +551,9 @@ func TestCLIForwardToGroupInboxPreservesGroupMode(t *testing.T) {
 	}
 	if waited["forwarded_from_address"] != "agent/sender" {
 		t.Fatalf("group wait forwarded_from_address = %v, want agent/sender", waited["forwarded_from_address"])
+	}
+	if waited["sender_address"] != "agent/sender" {
+		t.Fatalf("group wait sender_address = %v, want agent/sender", waited["sender_address"])
 	}
 	assertMapOmitsForwardedMessageID(t, waited)
 
@@ -1170,8 +1179,8 @@ func TestCLIListYAMLOutput(t *testing.T) {
 	if list.stderr != "" {
 		t.Fatalf("list stderr = %q, want empty", list.stderr)
 	}
-	if !strings.HasPrefix(list.stdout, "-\n  delivery_id: ") {
-		t.Fatalf("list stdout = %q, want YAML sequence", list.stdout)
+	if !strings.HasPrefix(list.stdout, "items:\n  -\n    delivery_id: ") {
+		t.Fatalf("list stdout = %q, want paginated YAML items", list.stdout)
 	}
 	if !strings.Contains(list.stdout, "recipient_address: \"workflow/reviewer/task-123\"\n") {
 		t.Fatalf("list stdout = %q, want YAML recipient_address", list.stdout)
@@ -1212,8 +1221,8 @@ func TestCLIListStructuredOutputUsesEmptyArraysForExistingEmptyInbox(t *testing.
 	if jsonList.stderr != "" {
 		t.Fatalf("list --json stderr = %q, want empty", jsonList.stderr)
 	}
-	if jsonList.stdout != "[]\n" {
-		t.Fatalf("list --json stdout = %q, want empty array", jsonList.stdout)
+	if jsonList.stdout != "{\n  \"items\": []\n}\n" {
+		t.Fatalf("list --json stdout = %q, want empty items page", jsonList.stdout)
 	}
 
 	yamlList := runCLI(t, "", "--state-dir", stateDir,
@@ -1227,8 +1236,8 @@ func TestCLIListStructuredOutputUsesEmptyArraysForExistingEmptyInbox(t *testing.
 	if yamlList.stderr != "" {
 		t.Fatalf("list --yaml stderr = %q, want empty", yamlList.stderr)
 	}
-	if yamlList.stdout != "[]\n" {
-		t.Fatalf("list --yaml stdout = %q, want empty array", yamlList.stdout)
+	if yamlList.stdout != "items: []\n" {
+		t.Fatalf("list --yaml stdout = %q, want empty items page", yamlList.stdout)
 	}
 }
 

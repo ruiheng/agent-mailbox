@@ -33,6 +33,9 @@ type ClaimableAddress struct {
 }
 
 func (s *Store) ListStaleAddresses(ctx context.Context, params StaleAddressesParams) ([]StaleAddress, error) {
+	if err := validateInputItemCount("stale scopes", len(params.Addresses)+len(params.GroupViews)); err != nil {
+		return nil, err
+	}
 	if params.OlderThan <= 0 {
 		return nil, errors.New("older_than must be greater than 0")
 	}
@@ -119,21 +122,21 @@ func (s *Store) listGroupStaleAddresses(ctx context.Context, groupViews []GroupS
 		if err != nil {
 			return nil, err
 		}
-		records, err := s.listGroupMessages(ctx, s.readDB, scope, true, 0)
+		oldest, count, err := s.groupUnreadSummary(ctx, s.readDB, scope)
 		if err != nil {
 			return nil, err
 		}
-		if len(records) == 0 {
+		if count == 0 {
 			continue
 		}
-		if records[0].MessageCreatedAt > staleBeforeText {
+		if oldest > staleBeforeText {
 			continue
 		}
 		stale = append(stale, StaleAddress{
 			Address:          scope.viewer.Group.Address,
 			Person:           scope.viewer.Person,
-			OldestEligibleAt: records[0].MessageCreatedAt,
-			ClaimableCount:   len(records),
+			OldestEligibleAt: oldest,
+			ClaimableCount:   count,
 		})
 	}
 	return stale, nil

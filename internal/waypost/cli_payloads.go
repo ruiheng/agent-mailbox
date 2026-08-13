@@ -104,13 +104,13 @@ type groupReceiveOutput struct {
 }
 
 type readMessageResult struct {
-	Items   []ReadMessage `json:"items"`
-	HasMore bool          `json:"has_more,omitempty"`
+	Items []ReadMessage `json:"items"`
 }
 
 type readDeliveryResult struct {
-	Items   []ReadDelivery `json:"items"`
-	HasMore bool           `json:"has_more,omitempty"`
+	Items      []ReadDelivery `json:"items"`
+	HasMore    bool           `json:"has_more,omitempty"`
+	NextCursor string         `json:"next_cursor,omitempty"`
 }
 
 type ListedDeliveryCompact struct {
@@ -127,6 +127,7 @@ type GroupListedMessageCompact struct {
 	GroupID              string  `json:"group_id"`
 	GroupAddress         string  `json:"group_address"`
 	Person               string  `json:"person"`
+	SenderAddress        *string `json:"sender_address,omitempty"`
 	MessageCreatedAt     string  `json:"message_created_at"`
 	Subject              string  `json:"subject"`
 	ContentType          string  `json:"content_type,omitempty"`
@@ -311,6 +312,7 @@ func CompactGroupListedMessage(message GroupListedMessage) GroupListedMessageCom
 		GroupID:              message.GroupID,
 		GroupAddress:         message.GroupAddress,
 		Person:               message.Person,
+		SenderAddress:        message.SenderAddress,
 		MessageCreatedAt:     message.MessageCreatedAt,
 		Subject:              message.Subject,
 		ContentType:          message.ContentType,

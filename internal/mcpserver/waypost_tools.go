@@ -18,7 +18,10 @@ type waypostBindInput struct {
 	DefaultWorkdir string   `json:"default_workdir,omitempty"`
 }
 
-type waypostStatusInput struct{}
+type waypostStatusInput struct {
+	Limit  *int   `json:"limit,omitempty"`
+	Cursor string `json:"cursor,omitempty"`
+}
 
 type waypostDebugInput struct{}
 
@@ -53,15 +56,18 @@ type waypostWaitInput struct {
 }
 
 type waypostRecvInput struct {
-	Addresses        []string `json:"addresses,omitempty"`
-	AsPerson         string   `json:"as_person,omitempty"`
-	KnownDeliveryIDs []string `json:"known_delivery_ids,omitempty"`
+	Addresses         []string `json:"addresses,omitempty"`
+	AsPerson          string   `json:"as_person,omitempty"`
+	KnownDeliveryIDs  []string `json:"known_delivery_ids,omitempty"`
+	ActiveLeaseCursor string   `json:"active_lease_cursor,omitempty"`
 }
 
 type waypostClaimHistoryInput struct {
 	DeliveryID        string `json:"delivery_id,omitempty"`
 	IncludeTerminal   bool   `json:"include_terminal,omitempty"`
 	IncludeLeaseToken bool   `json:"include_lease_token,omitempty"`
+	Limit             *int   `json:"limit,omitempty"`
+	Cursor            string `json:"cursor,omitempty"`
 }
 
 type waypostListInput struct {
@@ -178,7 +184,11 @@ func (s *Service) waypostBind(ctx context.Context, _ *mcp.CallToolRequest, input
 	return s.waypostMutationToolResult(ctx, out)
 }
 
-func (s *Service) waypostStatus(ctx context.Context, _ *mcp.CallToolRequest, _ waypostStatusInput) (*mcp.CallToolResult, map[string]any, error) {
+func (s *Service) waypostStatus(ctx context.Context, _ *mcp.CallToolRequest, input waypostStatusInput) (*mcp.CallToolResult, map[string]any, error) {
+	pageSize, after, err := normalizeMemoryPage(input.Limit, input.Cursor, "active-leases", "active")
+	if err != nil {
+		return nil, nil, err
+	}
 	bound, err := s.sessions.boundState(ctx)
 	if err != nil {
 		return nil, nil, err
@@ -192,26 +202,45 @@ func (s *Service) waypostStatus(ctx context.Context, _ *mcp.CallToolRequest, _ w
 			return nil, nil, err
 		}
 	}
-	s.markWaypostStatusCalled()
 	out := boundStateMap(bound)
 	out["server_version"] = serverVersion
 	out["executable"] = executable
 	out["resolved_state_dir"] = stateDir
 	out["default_sender"] = orUnset(bound.DefaultSender)
 	out["default_workdir"] = orUnset(bound.DefaultWorkdir)
-	activeLeases := activeLeaseStatusItems(s.activeLeases.snapshot())
+	leases := s.activeLeases.snapshot()
+	activeLeases, nextCursor, err := activeLeaseStatusPage(leases, pageSize, after, "active-leases", "active")
+	if err != nil {
+		return nil, nil, err
+	}
 	out["active_leases"] = activeLeases
-	out["active_lease_count"] = len(activeLeases)
-	return s.waypostToolResult(ctx, out)
+	out["active_lease_count"] = len(leases)
+	if nextCursor != "" {
+		out["next_cursor"] = nextCursor
+	}
+	result, structured, err := s.waypostToolResult(ctx, out)
+	if err != nil {
+		return nil, nil, err
+	}
+	s.markWaypostStatusCalled()
+	return result, structured, nil
 }
 
-func activeLeaseStatusItems(leases []activeLease) []map[string]any {
+func activeLeaseStatusPage(leases []activeLease, limit int, after, kind, scope string) ([]map[string]any, string, error) {
 	sort.Slice(leases, func(i, j int) bool {
 		return leases[i].DeliveryID < leases[j].DeliveryID
 	})
 
-	items := make([]map[string]any, 0, len(leases))
+	items := make([]map[string]any, 0, min(len(leases), limit))
+	more := false
 	for _, lease := range leases {
+		if lease.DeliveryID <= after {
+			continue
+		}
+		if len(items) == limit {
+			more = true
+			break
+		}
 		items = append(items, map[string]any{
 			"delivery_id":       lease.DeliveryID,
 			"recipient_address": lease.RecipientAddress,
@@ -219,7 +248,11 @@ func activeLeaseStatusItems(leases []activeLease) []map[string]any {
 			"last_renewed_at":   nilIfEmpty(lease.LastRenewedAt),
 		})
 	}
-	return items
+	if !more || len(items) == 0 {
+		return items, "", nil
+	}
+	nextCursor, err := encodeMemoryPageCursor(kind, scope, items[len(items)-1]["delivery_id"].(string))
+	return items, nextCursor, err
 }
 
 func (s *Service) sendWaypostMessage(ctx context.Context, input waypostSendInput) (map[string]any, error) {
@@ -404,6 +437,9 @@ func (s *Service) waypostForward(ctx context.Context, _ *mcp.CallToolRequest, in
 }
 
 func (s *Service) waypostWait(ctx context.Context, _ *mcp.CallToolRequest, input waypostWaitInput) (*mcp.CallToolResult, map[string]any, error) {
+	if err := validateMCPItems("addresses", len(input.Addresses)); err != nil {
+		return nil, nil, err
+	}
 	addresses, err := s.sessions.waypostAddresses(ctx, input.Addresses)
 	if err != nil {
 		return nil, nil, err
@@ -477,6 +513,12 @@ func (s *Service) waypostWaitGroup(ctx context.Context, addresses []string, pers
 }
 
 func (s *Service) waypostRecv(ctx context.Context, _ *mcp.CallToolRequest, input waypostRecvInput) (*mcp.CallToolResult, map[string]any, error) {
+	if err := validateMCPItems("addresses", len(input.Addresses)); err != nil {
+		return nil, nil, err
+	}
+	if err := validateMCPItems("known_delivery_ids", len(input.KnownDeliveryIDs)); err != nil {
+		return nil, nil, err
+	}
 	addresses, err := s.sessions.waypostAddresses(ctx, input.Addresses)
 	if err != nil {
 		return nil, nil, err
@@ -488,8 +530,11 @@ func (s *Service) waypostRecv(ctx context.Context, _ *mcp.CallToolRequest, input
 		return nil, nil, err
 	}
 	warnings := s.waypostReceiveWarnings(ctx, len(input.Addresses) > 0)
-	activeLeaseIDs := s.activeLeaseHintDeliveryIDs(addresses, input.KnownDeliveryIDs)
-	if len(activeLeaseIDs) > 0 {
+	activeLeasePage, err := s.activeLeaseHintPage(addresses, input.KnownDeliveryIDs, input.ActiveLeaseCursor)
+	if err != nil {
+		return nil, nil, err
+	}
+	if activeLeasePage.Total > 0 {
 		remainingByState, err := s.remainingByState(ctx, addresses, nil)
 		if err != nil {
 			return nil, nil, err
@@ -497,12 +542,16 @@ func (s *Service) waypostRecv(ctx context.Context, _ *mcp.CallToolRequest, input
 		out := map[string]any{
 			"status":                 "active_leases",
 			"addresses":              addresses,
-			"active_lease_count":     len(activeLeaseIDs),
-			"claimed_delivery_ids":   activeLeaseIDs,
+			"active_lease_count":     activeLeasePage.Total,
+			"returned_lease_count":   len(activeLeasePage.DeliveryIDs),
+			"claimed_delivery_ids":   activeLeasePage.DeliveryIDs,
 			"known_delivery_ids":     normalizedKnownDeliveryIDs(input.KnownDeliveryIDs),
 			"claim_history_tool":     "waypost_claim_history",
-			"known_delivery_id_hint": "If you are already handling these deliveries, retry waypost_recv with known_delivery_ids set to claimed_delivery_ids. If you lost the lease token, call waypost_claim_history with delivery_id and include_lease_token=true.",
+			"known_delivery_id_hint": "Use active_lease_cursor to continue this bounded hint. If you are already handling returned deliveries, known_delivery_ids can suppress up to 100 IDs. If you lost a lease token, call waypost_claim_history with delivery_id and include_lease_token=true.",
 			"warnings":               warnings,
+		}
+		if activeLeasePage.NextCursor != "" {
+			out["next_cursor"] = activeLeasePage.NextCursor
 		}
 		if len(remainingByState) > 0 {
 			out["remaining_by_state"] = remainingByState
@@ -526,8 +575,11 @@ func (s *Service) waypostRecv(ctx context.Context, _ *mcp.CallToolRequest, input
 	if errors.As(err, &recovery) {
 		s.activeLeases.trackReceive(waypost.ReceiveResult{Messages: recovery.Claims}, s.now().Format(time.RFC3339Nano))
 		s.startLeaseRenewLoop()
-		claims := make([]map[string]any, 0, len(recovery.Claims))
-		for _, claim := range recovery.Claims {
+		claims := make([]map[string]any, 0, min(len(recovery.Claims), waypost.MaxPageSize))
+		for index, claim := range recovery.Claims {
+			if index == waypost.MaxPageSize {
+				break
+			}
 			claims = append(claims, map[string]any{
 				"delivery_id":       claim.DeliveryID,
 				"lease_token":       claim.LeaseToken,
@@ -566,21 +618,30 @@ func (s *Service) waypostRecv(ctx context.Context, _ *mcp.CallToolRequest, input
 	return s.waypostMutationToolResult(ctx, out)
 }
 
-func (s *Service) activeLeaseHintDeliveryIDs(addresses []string, knownDeliveryIDs []string) []string {
-	leases := s.activeLeases.snapshot()
-	if len(leases) == 0 {
-		return nil
-	}
-	sort.Slice(leases, func(i, j int) bool {
-		return leases[i].DeliveryID < leases[j].DeliveryID
-	})
+type activeLeaseHintPage struct {
+	DeliveryIDs []string
+	Total       int
+	NextCursor  string
+}
 
+func (s *Service) activeLeaseHintPage(addresses []string, knownDeliveryIDs []string, rawCursor string) (activeLeaseHintPage, error) {
 	addressSet := make(map[string]struct{}, len(addresses))
 	for _, address := range addresses {
 		addressSet[address] = struct{}{}
 	}
 	knownSet := knownDeliveryIDSet(knownDeliveryIDs)
-	deliveryIDs := make([]string, 0, len(leases))
+	scope := memoryCursorScope("active-lease-hint", strings.Join(addresses, "\x00"), strings.Join(normalizedKnownDeliveryIDs(knownDeliveryIDs), "\x00"))
+	limit := waypost.MaxPageSize
+	_, after, err := normalizeMemoryPage(&limit, rawCursor, "active-lease-hint", scope)
+	if err != nil {
+		return activeLeaseHintPage{}, err
+	}
+	leases := s.activeLeases.snapshot()
+	sort.Slice(leases, func(i, j int) bool {
+		return leases[i].DeliveryID < leases[j].DeliveryID
+	})
+	page := activeLeaseHintPage{DeliveryIDs: make([]string, 0, waypost.MaxPageSize)}
+	more := false
 	for _, lease := range leases {
 		if _, known := knownSet[lease.DeliveryID]; known {
 			continue
@@ -588,9 +649,23 @@ func (s *Service) activeLeaseHintDeliveryIDs(addresses []string, knownDeliveryID
 		if _, wanted := addressSet[lease.RecipientAddress]; !wanted {
 			continue
 		}
-		deliveryIDs = append(deliveryIDs, lease.DeliveryID)
+		page.Total++
+		if lease.DeliveryID <= after {
+			continue
+		}
+		if len(page.DeliveryIDs) == waypost.MaxPageSize {
+			more = true
+			continue
+		}
+		page.DeliveryIDs = append(page.DeliveryIDs, lease.DeliveryID)
 	}
-	return deliveryIDs
+	if more {
+		page.NextCursor, err = encodeMemoryPageCursor("active-lease-hint", scope, page.DeliveryIDs[len(page.DeliveryIDs)-1])
+		if err != nil {
+			return activeLeaseHintPage{}, err
+		}
+	}
+	return page, nil
 }
 
 func knownDeliveryIDSet(deliveryIDs []string) map[string]struct{} {
@@ -619,6 +694,9 @@ func (s *Service) waypostClaimHistory(ctx context.Context, _ *mcp.CallToolReques
 	if input.IncludeLeaseToken && deliveryID == "" {
 		return nil, nil, errors.New("include_lease_token requires delivery_id")
 	}
+	if deliveryID != "" && (input.Limit != nil || strings.TrimSpace(input.Cursor) != "") {
+		return nil, nil, errors.New("limit and cursor are not supported with delivery_id")
+	}
 	if err := s.reconcileTrackedLeases(ctx); err != nil {
 		return nil, nil, err
 	}
@@ -626,11 +704,21 @@ func (s *Service) waypostClaimHistory(ctx context.Context, _ *mcp.CallToolReques
 	sort.Slice(leases, func(i, j int) bool {
 		return leases[i].DeliveryID < leases[j].DeliveryID
 	})
+	pageSize, after, err := normalizeMemoryPage(input.Limit, input.Cursor, "claim-history", fmt.Sprintf("terminal=%t", input.IncludeTerminal))
+	if err != nil {
+		return nil, nil, err
+	}
 
-	items := make([]map[string]any, 0, len(leases))
+	items := make([]map[string]any, 0, min(len(leases), pageSize))
 	for _, lease := range leases {
 		if deliveryID != "" && lease.DeliveryID != deliveryID {
 			continue
+		}
+		if deliveryID == "" && lease.DeliveryID <= after {
+			continue
+		}
+		if deliveryID == "" && len(items) == pageSize {
+			break
 		}
 		item := map[string]any{
 			"delivery_id":       lease.DeliveryID,
@@ -655,15 +743,33 @@ func (s *Service) waypostClaimHistory(ctx context.Context, _ *mcp.CallToolReques
 			"items":       items,
 		})
 	}
-	return s.waypostToolResult(ctx, map[string]any{
+	out := map[string]any{
 		"status":                 "listed",
 		"items":                  items,
 		"include_terminal":       input.IncludeTerminal,
 		"lease_tokens_included":  input.IncludeLeaseToken,
 		"lease_token_hint":       "Pass delivery_id and include_lease_token=true only when recovering a token this MCP process previously returned.",
 		"current_process_only":   true,
-		"claimed_delivery_count": len(items),
-	})
+		"claimed_delivery_count": len(leases),
+		"returned_claim_count":   len(items),
+	}
+	if deliveryID != "" {
+		out["claimed_delivery_count"] = len(items)
+	}
+	if deliveryID == "" && len(items) == pageSize {
+		lastID := items[len(items)-1]["delivery_id"].(string)
+		for _, lease := range leases {
+			if lease.DeliveryID > lastID {
+				nextCursor, err := encodeMemoryPageCursor("claim-history", fmt.Sprintf("terminal=%t", input.IncludeTerminal), lastID)
+				if err != nil {
+					return nil, nil, err
+				}
+				out["next_cursor"] = nextCursor
+				break
+			}
+		}
+	}
+	return s.waypostToolResult(ctx, out)
 }
 
 func (s *Service) waypostRecvGroup(ctx context.Context, addresses []string, person string) (*mcp.CallToolResult, map[string]any, error) {
@@ -810,6 +916,18 @@ func (s *Service) waypostList(ctx context.Context, _ *mcp.CallToolRequest, input
 }
 
 func (s *Service) waypostRead(ctx context.Context, _ *mcp.CallToolRequest, input waypostReadInput) (*mcp.CallToolResult, map[string]any, error) {
+	if err := validateMCPItems("message_ids", len(input.MessageIDs)); err != nil {
+		return nil, nil, err
+	}
+	if err := validateMCPItems("delivery_ids", len(input.DeliveryIDs)); err != nil {
+		return nil, nil, err
+	}
+	if err := validateMCPItems("addresses", len(input.Addresses)); err != nil {
+		return nil, nil, err
+	}
+	if input.Limit != nil && (*input.Limit < 1 || *input.Limit > waypost.MaxPageSize) {
+		return nil, nil, fmt.Errorf("limit must be between 1 and %d", waypost.MaxPageSize)
+	}
 	hasMessageIDs := len(input.MessageIDs) > 0
 	hasDeliveryIDs := len(input.DeliveryIDs) > 0
 	wantsLatest := input.Latest

@@ -485,7 +485,7 @@ latest deliveries for one or more queues.
 waypost read <id> [<id> ...] [--json | --yaml]
 waypost read --message <id> [--message <id> ...] [--json | --yaml]
 waypost read --delivery <id> [--delivery <id> ...] [--json | --yaml]
-waypost read --latest --for <address> [--for <address> ...] [--state <state>] [--limit <n>] [--json | --yaml]
+waypost read --latest --for <address> [--for <address> ...] [--from <address>] [--state <state>] [--limit <n>] [--cursor <cursor>] [--json | --yaml]
 ```
 
 Use `--json` or `--yaml` for scripts and agents.
@@ -505,13 +505,20 @@ Notes:
 - `--latest` requires at least one `--for`
 - `--latest` defaults to no state filter (`any`) and `--limit 1`
 - `--latest` searches the union of the requested queues and returns newest-first
-- structured output always returns an object with `items`; it includes
-  `has_more: true` only when a latest read was truncated
+- paginated `--latest` results use stable keyset cursors; delivery state filters
+  are evaluated from current state on each page request
+- `--from <address>` restricts `--latest` to messages sent by that endpoint
+- forwarded messages match the current forwarder's address; the original
+  source remains available separately as `forwarded_from_address`
+- `--limit` may not exceed 100; `next_cursor` continues a truncated latest read
+- structured output always returns an object with `items`; it retains sparse
+  `has_more: true` for compatibility and emits `next_cursor` when another page exists
 - returns the persisted body after verifying the blob size and sha256
 - plain-text output prints one item after another, separated by `---`
 - `--message` items return message metadata plus `body`
 - `--delivery` and `--latest` items also include delivery metadata such as
   `state`, recipient, and `acked_at` when present
+- read results include `sender_address` when the message has a sender
 
 ### `ack`
 
@@ -592,19 +599,29 @@ Inspect queued personal deliveries for one recipient address, or inspect group
 message metadata visible to one person.
 
 ```bash
-waypost list --for <address> [--state queued|leased|acked|dead_letter] [--json | --yaml]
-waypost list --for <group-address> --as <person> [--json | --yaml]
+waypost list --for <address> [--from <address>] [--state queued|leased|acked|dead_letter] [--limit <n>] [--cursor <cursor>] [--json | --yaml]
+waypost list --for <group-address> --as <person> [--from <address>] [--limit <n>] [--cursor <cursor>] [--json | --yaml]
 ```
 
 Notes:
 
 - default output shows currently claimable queued deliveries
 - `--state queued|leased|acked|dead_letter` filters to that personal delivery state
+- `--from <address>` filters personal or group results by sender endpoint
+- forwarded messages match the current forwarder, while
+  `forwarded_from_address` identifies the original source
+- structured and plain-text results include `sender_address` when present
 - `acked` results include `acked_at` in structured output and plain text
-- `list` is a snapshot; use `wait` for one-shot blocking or `watch` for a stream
+- `list` returns the results currently visible in one request; use `wait` for
+  one-shot blocking or `watch` for a stream
+- personal `list` pages use immutable message creation order; delivery state
+  filters are evaluated from current state on each page request
 - use `--json` or `--yaml` for scripts and agents
 - unseen addresses return an empty result
 - group mode requires `--as <person>`
+- every call returns at most 100 items (default 50); structured output is
+  `{items, next_cursor}` and plain text prints `next_cursor=...` when another page exists
+- pass the returned cursor back with the same address, identity, state, and sender filters
 - `--state` is not supported with `--as`
 - group `list` returns visible group message metadata oldest-first
 - compact group `list` output includes `message_id`, `group_id`,
@@ -685,12 +702,13 @@ Notes:
 List active and historical membership records for one group.
 
 ```bash
-waypost group members --group <address> [--json | --yaml]
+waypost group members --group <address> [--limit <n>] [--cursor <cursor>] [--json | --yaml]
 ```
 
 Notes:
 
-- output is ordered newest membership first
+- output is ordered oldest membership first
+- every page contains at most 100 entries (default 50)
 - each entry includes `membership_id`, `group_id`, `group_address`, `person_id`,
   `person`, `joined_at`, optional `left_at`, and `active`
 
@@ -717,8 +735,11 @@ waypost group remove-subscriber --group <address> --notify-address <address> [--
 List active group notification subscribers in creation order.
 
 ```bash
-waypost group subscribers --group <address> [--json | --yaml]
+waypost group subscribers --group <address> [--limit <n>] [--cursor <cursor>] [--json | --yaml]
 ```
+
+The default page size is 50 and the hard maximum is 100. Structured output
+uses `items` and optional `next_cursor`.
 
 ### `address inspect`
 

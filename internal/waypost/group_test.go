@@ -99,6 +99,43 @@ func TestGroupMembershipLifecycle(t *testing.T) {
 	}
 }
 
+func TestGroupTranscriptPageDoesNotHydrateLookaheadBlob(t *testing.T) {
+	t.Parallel()
+
+	runtime, store := newLeaseTestStore(t)
+	defer runtime.Close()
+
+	group, err := store.CreateGroup(context.Background(), "group/transcript-lookahead")
+	if err != nil {
+		t.Fatalf("CreateGroup() error = %v", err)
+	}
+	first := mustSendGroupMessage(t, store, group.Address, "agent/sender", "first", "first body")
+	second := mustSendGroupMessage(t, store, group.Address, "agent/sender", "second", "second body")
+	if err := os.WriteFile(filepath.Join(runtime.BlobDir(), second.BodyBlobRef), []byte{}, 0o600); err != nil {
+		t.Fatalf("corrupt lookahead blob error = %v", err)
+	}
+
+	page, err := store.ListGroupTranscriptPage(context.Background(), GroupTranscriptParams{
+		Address: group.Address,
+		Limit:   1,
+	})
+	if err != nil {
+		t.Fatalf("ListGroupTranscriptPage(first) error = %v", err)
+	}
+	if len(page.Items) != 1 || page.Items[0].MessageID != first.MessageID || page.NextCursor == "" {
+		t.Fatalf("ListGroupTranscriptPage(first) = %+v", page)
+	}
+
+	_, err = store.ListGroupTranscriptPage(context.Background(), GroupTranscriptParams{
+		Address: group.Address,
+		Limit:   1,
+		Cursor:  page.NextCursor,
+	})
+	if !errors.Is(err, ErrBodyIntegrity) {
+		t.Fatalf("ListGroupTranscriptPage(second) error = %v, want ErrBodyIntegrity", err)
+	}
+}
+
 func TestGroupNotificationSubscriberLifecycle(t *testing.T) {
 	t.Parallel()
 
@@ -391,10 +428,11 @@ func TestGroupControlPlaneCLI(t *testing.T) {
 		t.Fatalf("group list error = %v", err)
 	}
 
-	var groups []GroupRecord
-	if err := json.Unmarshal(listStdout.Bytes(), &groups); err != nil {
+	var groupsPage Page[GroupRecord]
+	if err := json.Unmarshal(listStdout.Bytes(), &groupsPage); err != nil {
 		t.Fatalf("json.Unmarshal(group list) error = %v", err)
 	}
+	groups := groupsPage.Items
 	if len(groups) != 1 {
 		t.Fatalf("len(group list) = %d, want 1", len(groups))
 	}
@@ -433,10 +471,11 @@ func TestGroupControlPlaneCLI(t *testing.T) {
 		t.Fatalf("group members error = %v", err)
 	}
 
-	var memberships []GroupMembershipRecord
-	if err := json.Unmarshal(membersStdout.Bytes(), &memberships); err != nil {
+	var membershipsPage Page[GroupMembershipRecord]
+	if err := json.Unmarshal(membersStdout.Bytes(), &membershipsPage); err != nil {
 		t.Fatalf("json.Unmarshal(group members) error = %v", err)
 	}
+	memberships := membershipsPage.Items
 	if len(memberships) != 1 {
 		t.Fatalf("len(group members) = %d, want 1", len(memberships))
 	}
@@ -1640,6 +1679,61 @@ func TestGroupListWaitAndRecvPreserveForwardedFromAddress(t *testing.T) {
 	}
 }
 
+func TestGroupListFiltersBySenderAddress(t *testing.T) {
+	t.Parallel()
+
+	runtime, store := newLeaseTestStore(t)
+	defer runtime.Close()
+
+	group, err := store.CreateGroup(context.Background(), "group/filter-sender")
+	if err != nil {
+		t.Fatalf("CreateGroup() error = %v", err)
+	}
+	if _, err := store.AddGroupMember(context.Background(), group.Address, "alice"); err != nil {
+		t.Fatalf("AddGroupMember(alice) error = %v", err)
+	}
+
+	fromAlice := mustSendGroupMessage(t, store, group.Address, "agent/alice", "alice", "alice body")
+	mustSendGroupMessage(t, store, group.Address, "agent/bob", "bob", "bob body")
+
+	listed, err := store.ListGroupMessages(context.Background(), GroupListParams{
+		Address:     group.Address,
+		Person:      "alice",
+		FromAddress: "agent/alice",
+	})
+	if err != nil {
+		t.Fatalf("ListGroupMessages(from alice) error = %v", err)
+	}
+	if len(listed) != 1 || listed[0].MessageID != fromAlice.MessageID {
+		t.Fatalf("ListGroupMessages(from alice) = %+v, want only %q", listed, fromAlice.MessageID)
+	}
+	if listed[0].SenderAddress == nil || *listed[0].SenderAddress != "agent/alice" {
+		t.Fatalf("ListGroupMessages(from alice) sender_address = %v, want agent/alice", listed[0].SenderAddress)
+	}
+	waited, err := store.WaitGroupMessage(context.Background(), GroupWaitParams{
+		Address: group.Address,
+		Person:  "alice",
+	})
+	if err != nil {
+		t.Fatalf("WaitGroupMessage() error = %v", err)
+	}
+	if waited.SenderAddress == nil || *waited.SenderAddress != "agent/alice" {
+		t.Fatalf("WaitGroupMessage() sender_address = %v, want agent/alice", waited.SenderAddress)
+	}
+
+	missing, err := store.ListGroupMessages(context.Background(), GroupListParams{
+		Address:     group.Address,
+		Person:      "alice",
+		FromAddress: "agent/missing",
+	})
+	if err != nil {
+		t.Fatalf("ListGroupMessages(from missing) error = %v", err)
+	}
+	if len(missing) != 0 || missing == nil {
+		t.Fatalf("ListGroupMessages(from missing) = %+v, want empty", missing)
+	}
+}
+
 func TestGroupHistoryVisibilityJoinLeaveRejoinAndStableCounts(t *testing.T) {
 	t.Parallel()
 
@@ -1929,10 +2023,11 @@ func TestGroupReadCLIShapesStayExplicitWithAs(t *testing.T) {
 		t.Fatalf("group list error = %v", err)
 	}
 
-	var listPayload []map[string]any
-	if err := json.Unmarshal(listStdout.Bytes(), &listPayload); err != nil {
+	var listPage Page[map[string]any]
+	if err := json.Unmarshal(listStdout.Bytes(), &listPage); err != nil {
 		t.Fatalf("json.Unmarshal(group list) error = %v", err)
 	}
+	listPayload := listPage.Items
 	if len(listPayload) != 1 {
 		t.Fatalf("len(group list payload) = %d, want 1", len(listPayload))
 	}

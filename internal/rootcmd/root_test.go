@@ -262,8 +262,8 @@ func TestRunDelegatesWaypostCommandsWithStateDir(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Run(list) error = %v", err)
 	}
-	if stdout.String() != "[]\n" {
-		t.Fatalf("list output = %q, want empty JSON array", stdout.String())
+	if stdout.String() != "{\n  \"items\": []\n}\n" {
+		t.Fatalf("list output = %q, want empty paginated JSON object", stdout.String())
 	}
 }
 

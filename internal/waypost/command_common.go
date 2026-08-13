@@ -57,10 +57,16 @@ func normalizeAddresses(address string, addresses []string, flagName string) ([]
 	}
 	values = append(values, addresses...)
 
+	if err := validateInputItemCount(flagName, len(values)); err != nil {
+		return nil, err
+	}
 	return NormalizeRequiredAddressValues(values, flagName)
 }
 
 func normalizeFlagValues(values []string, flagName string) ([]string, error) {
+	if err := validateInputItemCount(flagName, len(values)); err != nil {
+		return nil, err
+	}
 	if len(values) == 0 {
 		return nil, requiredFlagValueError{flagName: flagName}
 	}

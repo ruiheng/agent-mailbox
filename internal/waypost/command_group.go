@@ -44,6 +44,10 @@ func (a *App) prepareGroupListCommand(args []string) (preparedCommand, error) {
 	fs.SetOutput(io.Discard)
 
 	var formats outputFlags
+	var limit int
+	var cursor string
+	fs.IntVar(&limit, "limit", DefaultPageSize, "maximum items in this page")
+	fs.StringVar(&cursor, "cursor", "", "pagination cursor")
 	formats.register(fs, "emit JSON", "emit YAML")
 
 	if err := a.parseCommandFlags(fs, args, a.writeGroupListHelp); err != nil {
@@ -53,16 +57,19 @@ func (a *App) prepareGroupListCommand(args []string) (preparedCommand, error) {
 	if err != nil {
 		return nil, err
 	}
+	if _, err := normalizePageParams(PageParams{Limit: limit, Cursor: cursor}); err != nil {
+		return nil, err
+	}
 
 	return func(ctx context.Context, store *Store) error {
-		groups, err := store.ListGroups(ctx)
+		page, err := store.ListGroupsPage(ctx, PageParams{Limit: limit, Cursor: cursor})
 		if err != nil {
 			return err
 		}
 		if format != outputFormatText {
-			return a.writeStructuredOutput(format, groups)
+			return a.writeStructuredOutput(format, page)
 		}
-		for _, group := range groups {
+		for _, group := range page.Items {
 			if _, err := fmt.Fprintf(
 				a.stdout,
 				"group_id=%s address=%s created_at=%s\n",
@@ -73,7 +80,7 @@ func (a *App) prepareGroupListCommand(args []string) (preparedCommand, error) {
 				return err
 			}
 		}
-		return nil
+		return writeNextCursor(a.stdout, page.NextCursor)
 	}, nil
 }
 
@@ -225,7 +232,11 @@ func (a *App) prepareGroupMembersCommand(args []string) (preparedCommand, error)
 
 	var groupAddress string
 	var formats outputFlags
+	var limit int
+	var cursor string
 	fs.StringVar(&groupAddress, "group", "", "group address")
+	fs.IntVar(&limit, "limit", DefaultPageSize, "maximum items in this page")
+	fs.StringVar(&cursor, "cursor", "", "pagination cursor")
 	formats.register(fs, "emit JSON", "emit YAML")
 
 	if err := a.parseCommandFlags(fs, args, a.writeGroupMembersHelp); err != nil {
@@ -242,16 +253,19 @@ func (a *App) prepareGroupMembersCommand(args []string) (preparedCommand, error)
 	if err != nil {
 		return nil, err
 	}
+	if _, err := normalizePageParams(PageParams{Limit: limit, Cursor: cursor}); err != nil {
+		return nil, err
+	}
 
 	return func(ctx context.Context, store *Store) error {
-		memberships, err := store.ListGroupMembers(ctx, groupAddress)
+		page, err := store.ListGroupMembersPage(ctx, groupAddress, PageParams{Limit: limit, Cursor: cursor})
 		if err != nil {
 			return err
 		}
 		if format != outputFormatText {
-			return a.writeStructuredOutput(format, memberships)
+			return a.writeStructuredOutput(format, page)
 		}
-		for _, membership := range memberships {
+		for _, membership := range page.Items {
 			leftAt := ""
 			if membership.LeftAt != nil {
 				leftAt = *membership.LeftAt
@@ -268,7 +282,7 @@ func (a *App) prepareGroupMembersCommand(args []string) (preparedCommand, error)
 				return err
 			}
 		}
-		return nil
+		return writeNextCursor(a.stdout, page.NextCursor)
 	}, nil
 }
 
@@ -379,7 +393,11 @@ func (a *App) prepareGroupSubscribersCommand(args []string) (preparedCommand, er
 
 	var groupAddress string
 	var formats outputFlags
+	var limit int
+	var cursor string
 	fs.StringVar(&groupAddress, "group", "", "group address")
+	fs.IntVar(&limit, "limit", DefaultPageSize, "maximum items in this page")
+	fs.StringVar(&cursor, "cursor", "", "pagination cursor")
 	formats.register(fs, "emit JSON", "emit YAML")
 
 	if err := a.parseCommandFlags(fs, args, a.writeGroupSubscribersHelp); err != nil {
@@ -396,21 +414,24 @@ func (a *App) prepareGroupSubscribersCommand(args []string) (preparedCommand, er
 	if err != nil {
 		return nil, err
 	}
+	if _, err := normalizePageParams(PageParams{Limit: limit, Cursor: cursor}); err != nil {
+		return nil, err
+	}
 
 	return func(ctx context.Context, store *Store) error {
-		subscribers, err := store.ListGroupNotificationSubscribers(ctx, groupAddress)
+		page, err := store.ListGroupNotificationSubscribersPage(ctx, groupAddress, PageParams{Limit: limit, Cursor: cursor})
 		if err != nil {
 			return err
 		}
 		if format != outputFormatText {
-			return a.writeStructuredOutput(format, subscribers)
+			return a.writeStructuredOutput(format, page)
 		}
-		for _, subscriber := range subscribers {
+		for _, subscriber := range page.Items {
 			if _, err := fmt.Fprintf(a.stdout, "subscriber_id=%s notify_address=%s person=%s active=%t created_at=%s\n", subscriber.SubscriberID, subscriber.NotifyAddress, subscriber.Person, subscriber.Active, subscriber.CreatedAt); err != nil {
 				return err
 			}
 		}
-		return nil
+		return writeNextCursor(a.stdout, page.NextCursor)
 	}, nil
 }
 
@@ -434,9 +455,11 @@ func (a *App) writeGroupHelp() {
 func (a *App) writeGroupListHelp() {
 	writeHelp(a.stdout, []string{
 		"Usage:",
-		"  waypost group list [--json | --yaml]",
+		"  waypost group list [--limit N] [--cursor CURSOR] [--json | --yaml]",
 		"",
 		"Options:",
+		fmt.Sprintf("  --limit N          Page size (default %d, maximum %d)", DefaultPageSize, MaxPageSize),
+		"  --cursor CURSOR    Continue from a prior next_cursor",
 		"  --json              Emit JSON",
 		"  --yaml              Emit YAML",
 	})
@@ -483,10 +506,12 @@ func (a *App) writeGroupRemoveMemberHelp() {
 func (a *App) writeGroupMembersHelp() {
 	writeHelp(a.stdout, []string{
 		"Usage:",
-		"  waypost group members --group ADDRESS [--json | --yaml]",
+		"  waypost group members --group ADDRESS [--limit N] [--cursor CURSOR] [--json | --yaml]",
 		"",
 		"Options:",
 		"  --group ADDRESS     Group address",
+		fmt.Sprintf("  --limit N           Page size (default %d, maximum %d)", DefaultPageSize, MaxPageSize),
+		"  --cursor CURSOR     Continue from a prior next_cursor",
 		"  --json              Emit JSON",
 		"  --yaml              Emit YAML",
 	})
@@ -522,10 +547,12 @@ func (a *App) writeGroupRemoveSubscriberHelp() {
 func (a *App) writeGroupSubscribersHelp() {
 	writeHelp(a.stdout, []string{
 		"Usage:",
-		"  waypost group subscribers --group ADDRESS [--json | --yaml]",
+		"  waypost group subscribers --group ADDRESS [--limit N] [--cursor CURSOR] [--json | --yaml]",
 		"",
 		"Options:",
 		"  --group ADDRESS     Group address",
+		fmt.Sprintf("  --limit N           Page size (default %d, maximum %d)", DefaultPageSize, MaxPageSize),
+		"  --cursor CURSOR     Continue from a prior next_cursor",
 		"  --json              Emit JSON",
 		"  --yaml              Emit YAML",
 	})

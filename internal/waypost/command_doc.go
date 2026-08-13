@@ -73,6 +73,7 @@ Use when: message context was lost after a durable transition or a receive repor
 ## Interpret
 - items: [] means no matching persisted input.
 - has_more: true means another latest item matches beyond the limit.
+- next_cursor continues the same latest query without increasing the page size.
 - A receive recovery error lists every claim that must be settled before another receive.
 
 ## Stop
@@ -84,16 +85,19 @@ Use when: you need durable delivery history or a stored body.
 
 ## Required context
 - The reported executable and resolved state directory.
-- ADDRESS for a queue query, or exact MESSAGE_ID or DELIVERY_ID values.
+- ADDRESS for a queue query, optional FROM_ADDRESS for sender filtering, or exact MESSAGE_ID or DELIVERY_ID values.
 
 ## Do
-1. Run WAYPOST --state-dir STATE_DIR list --for ADDRESS --state acked --json for delivery summaries.
-2. Run WAYPOST --state-dir STATE_DIR read DELIVERY_ID --json for a delivery body.
-3. Run WAYPOST --state-dir STATE_DIR read MESSAGE_ID --json when the message identity, rather than one delivery, is known.
+1. Run WAYPOST --state-dir STATE_DIR list --for ADDRESS --state acked --json for the first page of delivery summaries.
+2. Add --from FROM_ADDRESS to list or read --latest when only messages from one sender are relevant.
+3. Run WAYPOST --state-dir STATE_DIR read DELIVERY_ID --json for a delivery body.
+4. Run WAYPOST --state-dir STATE_DIR read MESSAGE_ID --json when the message identity, rather than one delivery, is known.
 
 ## Interpret
 - Direct reads preserve the supplied id order.
 - Latest reads are newest first and expose has_more only when another matching item exists.
+- List results contain at most 100 items; pass next_cursor back with --cursor to continue the same query.
+- sender_address is the current sender or forwarder; forwarded_from_address preserves the original source.
 - not_found for a direct id is atomic: do not use a partial result.
 
 ## Stop
@@ -157,6 +161,9 @@ func (a *App) runDocCommand(args []string) error {
 	}
 
 	remaining := fs.Args()
+	if err := validateInputItemCount("doc topics", len(remaining)); err != nil {
+		return err
+	}
 	if list {
 		if len(remaining) != 0 {
 			return errors.New("doc --list does not accept topics")
@@ -186,12 +193,18 @@ func (a *App) runDocCommand(args []string) error {
 
 func formatDocTopicBlocks(topics []string) (string, error) {
 	var output strings.Builder
-	for index, topicName := range topics {
+	seen := make(map[string]struct{}, len(topics))
+	written := 0
+	for _, topicName := range topics {
 		topic, ok := cliDocTopics[topicName]
 		if !ok {
 			return "", fmt.Errorf("unknown doc topic %q", topicName)
 		}
-		if index > 0 {
+		if _, exists := seen[topicName]; exists {
+			continue
+		}
+		seen[topicName] = struct{}{}
+		if written > 0 {
 			output.WriteString("\n\n")
 		}
 		fmt.Fprintf(&output, "waypost: %s\n", topicName)
@@ -200,6 +213,7 @@ func formatDocTopicBlocks(topics []string) (string, error) {
 			output.WriteString(line)
 			output.WriteByte('\n')
 		}
+		written++
 	}
 	return output.String(), nil
 }

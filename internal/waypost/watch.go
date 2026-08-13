@@ -105,22 +105,32 @@ func (s *Store) Watch(ctx context.Context, params WatchParams, emit func(ListedD
 			return err
 		}
 
-		deliveries, err := s.listPersonalDeliveries(ctx, s.readDB, scope, state, formatTimestamp(s.now()))
-		if err != nil {
-			return err
-		}
-
 		observedNewDelivery := false
-		for _, delivery := range deliveries {
-			fingerprint := watchFingerprint(delivery)
-			if emitted[delivery.DeliveryID] == fingerprint {
-				continue
-			}
-			if err := emit(delivery); err != nil {
+		nowText := formatTimestamp(s.now())
+		var cursorKeys []string
+		for {
+			deliveries, err := s.listPersonalDeliveriesPage(ctx, s.readDB, scope, state, nowText, "", cursorKeys, MaxPageSize, false)
+			if err != nil {
 				return err
 			}
-			emitted[delivery.DeliveryID] = fingerprint
-			observedNewDelivery = true
+
+			for _, delivery := range deliveries {
+				fingerprint := watchFingerprint(delivery)
+				if emitted[delivery.DeliveryID] == fingerprint {
+					continue
+				}
+				if err := emit(delivery); err != nil {
+					return err
+				}
+				emitted[delivery.DeliveryID] = fingerprint
+				observedNewDelivery = true
+			}
+
+			if len(deliveries) < MaxPageSize {
+				break
+			}
+			last := deliveries[len(deliveries)-1]
+			cursorKeys = []string{last.VisibleAt, last.MessageCreatedAt, last.DeliveryID}
 		}
 
 		if observedNewDelivery {
@@ -164,7 +174,7 @@ func (s *Store) waitOnce(ctx context.Context, addresses []string) (ListedDeliver
 		return ListedDelivery{}, err
 	}
 
-	deliveries, err := s.listPersonalDeliveries(ctx, s.readDB, scope, "", formatTimestamp(s.now()))
+	deliveries, err := s.listPersonalDeliveriesPage(ctx, s.readDB, scope, "", formatTimestamp(s.now()), "", nil, 1, false)
 	if err != nil {
 		return ListedDelivery{}, err
 	}

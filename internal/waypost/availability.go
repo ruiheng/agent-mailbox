@@ -74,6 +74,7 @@ type groupMessageRecord struct {
 	ForwardedMessageID   sql.NullString
 	ForwardedFromAddress sql.NullString
 	SenderEndpointID     sql.NullString
+	SenderAddress        sql.NullString
 	MessageCreatedAt     string
 	Subject              string
 	ContentType          string
@@ -85,6 +86,36 @@ type groupMessageRecord struct {
 	ViewerEligible       int
 	ReadCount            int
 	EligibleCount        int
+}
+
+func (s *Store) groupUnreadSummary(ctx context.Context, querier rowQuerier, scope groupAvailabilityScope) (string, int, error) {
+	viewer := scope.viewer
+	if viewer.PersonID == "" {
+		return "", 0, nil
+	}
+	query := `
+SELECT MIN(gm.created_at), COUNT(*)
+FROM group_messages AS gm
+LEFT JOIN group_reads AS gr
+  ON gr.message_id = gm.message_id
+ AND gr.person_id = ?
+WHERE gm.group_id = ?
+  AND gr.first_read_at IS NULL
+`
+	args := []any{viewer.PersonID, viewer.Group.GroupID}
+	if viewer.VisibilityCutoff != nil {
+		query += "  AND gm.created_at <= ?\n"
+		args = append(args, *viewer.VisibilityCutoff)
+	}
+	var oldest sql.NullString
+	var count int
+	if err := querier.QueryRowContext(ctx, query, args...).Scan(&oldest, &count); err != nil {
+		return "", 0, fmt.Errorf("summarize unread group messages for %q in %q: %w", viewer.Person, viewer.Group.Address, err)
+	}
+	if !oldest.Valid {
+		return "", 0, nil
+	}
+	return oldest.String, count, nil
 }
 
 func (s *Store) resolvePersonal(ctx context.Context, querier rowQuerier, addresses []string) (personalAvailabilityScope, error) {
@@ -284,12 +315,16 @@ LIMIT 1
 }
 
 func (s *Store) listPersonalDeliveries(ctx context.Context, querier rowsQuerier, scope personalAvailabilityScope, state, nowText string) ([]ListedDelivery, error) {
+	return s.listPersonalDeliveriesPage(ctx, querier, scope, state, nowText, "", nil, DefaultPageSize, false)
+}
+
+func (s *Store) listPersonalDeliveriesPage(ctx context.Context, querier rowsQuerier, scope personalAvailabilityScope, state, nowText, senderEndpointID string, cursorKeys []string, limit int, orderByCreated bool) ([]ListedDelivery, error) {
 	if scope.empty() {
 		return []ListedDelivery{}, nil
 	}
 
 	placeholders := strings.TrimSuffix(strings.Repeat("?,", len(scope.recipientEndpointIDs)), ",")
-	args := make([]any, 0, len(scope.recipientEndpointIDs)+1)
+	args := make([]any, 0, len(scope.recipientEndpointIDs)+8)
 	for _, recipientEndpointID := range scope.recipientEndpointIDs {
 		args = append(args, recipientEndpointID)
 	}
@@ -302,6 +337,13 @@ SELECT
 	  m.forwarded_from_address,
 	  d.recipient_endpoint_id,
 	  m.sender_endpoint_id,
+	  (
+	    SELECT sender_ea.address
+	    FROM endpoint_addresses AS sender_ea
+	    WHERE sender_ea.endpoint_id = m.sender_endpoint_id
+	    ORDER BY sender_ea.created_at ASC, sender_ea.address ASC
+	    LIMIT 1
+	  ) AS sender_address,
   d.state,
   d.visible_at,
   d.acked_at,
@@ -328,9 +370,44 @@ WHERE d.recipient_endpoint_id IN (%s)
 `
 		args = append(args, state)
 	}
-	query += `
-ORDER BY d.visible_at ASC, m.created_at ASC, d.delivery_id ASC
+	if senderEndpointID != "" {
+		query += `
+  AND m.sender_endpoint_id = ?
 `
+		args = append(args, senderEndpointID)
+	}
+	if len(cursorKeys) > 0 {
+		if orderByCreated {
+			query += `
+  AND (
+    m.created_at > ?
+    OR (m.created_at = ? AND d.delivery_id > ?)
+  )
+`
+			args = append(args, cursorKeys[0], cursorKeys[0], cursorKeys[1])
+		} else {
+			query += `
+  AND (
+    d.visible_at > ?
+    OR (d.visible_at = ? AND m.created_at > ?)
+    OR (d.visible_at = ? AND m.created_at = ? AND d.delivery_id > ?)
+  )
+`
+			args = append(args, cursorKeys[0], cursorKeys[0], cursorKeys[1], cursorKeys[0], cursorKeys[1], cursorKeys[2])
+		}
+	}
+	if orderByCreated {
+		query += `
+ORDER BY m.created_at ASC, d.delivery_id ASC
+LIMIT ?
+`
+	} else {
+		query += `
+ORDER BY d.visible_at ASC, m.created_at ASC, d.delivery_id ASC
+LIMIT ?
+`
+	}
+	args = append(args, limit)
 
 	rows, err := querier.QueryContext(ctx, query, args...)
 	if err != nil {
@@ -343,6 +420,7 @@ ORDER BY d.visible_at ASC, m.created_at ASC, d.delivery_id ASC
 		var delivery ListedDelivery
 		var ackedAt sql.NullString
 		var senderID sql.NullString
+		var senderAddress sql.NullString
 		var forwardedMessageID sql.NullString
 		var forwardedFromAddress sql.NullString
 		if err := rows.Scan(
@@ -352,6 +430,7 @@ ORDER BY d.visible_at ASC, m.created_at ASC, d.delivery_id ASC
 			&forwardedFromAddress,
 			&delivery.RecipientEndpointID,
 			&senderID,
+			&senderAddress,
 			&delivery.State,
 			&delivery.VisibleAt,
 			&ackedAt,
@@ -368,6 +447,9 @@ ORDER BY d.visible_at ASC, m.created_at ASC, d.delivery_id ASC
 		delivery.RecipientAddress = scope.addressByEndpointID[delivery.RecipientEndpointID]
 		if senderID.Valid {
 			delivery.SenderEndpointID = &senderID.String
+		}
+		if senderAddress.Valid {
+			delivery.SenderAddress = &senderAddress.String
 		}
 		if forwardedMessageID.Valid {
 			delivery.ForwardedMessageID = &forwardedMessageID.String
@@ -533,6 +615,13 @@ func (s *Store) resolveGroup(ctx context.Context, querier rowQuerier, groupAddre
 }
 
 func (s *Store) listGroupMessages(ctx context.Context, querier rowsQuerier, scope groupAvailabilityScope, unreadOnly bool, limit int) ([]groupMessageRecord, error) {
+	if limit <= 0 {
+		limit = DefaultPageSize
+	}
+	return s.listGroupMessagesPage(ctx, querier, scope, unreadOnly, "", nil, limit)
+}
+
+func (s *Store) listGroupMessagesPage(ctx context.Context, querier rowsQuerier, scope groupAvailabilityScope, unreadOnly bool, senderEndpointID string, cursorKeys []string, limit int) ([]groupMessageRecord, error) {
 	viewer := scope.viewer
 	if viewer.PersonID == "" {
 		return []groupMessageRecord{}, nil
@@ -543,8 +632,15 @@ func (s *Store) listGroupMessages(ctx context.Context, querier rowsQuerier, scop
 SELECT
   gm.message_id,
   m.forwarded_message_id,
-  m.forwarded_from_address,
-  m.sender_endpoint_id,
+	  m.forwarded_from_address,
+	  m.sender_endpoint_id,
+	  (
+	    SELECT sender_ea.address
+	    FROM endpoint_addresses AS sender_ea
+	    WHERE sender_ea.endpoint_id = m.sender_endpoint_id
+	    ORDER BY sender_ea.created_at ASC, sender_ea.address ASC
+	    LIMIT 1
+	  ) AS sender_address,
   gm.created_at,
   m.subject,
   m.content_type,
@@ -589,15 +685,25 @@ WHERE gm.group_id = ?
   AND gr.first_read_at IS NULL
 `
 	}
+	if senderEndpointID != "" {
+		query += `
+  AND m.sender_endpoint_id = ?
+`
+		args = append(args, senderEndpointID)
+	}
+	if len(cursorKeys) > 0 {
+		query += `
+  AND (gm.created_at > ? OR (gm.created_at = ? AND gm.message_id > ?))
+`
+		args = append(args, cursorKeys[0], cursorKeys[0], cursorKeys[1])
+	}
 	query += `
 ORDER BY gm.created_at ASC, gm.message_id ASC
 `
-	if limit > 0 {
-		query += `
+	query += `
 LIMIT ?
 `
-		args = append(args, limit)
-	}
+	args = append(args, limit)
 
 	rows, err := querier.QueryContext(ctx, query, args...)
 	if err != nil {
@@ -613,6 +719,7 @@ LIMIT ?
 			&record.ForwardedMessageID,
 			&record.ForwardedFromAddress,
 			&record.SenderEndpointID,
+			&record.SenderAddress,
 			&record.MessageCreatedAt,
 			&record.Subject,
 			&record.ContentType,
