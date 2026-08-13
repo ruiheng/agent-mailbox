@@ -1,0 +1,19 @@
+prefix_rule(
+    pattern=["go", "test"],
+    decision="allow",
+)
+
+prefix_rule(
+    pattern=["go", "vet"],
+    decision="allow",
+)
+
+prefix_rule(
+    pattern=["go", "fmt"],
+    decision="allow",
+)
+
+prefix_rule(
+    pattern=["gofmt"],
+    decision="allow",
+)
