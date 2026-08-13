@@ -78,6 +78,7 @@ type ReceivedMessageCompact struct {
 	RecipientAddress     string  `json:"recipient_address"`
 	LeaseToken           string  `json:"lease_token"`
 	ForwardedFromAddress *string `json:"forwarded_from_address,omitempty"`
+	SenderAddress        *string `json:"sender_address,omitempty"`
 	Subject              string  `json:"subject"`
 	ContentType          string  `json:"content_type,omitempty"`
 	Body                 string  `json:"body"`
@@ -143,6 +144,7 @@ type GroupReceivedMessageCompact struct {
 	GroupID              string  `json:"group_id"`
 	GroupAddress         string  `json:"group_address"`
 	Person               string  `json:"person"`
+	SenderAddress        *string `json:"sender_address,omitempty"`
 	MessageCreatedAt     string  `json:"message_created_at"`
 	Subject              string  `json:"subject"`
 	ContentType          string  `json:"content_type,omitempty"`
@@ -278,6 +280,7 @@ func CompactReceivedMessage(message ReceivedMessage) ReceivedMessageCompact {
 		RecipientAddress:     message.RecipientAddress,
 		LeaseToken:           message.LeaseToken,
 		ForwardedFromAddress: message.ForwardedFromAddress,
+		SenderAddress:        message.SenderAddress,
 		Subject:              message.Subject,
 		ContentType:          message.ContentType,
 		Body:                 message.Body,
@@ -330,6 +333,7 @@ func CompactGroupReceivedMessage(message GroupReceivedMessage) GroupReceivedMess
 		GroupID:              message.GroupID,
 		GroupAddress:         message.GroupAddress,
 		Person:               message.Person,
+		SenderAddress:        message.SenderAddress,
 		MessageCreatedAt:     message.MessageCreatedAt,
 		Subject:              message.Subject,
 		ContentType:          message.ContentType,

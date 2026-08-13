@@ -54,6 +54,9 @@ func TestCLISendRecvAckFlow(t *testing.T) {
 	if message.LeaseToken == "" {
 		t.Fatal("recv lease token = empty, want non-empty")
 	}
+	if message.SenderAddress == nil || *message.SenderAddress != "agent/sender" {
+		t.Fatalf("recv sender_address = %v, want agent/sender", message.SenderAddress)
+	}
 
 	ack := runCLI(t, "", "--state-dir", stateDir,
 		"ack",
@@ -579,6 +582,9 @@ func TestCLIForwardToGroupInboxPreservesGroupMode(t *testing.T) {
 	}
 	if message["forwarded_from_address"] != "agent/sender" {
 		t.Fatalf("group recv forwarded_from_address = %v, want agent/sender", message["forwarded_from_address"])
+	}
+	if message["sender_address"] != "agent/sender" {
+		t.Fatalf("group recv sender_address = %v, want agent/sender", message["sender_address"])
 	}
 	assertMapOmitsForwardedMessageID(t, message)
 }
@@ -1667,6 +1673,9 @@ func TestCLIRecvFullJSONIncludesLegacyFields(t *testing.T) {
 	if message.BodyBlobRef == "" {
 		t.Fatalf("recv --full body_blob_ref = %q, want non-empty", message.BodyBlobRef)
 	}
+	if message.SenderAddress == nil || *message.SenderAddress != "agent/sender" {
+		t.Fatalf("recv --full sender_address = %v, want agent/sender", message.SenderAddress)
+	}
 }
 
 func TestCLIWaitFullJSONIncludesLegacyMetadata(t *testing.T) {
@@ -1907,6 +1916,7 @@ type receivedMessageSummary struct {
 	RecipientAddress     string  `json:"recipient_address"`
 	LeaseToken           string  `json:"lease_token"`
 	ForwardedFromAddress *string `json:"forwarded_from_address,omitempty"`
+	SenderAddress        *string `json:"sender_address,omitempty"`
 	Subject              string  `json:"subject"`
 	ContentType          string  `json:"content_type"`
 	Body                 string  `json:"body"`

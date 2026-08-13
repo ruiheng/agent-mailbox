@@ -126,6 +126,7 @@ type ReceivedMessage struct {
 	RecipientAddress     string  `json:"recipient_address"`
 	RecipientEndpointID  string  `json:"recipient_endpoint_id"`
 	SenderEndpointID     *string `json:"sender_endpoint_id,omitempty"`
+	SenderAddress        *string `json:"sender_address,omitempty"`
 	State                string  `json:"state"`
 	VisibleAt            string  `json:"visible_at"`
 	LeaseToken           string  `json:"lease_token"`
@@ -149,6 +150,7 @@ type GroupReceivedMessage struct {
 	GroupAddress         string  `json:"group_address"`
 	Person               string  `json:"person"`
 	SenderEndpointID     *string `json:"sender_endpoint_id,omitempty"`
+	SenderAddress        *string `json:"sender_address,omitempty"`
 	MessageCreatedAt     string  `json:"message_created_at"`
 	Subject              string  `json:"subject"`
 	ContentType          string  `json:"content_type"`
@@ -713,6 +715,9 @@ WHERE delivery_id = ?
 		}
 		if candidate.SenderEndpointID.Valid {
 			message.SenderEndpointID = &candidate.SenderEndpointID.String
+		}
+		if candidate.SenderAddress.Valid {
+			message.SenderAddress = &candidate.SenderAddress.String
 		}
 		return message, nil
 	}

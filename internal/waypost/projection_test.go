@@ -11,6 +11,7 @@ func TestSharedWaypostProjectionShapes(t *testing.T) {
 
 	firstReadAt := "2026-04-03T09:25:00Z"
 	forwardedFromAddress := "agent/source"
+	senderAddress := "agent/sender"
 
 	testCases := []struct {
 		name string
@@ -48,6 +49,7 @@ func TestSharedWaypostProjectionShapes(t *testing.T) {
 					DeliveryID:       "dlv_123",
 					RecipientAddress: "agent-deck/coder",
 					LeaseToken:       "lease_123",
+					SenderAddress:    &senderAddress,
 					Subject:          "delegate",
 					ContentType:      "text/plain",
 					Body:             "body",
@@ -60,6 +62,7 @@ func TestSharedWaypostProjectionShapes(t *testing.T) {
 						"delivery_id":       "dlv_123",
 						"recipient_address": "agent-deck/coder",
 						"lease_token":       "lease_123",
+						"sender_address":    "agent/sender",
 						"subject":           "delegate",
 						"content_type":      "text/plain",
 						"body":              "body",
@@ -126,6 +129,7 @@ func TestSharedWaypostProjectionShapes(t *testing.T) {
 				GroupID:              "grp_123",
 				GroupAddress:         "group/reviewers",
 				Person:               "alice",
+				SenderAddress:        &senderAddress,
 				MessageCreatedAt:     "2026-04-03T09:20:00Z",
 				Subject:              "review",
 				ContentType:          "text/plain",
@@ -140,6 +144,7 @@ func TestSharedWaypostProjectionShapes(t *testing.T) {
 				"group_id":               "grp_123",
 				"group_address":          "group/reviewers",
 				"person":                 "alice",
+				"sender_address":         "agent/sender",
 				"message_created_at":     "2026-04-03T09:20:00Z",
 				"subject":                "review",
 				"content_type":           "text/plain",

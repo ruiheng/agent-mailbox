@@ -1210,6 +1210,9 @@ func buildGroupReceivedMessage(viewer groupViewerState, record groupMessageRecor
 	if record.SenderEndpointID.Valid {
 		message.SenderEndpointID = &record.SenderEndpointID.String
 	}
+	if record.SenderAddress.Valid {
+		message.SenderAddress = &record.SenderAddress.String
+	}
 	return message
 }
 

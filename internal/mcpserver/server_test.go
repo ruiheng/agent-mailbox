@@ -4392,6 +4392,9 @@ func TestWaypostRecvDoesNotWaitForLaterMessage(t *testing.T) {
 	if got := delivery["delivery_id"]; got != deliveryID {
 		t.Fatalf("second recv delivery_id = %v, want %s", got, deliveryID)
 	}
+	if got := delivery["sender_address"]; got != "agent-deck/self" {
+		t.Fatalf("second recv sender_address = %v, want agent-deck/self", got)
+	}
 }
 
 func TestWaypostRecvReportsActiveLeaseImmediately(t *testing.T) {
@@ -4725,6 +4728,9 @@ func TestWaypostGroupMCPRuntimeFlow(t *testing.T) {
 	recvMessage := recv["message"].(map[string]any)
 	if recvMessage["body"] != "group body" {
 		t.Fatalf("recv body = %v, want group body", recvMessage["body"])
+	}
+	if recvMessage["sender_address"] != "agent-deck/self" {
+		t.Fatalf("recv sender_address = %v, want agent-deck/self", recvMessage["sender_address"])
 	}
 	if _, ok := recvMessage["lease_token"]; ok {
 		t.Fatalf("group recv exposed lease_token: %v", recvMessage)

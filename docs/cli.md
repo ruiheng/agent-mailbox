@@ -408,7 +408,8 @@ Notes:
 - duplicate `--for` values are ignored after the first occurrence
 - without `--max`, structured output returns `status`, `addresses`, and a
   compact `delivery` with `delivery_id`, `recipient_address`, `lease_token`,
-  `subject`, `content_type`, and `body`
+  `sender_address` (when the sender supplied an address), `subject`,
+  `content_type`, and `body`
 - add `--full` to return the full legacy single-message payload
 - with `--max`, structured output returns `status`, `addresses`, ordered
   `deliveries`, and sparse `remaining_by_state`; it never emits `has_more`
@@ -420,8 +421,9 @@ Notes:
 - group mode returns the oldest unread visible group message for that person and
   marks it read immediately
 - compact group `recv` output includes `message_id`, `group_id`,
-  `group_address`, `person`, `message_created_at`, `subject`, `content_type`,
-  `body`, `read_count`, `eligible_count`, and `first_read_at`
+  `group_address`, `person`, `sender_address` (when present),
+  `message_created_at`, `subject`, `content_type`, `body`, `read_count`,
+  `eligible_count`, and `first_read_at`
 - group `recv --full` adds `sender_endpoint_id`, `schema_version`,
   `body_blob_ref`, `body_size`, and `body_sha256`
 
