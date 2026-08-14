@@ -13,15 +13,16 @@ const cliDocOverview = `# Waypost workflow
 Use when: you need to exchange durable messages or inspect or change Waypost state.
 
 ## Required context
-- If MCP is available, call waypost_status before other waypost_* tools except waypost_debug.
-- Use the executable and resolved state directory it reports for every stateful CLI command.
-- Use exact ADDRESS, GROUP_ADDRESS, PERSON, ids, and lease tokens; do not infer them.
+- Call waypost_status before other waypost_* tools; with --include-debug-tool, waypost_debug may run first.
+- Status is compact; use include_diagnostics=true or include_active_leases=true for details, and paginate only lease details.
+- Use its executable and resolved state directory for every stateful CLI command.
+- Use exact ADDRESS, GROUP_ADDRESS, PERSON, ids, and tokens; do not infer them.
 
 ## Do
 1. Use MCP for the common live flow: waypost_send, waypost_recv, waypost_claim_history, waypost_ack, waypost_release, and waypost_defer.
 2. After a personal recv, settle its lease exactly once: ack after success; release for immediate retry without recording failure; defer until a known time; or CLI fail for a processing failure that increments attempts and may dead-letter.
 3. Use CLI --json for wait, list, read, forward, fail, undefer, group, and address inspection. A successful CLI forward is durable-only; it does not guarantee notification or wakeup.
-4. Run WAYPOST doc --list, then WAYPOST doc TOPIC... when a task needs specific recovery, history, group, or diagnostic guidance.
+4. Run WAYPOST doc --list, then WAYPOST doc TOPIC... for focused guidance.
 
 ## Interpret
 - CLI success: exit 0 and one JSON document on stdout.
@@ -48,7 +49,7 @@ Use when: you need a Waypost operation that is not exposed as a common MCP tool.
 ## Do
 1. Run WAYPOST --state-dir STATE_DIR forward (--message ID | --delivery ID) --to ADDRESS --json for durable forwarding.
 2. Use wait, list, read, fail, undefer, group, or address inspect with --json for their durable-state work.
-3. Use MCP for its retained Waypost operations: waypost_status, waypost_bind, waypost_debug, waypost_send, waypost_recv, waypost_claim_history, waypost_ack, waypost_release, and waypost_defer. Claim history is the token-recovery path for a delivery this MCP process already claimed.
+3. Use MCP for its retained Waypost operations: waypost_status, waypost_bind, waypost_send, waypost_recv, waypost_claim_history, waypost_ack, waypost_release, and waypost_defer. waypost_debug is available only when the server starts with --include-debug-tool. Claim history is the token-recovery path for a delivery this MCP process already claimed.
 
 ## Interpret
 - error_code decides the next action; retry only when retryable is true.

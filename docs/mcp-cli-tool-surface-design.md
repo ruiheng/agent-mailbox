@@ -16,9 +16,10 @@ durable-state Waypost capability surface available through CLI.
 
 ## Hard-Cut Decision
 
-Waypost MCP exposes exactly thirteen tools after this change. There is no
-`full` profile, `hybrid` profile, profile flag, legacy tool set, capability
-manifest, or runtime capability registry.
+Waypost MCP exposes exactly twelve tools by default. `waypost_debug` is a
+thirteenth, explicitly opt-in diagnostic tool enabled only by `waypost mcp
+--include-debug-tool`; there is no legacy tool set, capability manifest, or
+runtime capability registry.
 
 The hard-cut condition is simple: every removed MCP operation must already have
 a complete structured CLI path and concise `waypost doc` guidance. Once that
@@ -29,11 +30,10 @@ and removed MCP tool names are not preserved.
 
 ## MCP Surface
 
-The retained tools are:
+The default retained tools are:
 
 - `waypost_status`
 - `waypost_bind`
-- `waypost_debug`
 - `waypost_send`
 - `waypost_recv`
 - `waypost_claim_history`
@@ -45,10 +45,13 @@ The retained tools are:
 - `session_create`
 - `session_require`
 
+`waypost_debug` is registered only with `waypost mcp --include-debug-tool`.
+
 ### Why they remain
 
-`status`, `bind`, and `debug` own live state in the long-running MCP
-process. A separate CLI process cannot repair that MCP instance.
+`status` and `bind` own live state in the long-running MCP process. A separate
+CLI process cannot repair that MCP instance. The optional `debug` tool exposes
+read-only diagnostics for an explicitly requested diagnostic session.
 
 `send`, `recv`, claim history, and `ack`/`release`/`defer` form the common
 message path. Receive and these common lease transitions also interact with
@@ -177,7 +180,10 @@ Conceptually:
 
 ```go
 func registerWaypostTools(server *mcp.Server) {
-    registerStatusBindDebug(server)
+    registerStatusBind(server)
+    if includeDebugTool {
+        registerDebug(server)
+    }
     registerMessagePath(server)
     registerLeaseLifecycle(server)
     registerGenericSessionTools(server)
@@ -185,20 +191,29 @@ func registerWaypostTools(server *mcp.Server) {
 }
 ```
 
-Tests assert the exact thirteen tool names. A removed tool appearing in the
-MCP list is a test failure.
+Tests assert the exact twelve default tool names and the thirteen names when
+the debug flag is enabled. A removed tool appearing in either MCP list is a
+test failure.
 
-`waypost_status` continues to report the live MCP information needed to use
-CLI against the same Waypost state:
+Default `waypost_status` returns compact operational state needed to use CLI
+against the same Waypost state:
 
 ```json
 {
-  "server_version": "<version>",
   "executable": "/absolute/path/to/waypost",
   "resolved_state_dir": "/absolute/path/to/state",
   "bound_addresses": ["ADDRESS"],
   "default_sender": "ADDRESS",
-  "active_lease_count": 1,
+  "active_lease_count": 1
+}
+```
+
+`include_diagnostics: true` adds version and session-detection fields.
+`include_active_leases: true` adds paginated lease details and tokens; `limit`
+and `cursor` apply only to that opt-in detail:
+
+```json
+{
   "active_leases": [
     {
       "delivery_id": "dlv_...",
@@ -219,8 +234,8 @@ The MCP server instructions are themselves a concise agent prompt:
 
 ```text
 Once after this MCP server starts, call waypost_status before the first
-waypost_* tool other than waypost_debug. It auto-binds detectable session
-addresses and reports warnings.
+waypost_* tool. It auto-binds detectable session addresses and reports
+warnings.
 This server automatically renews leases for personal deliveries claimed by
 waypost_recv until it stops or restarts.
 Waypost is for durable asynchronous work, not real-time communication. MCP
@@ -231,6 +246,9 @@ covers common operations. For complete Waypost guidance:
 Use the reported executable and resolved_state_dir for stateful CLI commands;
 never guess either.
 ```
+
+When `--include-debug-tool` is enabled, the first line instead exempts
+`waypost_debug`, which remains callable without the status bootstrap.
 
 This adds no command catalog to the MCP instructions. `waypost doc` owns the
 complete workflow prompt, while MCP instructions only identify that entry
@@ -587,7 +605,8 @@ Topic responsibilities:
 
 Automated checks cover:
 
-- MCP exposes exactly the thirteen retained tool names
+- MCP exposes exactly the twelve default tool names and adds `waypost_debug`
+  only with `--include-debug-tool`
 - every deleted MCP tool is absent
 - every deleted tool's CLI route satisfies the operation matrix
 - status, bind, and debug bootstrap/repair behavior
@@ -680,7 +699,8 @@ and human-oriented detail.
 5. add concise embedded `waypost doc` topics and prompt tests
 6. add one durable-state reconciliation path shared by renewal, the
    `active_leases` receive gate, and claim history
-7. hard-cut MCP registration to the thirteen retained typed tools
+7. hard-cut MCP registration to the twelve default typed tools, with an
+   explicit opt-in diagnostic tool
 8. delete `recv.has_more` and add exact personal/group receive results
 9. add remaining-state counts and post-claim rollback/recovery
 10. run the full CLI, MCP, concurrency, prompt, query-plan, and benchmark suite

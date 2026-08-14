@@ -39,7 +39,6 @@ const (
 	defaultNotifyMessage         = "NOTICE: There might be new delivery in waypost."
 	agentDeckBindRecoveryHint    = "agent-deck address auto-bind did not find your current session; run `agent-deck session current --json` to find your `agent-deck/<session-id>` address, then call `waypost_bind` with that address."
 	toolSessionBindRecoveryHint  = "AI tool session auto-bind did not find codex/..., claude/..., gemini/..., or opencode/...; expose CODEX_THREAD_ID, CLAUDE_CODE_SESSION_ID, GEMINI_SESSION_ID, or OPENCODE_SESSION_ID, wait for agent-deck state sync for the current session, then call `waypost_status` again or call `waypost_bind` manually."
-	serverInstructions           = "Once after this MCP server starts, call waypost_status before the first waypost_* tool other than waypost_debug. It auto-binds detectable session addresses and reports warnings.\nThis server automatically renews leases for personal deliveries claimed by waypost_recv until it stops or restarts.\nWaypost is for durable asynchronous work, not real-time communication. MCP covers common operations. For complete Waypost guidance:\n  <executable> doc\n  <executable> doc --list\n  <executable> doc <topic>...\nUse the reported executable and resolved_state_dir for stateful CLI commands; never guess either."
 	unsetValue                   = "<unset>"
 )
 
@@ -194,6 +193,7 @@ type Options struct {
 	CommandRunner         Runner
 	StateDir              string
 	Executable            string
+	IncludeDebugTool      bool
 	Now                   func() time.Time
 	MCPLeaseTTL           time.Duration
 	LeaseRenewInterval    time.Duration
@@ -226,6 +226,7 @@ type Service struct {
 	waypostOverviewEmitter func(context.Context) notificationOutcome
 	configuredStateDir     string
 	executable             string
+	includeDebugTool       bool
 	leaseRenewLoopOnce     sync.Once
 	wakeSchedulerLoopOnce  sync.Once
 	backgroundMu           sync.Mutex
@@ -312,6 +313,7 @@ func newService(opts Options) *Service {
 		disableWakeScheduler:  opts.DisableWakeScheduler,
 		configuredStateDir:    opts.StateDir,
 		executable:            opts.Executable,
+		includeDebugTool:      opts.IncludeDebugTool,
 	}
 	if service.now == nil {
 		service.now = func() time.Time {
@@ -404,7 +406,7 @@ func (s *Service) Server() *mcp.Server {
 	}
 
 	server := mcp.NewServer(&mcp.Implementation{Name: serverName, Version: serverVersion}, &mcp.ServerOptions{
-		Instructions:       serverInstructions,
+		Instructions:       serverInstructions(s.includeDebugTool),
 		SubscribeHandler:   s.subscribeResource,
 		UnsubscribeHandler: s.unsubscribeResource,
 	})
@@ -414,6 +416,20 @@ func (s *Service) Server() *mcp.Server {
 	s.registerWaypostOverviewResource(server)
 	s.server = server
 	return server
+}
+
+func serverInstructions(includeDebugTool bool) string {
+	statusGate := "Once after this MCP server starts, call waypost_status before the first waypost_* tool."
+	if includeDebugTool {
+		statusGate = "Once after this MCP server starts, call waypost_status before the first waypost_* tool other than waypost_debug."
+	}
+	return statusGate + " It auto-binds detectable session addresses and reports warnings.\n" +
+		"This server automatically renews leases for personal deliveries claimed by waypost_recv until it stops or restarts.\n" +
+		"Waypost is for durable asynchronous work, not real-time communication. MCP covers common operations. For complete Waypost guidance:\n" +
+		"  <executable> doc\n" +
+		"  <executable> doc --list\n" +
+		"  <executable> doc <topic>...\n" +
+		"Use the reported executable and resolved_state_dir for stateful CLI commands; never guess either."
 }
 
 func currentWorkingDir() string {

@@ -314,6 +314,8 @@ func TestCLIJSONErrorsAndEmbeddedDocs(t *testing.T) {
 		"CLI wait no message: exit 2 with no output",
 		"CLI --json",
 		"WAYPOST doc --list",
+		"include_diagnostics=true",
+		"include_active_leases=true",
 		"error_code",
 	} {
 		if !strings.Contains(overview.stdout, required) {
@@ -354,6 +356,9 @@ func TestCLIJSONErrorsAndEmbeddedDocs(t *testing.T) {
 			}
 			if topic == "mcp-cli-boundary" && !strings.Contains(prompt.stdout, "durable-only") {
 				t.Fatalf("mcp-cli-boundary prompt = %q, want durable-only forward guidance", prompt.stdout)
+			}
+			if topic == "mcp-cli-boundary" && !strings.Contains(prompt.stdout, "--include-debug-tool") {
+				t.Fatalf("mcp-cli-boundary prompt = %q, want debug tool opt-in guidance", prompt.stdout)
 			}
 			if topic == "mcp-cli-boundary" {
 				for _, operation := range []string{

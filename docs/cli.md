@@ -41,7 +41,8 @@ waypost --version
 ```
 
 The CLI version is the same value advertised by the built-in MCP server during
-initialization and returned as `server_version` by `waypost_status`.
+initialization. For the optional diagnostic `server_version` status field, call
+`waypost_status` with `include_diagnostics: true`.
 
 ### Migrate previous local state
 
@@ -330,11 +331,19 @@ Run the built-in stdio MCP server from the main binary.
 waypost mcp
 ```
 
+To expose the read-only `waypost_debug` tool for a diagnostic session:
+
+```bash
+waypost mcp --include-debug-tool
+```
+
 Notes:
 
 - this starts the waypost MCP server over stdio
 - use the main `waypost` binary in MCP configs and pass `mcp` as the first argument
 - `--state-dir` remains a global option on the main binary, but the MCP server manages waypost state through its own tool calls rather than per-command CLI flags
+- `waypost_debug` is absent by default; `--include-debug-tool` registers it without changing the normal status gate for other Waypost tools
+- `waypost_status` returns compact operational state by default. Set `include_diagnostics: true` for detection and version data, or `include_active_leases: true` for paginated lease details and tokens; use `limit` and `cursor` only with lease details
 
 ### `doc`
 

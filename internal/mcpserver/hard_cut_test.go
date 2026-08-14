@@ -27,6 +27,8 @@ func TestWaypostStatusReportsAuthoritativeCLIContext(t *testing.T) {
 		DisableLeaseRenewLoop: true,
 	})
 	service.state.autoBindAttempted = true
+	service.state.boundAddresses = []string{"agent-deck/self", "codex/self"}
+	service.state.defaultSender = "agent-deck/self"
 
 	clientSession, cleanup := connectTestClientSession(t, service.Server(), nil)
 	defer cleanup()
@@ -36,8 +38,31 @@ func TestWaypostStatusReportsAuthoritativeCLIContext(t *testing.T) {
 	}
 
 	status := callServiceTool(t, service, "waypost_status", map[string]any{})
-	if got := status["server_version"]; got != version.Version {
-		t.Fatalf("server_version = %v, want %q", got, version.Version)
+	for _, field := range []string{
+		"server_version",
+		"detected_agent_deck_session_id",
+		"detected_thurbox_session_id",
+		"detected_tool_session_addresses",
+		"detected_agent_session_id",
+		"detected_claude_code_session_id",
+		"detected_gemini_session_id",
+		"detected_opencode_session_id",
+		"active_leases",
+		"next_cursor",
+		"warnings",
+	} {
+		if _, ok := status[field]; ok {
+			t.Fatalf("default waypost_status unexpectedly includes %q: %v", field, status)
+		}
+	}
+	if got := status["active_lease_count"]; got != float64(0) {
+		t.Fatalf("active_lease_count = %v, want 0", got)
+	}
+	if got := status["default_sender"]; got != "agent-deck/self" {
+		t.Fatalf("default_sender = %v, want agent-deck/self", got)
+	}
+	if _, ok := status["default_workdir"]; ok {
+		t.Fatalf("default waypost_status exposed empty default_workdir: %v", status)
 	}
 	if got := status["executable"]; got != "/opt/waypost/bin/waypost" {
 		t.Fatalf("executable = %v, want authoritative executable", got)
@@ -48,6 +73,16 @@ func TestWaypostStatusReportsAuthoritativeCLIContext(t *testing.T) {
 	}
 	if got := status["resolved_state_dir"]; got != wantStateDir {
 		t.Fatalf("resolved_state_dir = %v, want %q", got, wantStateDir)
+	}
+
+	diagnostics := callServiceTool(t, service, "waypost_status", map[string]any{
+		"include_diagnostics": true,
+	})
+	if got := diagnostics["server_version"]; got != version.Version {
+		t.Fatalf("diagnostic server_version = %v, want %q", got, version.Version)
+	}
+	if _, ok := diagnostics["detected_agent_deck_session_id"]; !ok {
+		t.Fatalf("diagnostic status omits detected fields: %v", diagnostics)
 	}
 }
 
@@ -79,7 +114,14 @@ func TestWaypostStatusReportsActiveLeaseTokens(t *testing.T) {
 	if got := status["active_lease_count"]; got != float64(1) {
 		t.Fatalf("active_lease_count = %v, want 1", got)
 	}
-	leases := status["active_leases"].([]any)
+	if _, ok := status["active_leases"]; ok {
+		t.Fatalf("default waypost_status exposed active lease detail: %v", status)
+	}
+
+	detailedStatus := callServiceTool(t, service, "waypost_status", map[string]any{
+		"include_active_leases": true,
+	})
+	leases := detailedStatus["active_leases"].([]any)
 	if len(leases) != 1 {
 		t.Fatalf("active_leases = %v, want one lease", leases)
 	}
@@ -95,6 +137,59 @@ func TestWaypostStatusReportsActiveLeaseTokens(t *testing.T) {
 	}
 	if _, ok := lease["lease_expires_at"]; ok {
 		t.Fatalf("active lease unexpectedly exposed lease_expires_at: %v", lease)
+	}
+}
+
+func TestWaypostStatusPaginatesActiveLeaseDetailsWhenRequested(t *testing.T) {
+	waypostService := &fakeWaypostService{t: t}
+	service := newService(Options{
+		WaypostServiceFactory: fakeWaypostServiceFactory{service: waypostService},
+		CommandRunner:         &fakeRunner{t: t, handler: func([]string, string) (RunResult, error) { return RunResult{}, nil }},
+		DisableWakeScheduler:  true,
+		DisableLeaseRenewLoop: true,
+	})
+	defer service.Close()
+	service.state.boundAddresses = []string{"agent-deck/self"}
+	service.state.defaultSender = "agent-deck/self"
+	service.state.autoBindAttempted = true
+
+	messages := []waypost.ReceivedMessage{
+		{DeliveryID: "dlv_status_one", LeaseToken: "lease_status_one", RecipientAddress: "agent-deck/self"},
+		{DeliveryID: "dlv_status_two", LeaseToken: "lease_status_two", RecipientAddress: "agent-deck/self"},
+	}
+	service.activeLeases.trackReceive(waypost.ReceiveResult{Messages: messages}, time.Now().UTC().Format(time.RFC3339Nano))
+	waypostService.recordLeases(messages)
+
+	first := callServiceTool(t, service, "waypost_status", map[string]any{
+		"include_active_leases": true,
+		"limit":                 1,
+	})
+	if got := first["active_lease_count"]; got != float64(2) {
+		t.Fatalf("active_lease_count = %v, want 2", got)
+	}
+	firstLeases := first["active_leases"].([]any)
+	if len(firstLeases) != 1 {
+		t.Fatalf("first active_leases = %v, want one item", firstLeases)
+	}
+	cursor, ok := first["next_cursor"].(string)
+	if !ok || cursor == "" {
+		t.Fatalf("first next_cursor = %v, want cursor", first["next_cursor"])
+	}
+
+	second := callServiceTool(t, service, "waypost_status", map[string]any{
+		"include_active_leases": true,
+		"limit":                 1,
+		"cursor":                cursor,
+	})
+	secondLeases := second["active_leases"].([]any)
+	if len(secondLeases) != 1 {
+		t.Fatalf("second active_leases = %v, want one item", secondLeases)
+	}
+	if firstLeases[0].(map[string]any)["delivery_id"] == secondLeases[0].(map[string]any)["delivery_id"] {
+		t.Fatalf("pagination repeated lease: first = %v, second = %v", firstLeases, secondLeases)
+	}
+	if _, ok := second["next_cursor"]; ok {
+		t.Fatalf("final active lease page unexpectedly has next_cursor: %v", second)
 	}
 }
 
@@ -228,7 +323,13 @@ func TestExternalDurableFailReconcilesMCPLeaseHistoryAndStatus(t *testing.T) {
 	if got := status["active_lease_count"]; got != float64(0) {
 		t.Fatalf("active_lease_count after external fail = %v, want 0", got)
 	}
-	if leases := status["active_leases"].([]any); len(leases) != 0 {
+	if _, ok := status["active_leases"]; ok {
+		t.Fatalf("default status exposed active lease detail after external fail: %v", status)
+	}
+	detailedStatus := callServiceTool(t, service, "waypost_status", map[string]any{
+		"include_active_leases": true,
+	})
+	if leases := detailedStatus["active_leases"].([]any); len(leases) != 0 {
 		t.Fatalf("active_leases after external fail = %v, want empty", leases)
 	}
 	if service.activeLeases.hasTrackedLeases() {
@@ -306,7 +407,18 @@ func TestInvalidStatusPaginationDoesNotOpenStatusGate(t *testing.T) {
 	})
 
 	err := callServiceToolExpectErrorWithoutStatusBootstrap(t, service, "waypost_status", map[string]any{
-		"limit": waypost.MaxPageSize + 1,
+		"limit": 1,
+	})
+	if err == nil || !strings.Contains(err.Error(), "include_active_leases") {
+		t.Fatalf("waypost_status pagination without active lease details error = %v", err)
+	}
+	if service.state.statusToolCalled {
+		t.Fatal("inactive lease detail pagination opened the status gate")
+	}
+
+	err = callServiceToolExpectErrorWithoutStatusBootstrap(t, service, "waypost_status", map[string]any{
+		"include_active_leases": true,
+		"limit":                 waypost.MaxPageSize + 1,
 	})
 	if err == nil || !strings.Contains(err.Error(), "limit must be between") {
 		t.Fatalf("waypost_status invalid pagination error = %v", err)

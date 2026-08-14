@@ -97,6 +97,8 @@ func (a *App) runMCPCommand(ctx context.Context, stateDir string, args []string)
 	// value is deliberately discarded and never opened, statted, parsed, or
 	// passed into the MCP service.
 	fs.Func("session-host-config", "deprecated; accepted and ignored", func(string) error { return nil })
+	var includeDebugTool bool
+	fs.BoolVar(&includeDebugTool, "include-debug-tool", false, "register the optional waypost_debug diagnostic tool")
 	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			a.writeMCPHelp()
@@ -109,7 +111,8 @@ func (a *App) runMCPCommand(ctx context.Context, stateDir string, args []string)
 	}
 
 	return a.runMCP(ctx, mcpserver.Options{
-		StateDir: stateDir,
+		StateDir:         stateDir,
+		IncludeDebugTool: includeDebugTool,
 	})
 }
 
@@ -231,12 +234,13 @@ func (a *App) writeRootHelp() {
 func (a *App) writeMCPHelp() {
 	writeHelp(a.stdout, []string{
 		"Usage:",
-		"  waypost mcp [--session-host-config ABSOLUTE_PATH]",
+		"  waypost mcp [--session-host-config ABSOLUTE_PATH] [--include-debug-tool]",
 		"",
 		"Run the built-in stdio MCP server using the main waypost binary.",
 		"",
 		"Options:",
 		"  --session-host-config ABSOLUTE_PATH    deprecated; accepted and ignored",
+		"  --include-debug-tool                    register the optional waypost_debug diagnostic tool",
 	})
 }
 
