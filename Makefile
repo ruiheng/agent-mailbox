@@ -9,6 +9,8 @@ USER_PREFIX ?= $(HOME)/.local
 USER_INSTALL_DIR ?= $(USER_PREFIX)/bin
 BUILD_OUTPUT := $(BIN_DIR)/$(BINARY_NAME)
 
+.DEFAULT_GOAL := build
+
 .PHONY: help build test run run-mcp install install-user clean
 
 help:
@@ -18,8 +20,8 @@ help:
 		'  make test                  Run the Go test suite' \
 		'  make run ARGS="..."        Run the CLI with go run and pass ARGS through' \
 		'  make run-mcp               Run the built-in stdio MCP server with go run' \
-		'  make install               Install the already-built CLI into $(DESTDIR)$(INSTALL_DIR) (typically requires root)' \
-		'  make install-user          Install the already-built CLI into $(USER_INSTALL_DIR)' \
+		'  make install               Build and install the CLI into $(DESTDIR)$(INSTALL_DIR) (typically requires root)' \
+		'  make install-user          Build and install the CLI into $(USER_INSTALL_DIR)' \
 		'  make clean                 Remove local build output'
 
 build:
@@ -35,11 +37,11 @@ run:
 run-mcp:
 	$(GO) run $(CMD_PATH) mcp
 
-install:
+install: build
 	@mkdir -p $(DESTDIR)$(INSTALL_DIR)
 	install -m 0755 $(BUILD_OUTPUT) $(DESTDIR)$(INSTALL_DIR)/$(BINARY_NAME)
 
-install-user:
+install-user: build
 	@mkdir -p $(USER_INSTALL_DIR)
 	install -m 0755 $(BUILD_OUTPUT) $(USER_INSTALL_DIR)/$(BINARY_NAME)
 
