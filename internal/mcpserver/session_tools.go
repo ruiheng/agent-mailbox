@@ -11,11 +11,6 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
-type agentDeckResolveSessionInput struct {
-	Session  string   `json:"session,omitempty"`
-	Sessions []string `json:"sessions,omitempty"`
-}
-
 type agentDeckCreateSessionInput struct {
 	EnsureTitle          string `json:"ensure_title,omitempty"`
 	EnsureCmd            string `json:"ensure_cmd,omitempty"`
@@ -29,20 +24,15 @@ type agentDeckCreateSessionInput struct {
 }
 
 type agentDeckRequireSessionInput struct {
-	SessionID  string   `json:"session_id,omitempty"`
-	SessionRef string   `json:"session_ref,omitempty"`
-	Sessions   []string `json:"sessions,omitempty"`
-	Workdir    string   `json:"workdir"`
+	SessionID   string   `json:"session_id,omitempty"`
+	SessionRef  string   `json:"session_ref,omitempty"`
+	Sessions    []string `json:"sessions,omitempty"`
+	Workdir     string   `json:"workdir"`
+	AutoRestart *bool    `json:"auto_restart,omitempty"`
 }
 
 // The generic tools intentionally expose only host-neutral session inputs.
-// Host-specific compatibility fields remain on the legacy Agent Deck tools.
-type sessionResolveInput struct {
-	Host     string   `json:"host,omitempty"`
-	Session  string   `json:"session,omitempty"`
-	Sessions []string `json:"sessions,omitempty"`
-}
-
+// Agent Deck-specific fields remain on its dedicated create/require tools.
 type sessionCreateInput struct {
 	Host            string `json:"host,omitempty"`
 	SessionName     string `json:"session_name"`
@@ -53,117 +43,32 @@ type sessionCreateInput struct {
 }
 
 type sessionRequireInput struct {
-	Host       string   `json:"host,omitempty"`
-	SessionID  string   `json:"session_id,omitempty"`
-	SessionRef string   `json:"session_ref,omitempty"`
-	Sessions   []string `json:"sessions,omitempty"`
-	Workdir    string   `json:"workdir"`
+	Host        string   `json:"host,omitempty"`
+	SessionID   string   `json:"session_id,omitempty"`
+	SessionRef  string   `json:"session_ref,omitempty"`
+	Sessions    []string `json:"sessions,omitempty"`
+	Workdir     string   `json:"workdir"`
+	AutoRestart *bool    `json:"auto_restart,omitempty"`
 }
 
 func (s *Service) registerSessionTools(server *mcp.Server) {
-	mcp.AddTool(server, &mcp.Tool{
-		Name:        "session_resolve",
-		Description: "Resolve one session or an ordered batch through Agent Deck or Thurbox. host overrides current-host detection; otherwise a valid nested Thurbox context wins, then Agent Deck is used when detected.",
-	}, s.sessionResolve)
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "session_create",
 		Description: "Create a session in an explicit workdir through Agent Deck or Thurbox; the parent may use a different workdir. Generic Agent Deck creation requires a top-level parent with a non-empty group and uses that parent's preflight group snapshot. The selected adapter consumes its applicable caller-supplied launch value: full_command_line for Agent Deck or thurbox_agent_key for Thurbox.",
 	}, s.sessionCreate)
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "session_require",
-		Description: "Ensure existing sessions in an explicit workdir through Agent Deck or Thurbox; starts a known stopped session when the selected host supports it and never creates one.",
+		Description: "Find and ensure existing sessions in an explicit workdir through Agent Deck or Thurbox. Returns not_found without an MCP error when absent. auto_restart defaults to true; set it false to inspect a stopped session without starting it. Never creates sessions.",
 	}, s.sessionRequire)
 
-	mcp.AddTool(server, &mcp.Tool{
-		Name:        "agent_deck_resolve_session",
-		Description: "Resolve one session ID/ref with session, or independently resolve multiple with sessions; batches return ordered results.",
-	}, s.agentDeckResolveSession)
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "agent_deck_create_session",
 		Description: "Create a session in an explicit workdir; target must not exist. Supports group placement, parent linkage, detachment, and startup_instruction passed only to agent-deck launch --message.",
 	}, s.agentDeckCreateSession)
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "agent_deck_require_session",
-		Description: "Ensure one existing session ID/ref or multiple sessions in an explicit workdir. Each must already match that workdir and is started if needed; never creates sessions.",
+		Description: "Find and ensure one existing session ID/ref or multiple sessions in an explicit workdir. Returns not_found without an MCP error when absent. auto_restart defaults to true; set it false to inspect without starting. Never creates sessions.",
 	}, s.agentDeckRequireSession)
-}
-
-func (s *Service) sessionResolve(ctx context.Context, req *mcp.CallToolRequest, input sessionResolveInput) (*mcp.CallToolResult, map[string]any, error) {
-	batch, err := validateGenericResolveSessionArgs(req, input)
-	if err != nil {
-		return nil, nil, err
-	}
-	host, err := s.sessions.selectSessionHost(ctx, input.Host)
-	if err != nil {
-		return nil, nil, err
-	}
-	if !batch {
-		out, err := s.genericResolveSessionResult(ctx, host, input.Session)
-		if err != nil {
-			return nil, nil, err
-		}
-		return s.toolResult(ctx, out)
-	}
-
-	results := make([]map[string]any, 0, len(input.Sessions))
-	for _, session := range input.Sessions {
-		out, err := s.genericResolveSessionResult(ctx, host, session)
-		if err != nil {
-			out = map[string]any{
-				"host":        string(host),
-				"status":      "error",
-				"session_ref": session,
-				"error":       err.Error(),
-			}
-		}
-		results = append(results, out)
-	}
-	return s.toolResult(ctx, map[string]any{"host": string(host), "results": results})
-}
-
-func (s *Service) genericResolveSessionResult(ctx context.Context, host sessionHost, session string) (map[string]any, error) {
-	data, err := s.sessions.resolveHostSession(ctx, host, session, syncCmdTimeout)
-	if err != nil {
-		return nil, err
-	}
-	if data == nil {
-		return map[string]any{
-			"host":        string(host),
-			"status":      "not_found",
-			"session_ref": session,
-		}, nil
-	}
-	out := hostSessionInfoMap(data, session)
-	out["status"] = "found"
-	return out, nil
-}
-
-func validateGenericResolveSessionArgs(req *mcp.CallToolRequest, input sessionResolveInput) (bool, error) {
-	if req == nil || len(req.Params.Arguments) == 0 {
-		return false, errors.New("session_resolve requires exactly one of session or sessions")
-	}
-
-	var rawArgs map[string]json.RawMessage
-	if err := json.Unmarshal(req.Params.Arguments, &rawArgs); err != nil {
-		return false, fmt.Errorf("invalid tool arguments: %w", err)
-	}
-	_, hasSession := rawArgs["session"]
-	_, hasSessions := rawArgs["sessions"]
-	if hasSession == hasSessions {
-		return false, errors.New("session_resolve requires exactly one of session or sessions")
-	}
-	if hasSessions && len(input.Sessions) == 0 {
-		return false, errors.New("session_resolve sessions must contain at least one session")
-	}
-	if hasSession && strings.TrimSpace(input.Session) == "" {
-		return false, errors.New("session_resolve session must not be empty")
-	}
-	for _, session := range input.Sessions {
-		if strings.TrimSpace(session) == "" {
-			return false, errors.New("session_resolve sessions must not contain an empty session")
-		}
-	}
-	return hasSessions, nil
 }
 
 func (s *Service) sessionCreate(ctx context.Context, _ *mcp.CallToolRequest, input sessionCreateInput) (*mcp.CallToolResult, map[string]any, error) {
@@ -194,7 +99,7 @@ func (s *Service) sessionRequire(ctx context.Context, req *mcp.CallToolRequest, 
 			identifier = input.SessionID
 			selectorKind = hostSessionSelectorID
 		}
-		out, err := s.sessions.requireHostSession(ctx, host, identifier, input.Workdir, selectorKind)
+		out, err := s.sessions.requireHostSession(ctx, host, identifier, input.Workdir, selectorKind, autoRestartEnabled(input.AutoRestart))
 		if err != nil {
 			return nil, nil, err
 		}
@@ -207,7 +112,7 @@ func (s *Service) sessionRequire(ctx context.Context, req *mcp.CallToolRequest, 
 	}
 	results := make([]map[string]any, 0, len(input.Sessions))
 	for _, session := range input.Sessions {
-		out, err := s.sessions.requireHostSessionWithCanonicalWorkdir(ctx, host, session, input.Workdir, workdir, hostSessionSelectorRef)
+		out, err := s.sessions.requireHostSessionWithCanonicalWorkdir(ctx, host, session, input.Workdir, workdir, hostSessionSelectorRef, autoRestartEnabled(input.AutoRestart))
 		if err != nil {
 			out = genericRequireErrorResult(host, session, err)
 		}
@@ -264,68 +169,8 @@ func genericRequireErrorResult(host sessionHost, sessionRef string, err error) m
 	}
 }
 
-func (s *Service) agentDeckResolveSession(ctx context.Context, req *mcp.CallToolRequest, input agentDeckResolveSessionInput) (*mcp.CallToolResult, map[string]any, error) {
-	batch, err := validateResolveSessionArgs(req, input)
-	if err != nil {
-		return nil, nil, err
-	}
-	if !batch {
-		out, err := s.resolveSessionResult(ctx, input.Session)
-		if err != nil {
-			return nil, nil, err
-		}
-		return s.toolResult(ctx, out)
-	}
-
-	results := make([]map[string]any, 0, len(input.Sessions))
-	for _, session := range input.Sessions {
-		out, err := s.resolveSessionResult(ctx, session)
-		if err != nil {
-			out = map[string]any{
-				"status":      "error",
-				"session_ref": session,
-				"error":       err.Error(),
-			}
-		}
-		results = append(results, out)
-	}
-	return s.toolResult(ctx, map[string]any{"results": results})
-}
-
-func (s *Service) resolveSessionResult(ctx context.Context, session string) (map[string]any, error) {
-	data, err := s.sessions.resolveSessionShow(ctx, session, syncCmdTimeout)
-	if err != nil {
-		return nil, err
-	}
-	if data == nil {
-		return map[string]any{
-			"status":      "not_found",
-			"session_ref": session,
-		}, nil
-	}
-	out := sessionInfoMap(data, session)
-	out["status"] = "found"
-	return out, nil
-}
-
-func validateResolveSessionArgs(req *mcp.CallToolRequest, input agentDeckResolveSessionInput) (bool, error) {
-	if req == nil || len(req.Params.Arguments) == 0 {
-		return false, errors.New("agent_deck_resolve_session requires exactly one of session or sessions")
-	}
-
-	var rawArgs map[string]json.RawMessage
-	if err := json.Unmarshal(req.Params.Arguments, &rawArgs); err != nil {
-		return false, fmt.Errorf("invalid tool arguments: %w", err)
-	}
-	_, hasSession := rawArgs["session"]
-	_, hasSessions := rawArgs["sessions"]
-	if hasSession == hasSessions {
-		return false, errors.New("agent_deck_resolve_session requires exactly one of session or sessions")
-	}
-	if hasSessions && len(input.Sessions) == 0 {
-		return false, errors.New("agent_deck_resolve_session sessions must contain at least one session")
-	}
-	return hasSessions, nil
+func autoRestartEnabled(value *bool) bool {
+	return value == nil || *value
 }
 
 func (s *Service) agentDeckCreateSession(ctx context.Context, _ *mcp.CallToolRequest, input agentDeckCreateSessionInput) (*mcp.CallToolResult, map[string]any, error) {
@@ -349,8 +194,9 @@ func (s *Service) agentDeckRequireSession(ctx context.Context, req *mcp.CallTool
 		results := make([]map[string]any, 0, len(input.Sessions))
 		for _, session := range input.Sessions {
 			out, err := s.sessions.requireSessionWithCanonicalWorkdir(ctx, agentDeckRequireSessionInput{
-				SessionRef: session,
-				Workdir:    input.Workdir,
+				SessionRef:  session,
+				Workdir:     input.Workdir,
+				AutoRestart: input.AutoRestart,
 			}, workdir)
 			if err != nil {
 				out = map[string]any{
@@ -381,10 +227,11 @@ func validateRequireSessionArgs(req *mcp.CallToolRequest, input agentDeckRequire
 	}
 
 	allowedFields := map[string]bool{
-		"session_id":  true,
-		"session_ref": true,
-		"sessions":    true,
-		"workdir":     true,
+		"session_id":   true,
+		"session_ref":  true,
+		"sessions":     true,
+		"workdir":      true,
+		"auto_restart": true,
 	}
 	unexpected := make([]string, 0, len(rawArgs))
 	for field := range rawArgs {

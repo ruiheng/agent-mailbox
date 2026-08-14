@@ -761,15 +761,21 @@ func (m *sessionManager) resolveSessionShow(ctx context.Context, identifier stri
 	if err != nil {
 		return nil, err
 	}
-	if result == nil || result.ExitCode != 0 {
+	switch classifyAgentDeckSessionShowExit(result) {
+	case sessionShowProbeNotFound:
 		return nil, nil
+	case sessionShowProbeUnknown:
+		if result == nil {
+			return nil, errors.New("agent-deck session show returned no result")
+		}
+		return nil, fmt.Errorf("agent-deck session show failed with exit code %d", result.ExitCode)
 	}
 	data, err := parseSessionData(result.Stdout, "agent-deck session show")
 	if err != nil {
 		return nil, hostSessionOutputFailure(err)
 	}
 	if data.Success != nil && !*data.Success {
-		return nil, nil
+		return nil, hostSessionOutputFailure(errors.New("agent-deck session show reported failure with exit code 0"))
 	}
 	return data, nil
 }
@@ -790,30 +796,32 @@ func (m *sessionManager) probeSessionShowBestEffort(ctx context.Context, identif
 	if err != nil {
 		return sessionShowProbeResult{}, err
 	}
-	if result == nil {
-		return sessionShowProbeResult{Status: sessionShowProbeUnknown}, nil
-	}
-	if result.ExitCode != 0 {
-		if strings.TrimSpace(result.Stdout) == "" {
-			return sessionShowProbeResult{Status: sessionShowProbeUnknown}, nil
-		}
-		data, err := parseSessionData(result.Stdout, "agent-deck session show")
-		if err != nil {
-			return sessionShowProbeResult{}, err
-		}
-		if data.Success != nil && !*data.Success {
-			return sessionShowProbeResult{Status: sessionShowProbeNotFound}, nil
-		}
-		return sessionShowProbeResult{Status: sessionShowProbeUnknown}, nil
+	status := classifyAgentDeckSessionShowExit(result)
+	if status != sessionShowProbeFound {
+		return sessionShowProbeResult{Status: status}, nil
 	}
 	data, err := parseSessionData(result.Stdout, "agent-deck session show")
 	if err != nil {
 		return sessionShowProbeResult{}, err
 	}
 	if data.Success != nil && !*data.Success {
-		return sessionShowProbeResult{Status: sessionShowProbeNotFound}, nil
+		return sessionShowProbeResult{Status: sessionShowProbeUnknown}, nil
 	}
 	return sessionShowProbeResult{Status: sessionShowProbeFound, Data: data}, nil
+}
+
+func classifyAgentDeckSessionShowExit(result *RunResult) sessionShowProbeStatus {
+	if result == nil {
+		return sessionShowProbeUnknown
+	}
+	switch result.ExitCode {
+	case 0:
+		return sessionShowProbeFound
+	case 2:
+		return sessionShowProbeNotFound
+	default:
+		return sessionShowProbeUnknown
+	}
 }
 
 func (m *sessionManager) createSession(ctx context.Context, input agentDeckCreateSessionInput) (map[string]any, error) {
@@ -914,10 +922,31 @@ func (m *sessionManager) requireSessionWithCanonicalWorkdir(ctx context.Context,
 		return nil, err
 	}
 	if data == nil {
-		return nil, fmt.Errorf("target session not found: %s", identifier)
+		return map[string]any{
+			"status":          "not_found",
+			"session_id":      nil,
+			"session_ref":     identifier,
+			"title":           nil,
+			"session_status":  nil,
+			"group":           nil,
+			"path":            nil,
+			"addresses":       []string{},
+			"created_target":  false,
+			"started_session": false,
+			"notify_needed":   false,
+		}, nil
 	}
 	if err := validateExistingSessionWorkdir(data, input.Workdir, workdir); err != nil {
 		return nil, err
+	}
+	if !autoRestartEnabled(input.AutoRestart) && !activeSessionStatuses[strings.TrimSpace(data.Status)] {
+		out := sessionInfoMap(data, firstNonEmpty(input.SessionRef, identifier))
+		out["status"] = "not_ready"
+		out["created_target"] = false
+		out["started_session"] = false
+		out["notify_needed"] = false
+		out["startup_instruction_status"] = "not_started_auto_restart_disabled"
+		return out, nil
 	}
 
 	data, startedSession, notifyNeeded, startupInstructionStatus, err := m.startSessionIfNeeded(ctx, data, "")

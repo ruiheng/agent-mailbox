@@ -718,15 +718,15 @@ const (
 	hostSessionSelectorRef hostSessionSelectorKind = "session_ref"
 )
 
-func (m *sessionManager) requireHostSession(ctx context.Context, host sessionHost, identifier, workdir string, selectorKind hostSessionSelectorKind) (map[string]any, error) {
+func (m *sessionManager) requireHostSession(ctx context.Context, host sessionHost, identifier, workdir string, selectorKind hostSessionSelectorKind, autoRestart bool) (map[string]any, error) {
 	canonicalWorkdir, err := canonicalizeTargetWorkdir(workdir, "requiring")
 	if err != nil {
 		return nil, err
 	}
-	return m.requireHostSessionWithCanonicalWorkdir(ctx, host, identifier, workdir, canonicalWorkdir, selectorKind)
+	return m.requireHostSessionWithCanonicalWorkdir(ctx, host, identifier, workdir, canonicalWorkdir, selectorKind, autoRestart)
 }
 
-func (m *sessionManager) requireHostSessionWithCanonicalWorkdir(ctx context.Context, host sessionHost, identifier, requestedWorkdir, canonicalWorkdir string, selectorKind hostSessionSelectorKind) (map[string]any, error) {
+func (m *sessionManager) requireHostSessionWithCanonicalWorkdir(ctx context.Context, host sessionHost, identifier, requestedWorkdir, canonicalWorkdir string, selectorKind hostSessionSelectorKind, autoRestart bool) (map[string]any, error) {
 	identifier = strings.TrimSpace(identifier)
 	if identifier == "" {
 		return nil, errors.New("session identifier is required when requiring a target session")
@@ -736,7 +736,7 @@ func (m *sessionManager) requireHostSessionWithCanonicalWorkdir(ctx context.Cont
 		return nil, err
 	}
 	if data == nil {
-		return nil, fmt.Errorf("target session not found: %s", identifier)
+		return notFoundHostSessionResult(host, identifier), nil
 	}
 	if selectorKind == hostSessionSelectorID && data.ID != identifier {
 		return nil, fmt.Errorf("session_id must exactly match the resolved host session ID: %s", identifier)
@@ -746,6 +746,9 @@ func (m *sessionManager) requireHostSessionWithCanonicalWorkdir(ctx context.Cont
 	}
 	if hostSessionIsReady(host, data) {
 		return readyVerifiedResult(data, identifier, canonicalWorkdir, false), nil
+	}
+	if !autoRestart {
+		return notReadyVerifiedResult(data, identifier, canonicalWorkdir), nil
 	}
 
 	switch host {
@@ -901,6 +904,26 @@ func readyVerifiedResult(data *hostSessionData, sessionRef, canonicalWorkdir str
 	out["started_session"] = started
 	out["recovery_required"] = false
 	out["verification"] = verificationMap("verified", canonicalWorkdir, data.Path, "")
+	return out
+}
+
+func notReadyVerifiedResult(data *hostSessionData, sessionRef, canonicalWorkdir string) map[string]any {
+	out := hostSessionInfoMap(data, sessionRef)
+	out["status"] = "not_ready"
+	out["created_target"] = false
+	out["started_session"] = false
+	out["recovery_required"] = false
+	out["verification"] = verificationMap("verified", canonicalWorkdir, data.Path, "")
+	return out
+}
+
+func notFoundHostSessionResult(host sessionHost, sessionRef string) map[string]any {
+	out := hostSessionInfoMap(nil, sessionRef)
+	out["host"] = string(host)
+	out["status"] = "not_found"
+	out["created_target"] = false
+	out["started_session"] = false
+	out["recovery_required"] = false
 	return out
 }
 

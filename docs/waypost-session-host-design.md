@@ -22,10 +22,13 @@ values it returns. Waypost remains a two-host session adapter and durable
 Waypost transport; it does not become a role resolver, profile store, command
 registry, Thurbox agent catalog, or generic host framework.
 
-All other shipped two-host behavior remains in force: `session_resolve`,
-`session_require`, the three legacy `agent_deck_*` tools, same-host parent and
-target workdir checks, fixture-pinned Thurbox parsing, recovery-safe
-create/require results, binding, notification, and wake behavior.
+Waypost 0.6 removes the separate resolve tools. `session_require` now owns
+lookup as well as readiness enforcement, returns structured `not_found`, and
+accepts `auto_restart=false` for read-only inspection. The remaining two-host
+behavior stays in force: `session_create`, `session_require`, the two legacy
+Agent Deck create/require tools, same-host parent and target workdir checks,
+fixture-pinned Thurbox parsing, recovery-safe create/require results, binding,
+notification, and wake behavior.
 
 ## Problem
 
@@ -60,8 +63,9 @@ The revision is complete when:
    its MCP service/session manager.
 5. Waypost never reads or validates Agentgear configuration or Thurbox
    `agents.toml`; it treats the selected launch value as opaque caller input.
-6. Existing `agent_deck_resolve_session`, `agent_deck_create_session`, and
-   `agent_deck_require_session` schemas and behavior remain unchanged.
+6. Existing `agent_deck_create_session` behavior remains unchanged;
+   `agent_deck_require_session` gains the same structured lookup and optional
+   restart control as the generic require tool.
 7. Existing generic host selection, same-host parent validation, target
    workdir validation, fixture-pinned Thurbox behavior, create/require
    recovery, binding, notification, and wake behavior remain unchanged.
@@ -422,9 +426,11 @@ Neither `full_command_line` nor `thurbox_agent_key` appears in `created`,
 `created_unverified`, or `create_recovery_required`. Existing normalized
 session identity, address, verification, and recovery fields remain unchanged.
 
-`session_require` remains launch-value-free. It continues to start/restart only
-an existing verified target and retains the current `ready` /
-`ready_unverified` behavior and non-transactional ordered batch contract.
+`session_require` remains launch-value-free. It returns `not_found` for an
+absent target, returns `not_ready` for a stopped target when
+`auto_restart=false`, and otherwise starts/restarts only an existing verified
+target. It retains the `ready` / `ready_unverified` behavior and
+non-transactional ordered batch contract.
 
 ## Preserved Two-Host Behavior
 
@@ -452,13 +458,10 @@ The following are explicit invariants, not redesign targets:
 
 ### Legacy MCP tools
 
-All pre-existing `agent_deck_*` registrations, schemas, handlers, commands,
-group placement, detachment, startup instruction behavior, result maps,
-notification behavior, and status-gate behavior remain unchanged. They do not
-call generic `session_create` and do not acquire the new fields.
-
-`session_resolve` and `session_require` are unchanged. The MCP tool inventory
-and the fixed two-host scope are unchanged.
+The legacy Agent Deck create and require tools remain. They do not call generic
+`session_create`; require gains `auto_restart` and the structured `not_found`
+result. The resolve registration is removed rather than retained as an alias.
+The fixed two-host scope is unchanged.
 
 ### Generic `session_create`
 

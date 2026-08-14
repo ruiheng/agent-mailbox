@@ -16,7 +16,7 @@ durable-state Waypost capability surface available through CLI.
 
 ## Hard-Cut Decision
 
-Waypost MCP exposes exactly fifteen tools after this change. There is no
+Waypost MCP exposes exactly thirteen tools after this change. There is no
 `full` profile, `hybrid` profile, profile flag, legacy tool set, capability
 manifest, or runtime capability registry.
 
@@ -40,10 +40,8 @@ The retained tools are:
 - `waypost_ack`
 - `waypost_release`
 - `waypost_defer`
-- `agent_deck_resolve_session`
 - `agent_deck_create_session`
 - `agent_deck_require_session`
-- `session_resolve`
 - `session_create`
 - `session_require`
 
@@ -56,12 +54,13 @@ process. A separate CLI process cannot repair that MCP instance.
 message path. Receive and these common lease transitions also interact with
 the MCP active-lease tracker and renewal loop.
 
-The three Agent Deck session tools remain because they are frequent structured
-operations. Their implementation is unchanged and remains outside the rest of
-this design. The three host-neutral session tools are additive compatibility
-layers for the fixed Agent Deck and Thurbox host set; they do not expose a
-generic lifecycle or command surface. `session_create` accepts the optional
-caller-supplied opaque launch values `full_command_line` and
+The two Agent Deck session tools remain because they are frequent structured
+operations. The two host-neutral session tools cover the fixed Agent Deck and
+Thurbox host set; they do not expose a generic lifecycle or command surface.
+`session_require` owns both lookup and readiness enforcement: it returns
+`not_found` for an absent target and accepts `auto_restart=false` for read-only
+inspection. There is no separate resolve tool. `session_create` accepts the
+optional caller-supplied opaque launch values `full_command_line` and
 `thurbox_agent_key`; after host selection it consumes only the applicable
 value and does not resolve roles or profiles.
 
@@ -186,7 +185,7 @@ func registerWaypostTools(server *mcp.Server) {
 }
 ```
 
-Tests assert the exact fifteen tool names. A removed tool appearing in the
+Tests assert the exact thirteen tool names. A removed tool appearing in the
 MCP list is a test failure.
 
 `waypost_status` continues to report the live MCP information needed to use
@@ -588,13 +587,13 @@ Topic responsibilities:
 
 Automated checks cover:
 
-- MCP exposes exactly the fifteen retained tool names
+- MCP exposes exactly the thirteen retained tool names
 - every deleted MCP tool is absent
 - every deleted tool's CLI route satisfies the operation matrix
 - status, bind, and debug bootstrap/repair behavior
 - send, recv, claim history, and `ack`/`release`/`defer` through MCP
-- Agent Deck resolve/create/require behavior remains unchanged
-- Agent Deck resolve/create/require can run before `waypost_status`
+- Agent Deck create/require behavior remains covered
+- Agent Deck create/require can run before `waypost_status`
 - MCP server instructions identify `waypost doc --list` and the one-or-more-topic
   `waypost doc TOPIC...` form as the complete CLI guidance entry points and require
   the binary and state directory reported by `waypost_status`
@@ -632,7 +631,7 @@ Automated checks cover:
   testing their commands keeps them version-matched.
 - Remaining-state counting adds receive-path work. The index, query-plan test,
   rollback invariant, and benchmark bound the risk.
-- Fifteen tools are not the theoretical minimum, but each retained tool is
+- Thirteen tools are not the theoretical minimum, but each retained tool is
   justified by frequency or live MCP state.
 
 ## Rejected Alternatives
@@ -681,7 +680,7 @@ and human-oriented detail.
 5. add concise embedded `waypost doc` topics and prompt tests
 6. add one durable-state reconciliation path shared by renewal, the
    `active_leases` receive gate, and claim history
-7. hard-cut MCP registration to the fifteen retained typed tools
+7. hard-cut MCP registration to the thirteen retained typed tools
 8. delete `recv.has_more` and add exact personal/group receive results
 9. add remaining-state counts and post-claim rollback/recovery
 10. run the full CLI, MCP, concurrency, prompt, query-plan, and benchmark suite

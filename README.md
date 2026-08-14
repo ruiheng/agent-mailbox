@@ -100,7 +100,7 @@ Report the CLI version (the same value advertised by the built-in MCP server):
 
 ```bash
 waypost --version
-# waypost 0.5.0
+# waypost 0.6.0
 ```
 
 Run the full test suite:
@@ -250,10 +250,8 @@ The Go MCP entrypoint exposes these Waypost tool names:
 - `waypost_group_remove_subscriber`
 - `waypost_group_subscribers`
 - `waypost_address_inspect`
-- `agent_deck_resolve_session`
 - `agent_deck_create_session`
 - `agent_deck_require_session`
-- `session_resolve`
 - `session_create`
 - `session_require`
 
@@ -331,21 +329,19 @@ can launch detached sessions with `no_parent_link = true`. `startup_instruction`
 is optional startup-only input passed to `agent-deck launch --message`; do not
 use it for task payloads or normal wakeups.
 
-`agent_deck_require_session` is the send-time guard. It never creates a
-session; it resolves `session_id` or `session_ref`, verifies the existing
-session already belongs to the explicit `workdir`, and starts it if needed.
+`session_require` and `agent_deck_require_session` are the session lookup and
+send-time guards. They never create a session. Each resolves `session_id` or
+`session_ref`, returns `status = not_found` without an MCP error when the
+target is absent, verifies an existing target belongs to the explicit
+`workdir`, and starts it if needed. `auto_restart` defaults to `true`; set it
+to `false` for a read-only lookup that returns `status = not_ready` instead of
+starting a stopped session. Callers do not need a separate resolve preflight.
 `waypost_send` remains transport-only and does not create downstream sessions.
 Pass `sessions` as a non-empty array of session IDs or refs to require multiple
 sessions in one call. All batch items use the same explicit `workdir`, return
 ordered `results`, and
 report a per-session `error` without preventing the other sessions from being
 required.
-
-`agent_deck_resolve_session` is read-only. Pass one `session` for its original
-single-session response, or pass `sessions` as a non-empty array to resolve
-multiple references in one MCP call. Batch responses contain ordered `results`;
-each item is a normal `found` or `not_found` response, or an `error` response
-for an individual lookup failure without preventing the other lookups.
 
 ## Quick Start
 

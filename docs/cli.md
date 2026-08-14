@@ -37,7 +37,7 @@ Report the CLI version:
 
 ```bash
 waypost --version
-# waypost 0.5.0
+# waypost 0.6.0
 ```
 
 The CLI version is the same value advertised by the built-in MCP server during

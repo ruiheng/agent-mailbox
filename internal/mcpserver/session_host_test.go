@@ -53,6 +53,12 @@ func TestGenericSessionToolSchemasAreHostNeutral(t *testing.T) {
 	if !containsString(requireSchema.Required, "workdir") {
 		t.Fatalf("require required fields = %v, want workdir", requireSchema.Required)
 	}
+	if _, ok := requireSchema.Properties["auto_restart"]; !ok {
+		t.Fatalf("generic require schema does not expose optional auto_restart")
+	}
+	if containsString(requireSchema.Required, "auto_restart") {
+		t.Fatalf("generic require schema unexpectedly requires auto_restart: %v", requireSchema.Required)
+	}
 	for _, field := range []string{"launch_profile", "full_command_line", "thurbox_agent_key", "ensure_cmd", "group_path"} {
 		if _, ok := requireSchema.Properties[field]; ok {
 			t.Fatalf("generic require schema unexpectedly exposes %q", field)
@@ -238,16 +244,17 @@ func TestThurboxResolveRejectsDuplicateExactNames(t *testing.T) {
 	}
 }
 
-func TestGenericSessionResolvePrefersNestedThurbox(t *testing.T) {
+func TestGenericSessionRequirePrefersNestedThurbox(t *testing.T) {
 	t.Setenv("THURBOX_SESSION", thurboxAuthorID)
 	t.Setenv("AGENTDECK_INSTANCE_ID", "outer-agent-deck")
 	clearToolSessionEnvs(t)
+	workdir := t.TempDir()
 
 	commandRunner := &fakeRunner{t: t, handler: func(args []string, input string) (RunResult, error) {
 		if !reflect.DeepEqual(args, []string{"thurbox-cli", "session", "list", "--json"}) {
 			t.Fatalf("unexpected command; nested Thurbox must win host selection: %v", args)
 		}
-		return RunResult{ExitCode: 0, Stdout: thurboxFixture(t, "session-list.json")}, nil
+		return RunResult{ExitCode: 0, Stdout: "[" + thurboxSessionRecord(t, thurboxAuthorID, "architect-author", workdir, thurboxPlannerID, "idle") + "]"}, nil
 	}}
 	service := newService(Options{
 		WaypostServiceFactory: failOpenWaypostServiceFactory{t: t},
@@ -256,12 +263,16 @@ func TestGenericSessionResolvePrefersNestedThurbox(t *testing.T) {
 		DisableLeaseRenewLoop: true,
 	})
 
-	output := callServiceTool(t, service, "session_resolve", map[string]any{"session": "architect-author"})
-	if output["host"] != "thurbox" || output["status"] != "found" || output["session_id"] != thurboxAuthorID {
-		t.Fatalf("nested resolve output = %v", output)
+	output := callServiceTool(t, service, "session_require", map[string]any{
+		"session_ref":  "architect-author",
+		"workdir":      workdir,
+		"auto_restart": false,
+	})
+	if output["host"] != "thurbox" || output["status"] != "ready" || output["session_id"] != thurboxAuthorID {
+		t.Fatalf("nested require output = %v", output)
 	}
 	if _, ok := output["group"]; ok {
-		t.Fatalf("generic resolve leaked Agent Deck group: %v", output)
+		t.Fatalf("generic require leaked Agent Deck group: %v", output)
 	}
 }
 
@@ -447,7 +458,7 @@ func TestGenericAgentDeckCreateAllowsDifferentParentWorkdirAndUsesAuthoritativeR
 		case reflect.DeepEqual(args, []string{"agent-deck", "session", "show", "agent-parent", "--json"}):
 			return RunResult{ExitCode: 0, Stdout: parent}, nil
 		case reflect.DeepEqual(args, []string{"agent-deck", "session", "show", "architect-reviewer", "--json"}):
-			return RunResult{ExitCode: 1, Stderr: "not found"}, nil
+			return RunResult{ExitCode: 2, Stderr: "not found"}, nil
 		case reflect.DeepEqual(args, []string{"agent-deck", "launch", "--json", "--title", "architect-reviewer", "--cmd", "codex --model gpt-5.6", "--group", "waypost", "--parent", "agent-parent", canonicalWorkdir}):
 			launchCalls++
 			return RunResult{ExitCode: 0, Stdout: launchReceipt}, nil
@@ -518,7 +529,7 @@ func TestGenericAgentDeckCreateUsesCapturedParentGroupSnapshot(t *testing.T) {
 				case reflect.DeepEqual(args, []string{"agent-deck", "session", "show", "agent-parent", "--json"}):
 					return RunResult{ExitCode: 0, Stdout: parent}, nil
 				case reflect.DeepEqual(args, []string{"agent-deck", "session", "show", "architect-reviewer", "--json"}):
-					return RunResult{ExitCode: 1, Stderr: "not found"}, nil
+					return RunResult{ExitCode: 2, Stderr: "not found"}, nil
 				case reflect.DeepEqual(args, []string{"agent-deck", "launch", "--json", "--title", "architect-reviewer", "--cmd", "codex", "--group", test.wantGroup, "--parent", "agent-parent", canonicalWorkdir}):
 					// Agent Deck v1.10.11 launch_cmd.go creates a supplied non-empty
 					// group path. Generic create must not probe or create it first.
@@ -659,7 +670,7 @@ func TestGenericAgentDeckCreateReturnsRecoveryForRefreshedGroupMismatch(t *testi
 				case reflect.DeepEqual(args, []string{"agent-deck", "session", "show", "agent-parent", "--json"}):
 					return RunResult{ExitCode: 0, Stdout: parent}, nil
 				case reflect.DeepEqual(args, []string{"agent-deck", "session", "show", "architect-reviewer", "--json"}):
-					return RunResult{ExitCode: 1, Stderr: "not found"}, nil
+					return RunResult{ExitCode: 2, Stderr: "not found"}, nil
 				case reflect.DeepEqual(args, []string{"agent-deck", "launch", "--json", "--title", "architect-reviewer", "--cmd", "codex", "--group", "waypost", "--parent", "agent-parent", canonicalWorkdir}):
 					launchCalls++
 					return RunResult{ExitCode: 0, Stdout: `{"id":"agent-child"}`}, nil
@@ -728,7 +739,7 @@ func TestGenericSessionCreateRedactsCallerLaunchValueFromCommandErrors(t *testin
 					case reflect.DeepEqual(args, []string{"agent-deck", "session", "show", parentID, "--json"}):
 						return RunResult{ExitCode: 0, Stdout: `{"id":"agent-parent","title":"planner","status":"waiting","group":"parent-group-secret","path":` + jsonString(t, canonicalWorkdir) + `}`}, nil
 					case reflect.DeepEqual(args, []string{"agent-deck", "session", "show", "architect-reviewer", "--json"}):
-						return RunResult{ExitCode: 1, Stderr: "not found"}, nil
+						return RunResult{ExitCode: 2, Stderr: "not found"}, nil
 					case reflect.DeepEqual(args, []string{"agent-deck", "launch", "--json", "--title", "architect-reviewer", "--cmd", launchValue, "--group", "parent-group-secret", "--parent", parentID, canonicalWorkdir}):
 						if test.mode == "runner" {
 							return RunResult{}, errors.New("runner echoed " + launchValue)
@@ -912,7 +923,7 @@ func TestGenericAgentDeckCreateRecoveryUsesFixedRedactedDetail(t *testing.T) {
 				case reflect.DeepEqual(args, []string{"agent-deck", "session", "show", "agent-parent", "--json"}):
 					return RunResult{ExitCode: 0, Stdout: parent}, nil
 				case reflect.DeepEqual(args, []string{"agent-deck", "session", "show", "architect-reviewer", "--json"}):
-					return RunResult{ExitCode: 1, Stderr: "not found"}, nil
+					return RunResult{ExitCode: 2, Stderr: "not found"}, nil
 				case reflect.DeepEqual(args, []string{"agent-deck", "launch", "--json", "--title", "architect-reviewer", "--cmd", "selected-secret", "--group", "waypost", "--parent", "agent-parent", canonicalWorkdir}):
 					return RunResult{ExitCode: 0, Stdout: createOutput}, nil
 				default:
@@ -1098,6 +1109,116 @@ func TestGenericSessionCreateFailsBeforeHostCommandsWithoutSelectedLaunchValue(t
 	}
 }
 
+func TestGenericSessionRequireInspectionResults(t *testing.T) {
+	t.Run("missing target", func(t *testing.T) {
+		workdir := t.TempDir()
+		service := newService(Options{
+			WaypostServiceFactory: failOpenWaypostServiceFactory{t: t},
+			CommandRunner: &fakeRunner{t: t, handler: func(args []string, input string) (RunResult, error) {
+				if !reflect.DeepEqual(args, []string{"agent-deck", "session", "show", "missing", "--json"}) {
+					t.Fatalf("unexpected command args: %v", args)
+				}
+				return RunResult{ExitCode: 2, Stderr: "not found"}, nil
+			}},
+			DisableWakeScheduler:  true,
+			DisableLeaseRenewLoop: true,
+		})
+
+		output := callServiceTool(t, service, "session_require", map[string]any{
+			"host":         "agent-deck",
+			"session_ref":  "missing",
+			"workdir":      workdir,
+			"auto_restart": false,
+		})
+		if output["status"] != "not_found" || output["session_ref"] != "missing" || output["started_session"] != false {
+			t.Fatalf("missing inspection output = %v", output)
+		}
+	})
+
+	t.Run("stopped target", func(t *testing.T) {
+		workdir := t.TempDir()
+		service := newService(Options{
+			WaypostServiceFactory: failOpenWaypostServiceFactory{t: t},
+			CommandRunner: &fakeRunner{t: t, handler: func(args []string, input string) (RunResult, error) {
+				if !reflect.DeepEqual(args, []string{"agent-deck", "session", "show", "stopped", "--json"}) {
+					t.Fatalf("auto_restart=false must not start the target: %v", args)
+				}
+				return RunResult{ExitCode: 0, Stdout: `{"id":"stopped-1","title":"stopped","status":"stopped","path":` + jsonString(t, workdir) + `}`}, nil
+			}},
+			DisableWakeScheduler:  true,
+			DisableLeaseRenewLoop: true,
+		})
+
+		output := callServiceTool(t, service, "session_require", map[string]any{
+			"host":         "agent-deck",
+			"session_ref":  "stopped",
+			"workdir":      workdir,
+			"auto_restart": false,
+		})
+		if output["status"] != "not_ready" || output["session_status"] != "stopped" || output["started_session"] != false {
+			t.Fatalf("stopped inspection output = %v", output)
+		}
+	})
+
+	t.Run("operational lookup failure", func(t *testing.T) {
+		workdir := t.TempDir()
+		service := newService(Options{
+			WaypostServiceFactory: failOpenWaypostServiceFactory{t: t},
+			CommandRunner: &fakeRunner{t: t, handler: func(args []string, input string) (RunResult, error) {
+				if !reflect.DeepEqual(args, []string{"agent-deck", "session", "show", "worker", "--json"}) {
+					t.Fatalf("unexpected command args: %v", args)
+				}
+				return RunResult{ExitCode: 1, Stderr: "database unavailable"}, nil
+			}},
+			DisableWakeScheduler:  true,
+			DisableLeaseRenewLoop: true,
+		})
+
+		err := callServiceToolExpectError(t, service, "session_require", map[string]any{
+			"host":         "agent-deck",
+			"session_ref":  "worker",
+			"workdir":      workdir,
+			"auto_restart": false,
+		})
+		if err == nil || !strings.Contains(err.Error(), "agent-deck session show failed with exit code 1") {
+			t.Fatalf("operational lookup error = %v", err)
+		}
+	})
+}
+
+func TestGenericAgentDeckCreateDoesNotTreatLookupFailureAsMissing(t *testing.T) {
+	workdir := t.TempDir()
+	parentWorkdir := t.TempDir()
+	commandRunner := &fakeRunner{t: t, handler: func(args []string, input string) (RunResult, error) {
+		switch {
+		case reflect.DeepEqual(args, []string{"agent-deck", "session", "show", "planner-1", "--json"}):
+			return RunResult{ExitCode: 0, Stdout: `{"id":"planner-1","title":"planner","status":"waiting","group":"planning","path":` + jsonString(t, parentWorkdir) + `}`}, nil
+		case reflect.DeepEqual(args, []string{"agent-deck", "session", "show", "worker", "--json"}):
+			return RunResult{ExitCode: 1, Stderr: "database unavailable"}, nil
+		default:
+			t.Fatalf("lookup failure must stop before launch: %v", args)
+			return RunResult{}, nil
+		}
+	}}
+	service := newService(Options{
+		WaypostServiceFactory: failOpenWaypostServiceFactory{t: t},
+		CommandRunner:         commandRunner,
+		DisableWakeScheduler:  true,
+		DisableLeaseRenewLoop: true,
+	})
+
+	err := callServiceToolExpectError(t, service, "session_create", map[string]any{
+		"host":              "agent-deck",
+		"session_name":      "worker",
+		"workdir":           workdir,
+		"parent_session_id": "planner-1",
+		"full_command_line": "codex",
+	})
+	if err == nil || !strings.Contains(err.Error(), "agent-deck session show failed with exit code 1") {
+		t.Fatalf("create lookup error = %v", err)
+	}
+}
+
 func TestGenericSessionRequireBatchKeepsConfirmedStartRecoveryAndContinues(t *testing.T) {
 	workdir := t.TempDir()
 	stopped := `{"id":"stopped-1","title":"stopped","status":"stopped","path":` + jsonString(t, workdir) + `}`
@@ -1105,7 +1226,7 @@ func TestGenericSessionRequireBatchKeepsConfirmedStartRecoveryAndContinues(t *te
 	commandRunner := &fakeRunner{t: t, handler: func(args []string, input string) (RunResult, error) {
 		switch {
 		case reflect.DeepEqual(args, []string{"agent-deck", "session", "show", "missing", "--json"}):
-			return RunResult{ExitCode: 1, Stderr: "not found"}, nil
+			return RunResult{ExitCode: 2, Stderr: "not found"}, nil
 		case reflect.DeepEqual(args, []string{"agent-deck", "session", "show", "stopped", "--json"}):
 			return RunResult{ExitCode: 0, Stdout: stopped}, nil
 		case reflect.DeepEqual(args, []string{"agent-deck", "session", "start", "--json", "stopped-1"}):
@@ -1136,7 +1257,7 @@ func TestGenericSessionRequireBatchKeepsConfirmedStartRecoveryAndContinues(t *te
 		t.Fatalf("batch require results = %v", output["results"])
 	}
 	missing := results[0].(map[string]any)
-	if missing["status"] != "error" || missing["started_session"] != false {
+	if missing["status"] != "not_found" || missing["started_session"] != false {
 		t.Fatalf("missing batch result = %v", missing)
 	}
 	recovery := results[1].(map[string]any)

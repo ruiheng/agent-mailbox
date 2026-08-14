@@ -44,7 +44,7 @@ func TestRunVersion(t *testing.T) {
 	if err := app.Run(context.Background(), []string{"--version"}); err != nil {
 		t.Fatalf("Run(--version) error = %v", err)
 	}
-	if got, want := stdout.String(), "waypost 0.5.0\n"; got != want {
+	if got, want := stdout.String(), "waypost 0.6.0\n"; got != want {
 		t.Fatalf("Run(--version) output = %q, want %q", got, want)
 	}
 }

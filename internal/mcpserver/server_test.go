@@ -66,18 +66,16 @@ func TestAgentDeckCreateSessionSchemaRequiresWorkdir(t *testing.T) {
 	}
 }
 
-func TestAgentDeckResolveSessionSchemaSupportsSingleAndBatchInputs(t *testing.T) {
-	schema, err := jsonschema.For[agentDeckResolveSessionInput](nil)
+func TestAgentDeckRequireSessionSchemaSupportsOptionalAutoRestart(t *testing.T) {
+	schema, err := jsonschema.For[agentDeckRequireSessionInput](nil)
 	if err != nil {
 		t.Fatalf("jsonschema.For() error = %v", err)
 	}
-	for _, field := range []string{"session", "sessions"} {
-		if _, ok := schema.Properties[field]; !ok {
-			t.Fatalf("schema.Properties missing %q: %v", field, schema.Properties)
-		}
-		if slices.Contains(schema.Required, field) {
-			t.Fatalf("required fields = %v, do not want %q", schema.Required, field)
-		}
+	if _, ok := schema.Properties["auto_restart"]; !ok {
+		t.Fatalf("schema.Properties missing auto_restart: %v", schema.Properties)
+	}
+	if slices.Contains(schema.Required, "auto_restart") {
+		t.Fatalf("required fields = %v, do not want auto_restart", schema.Required)
 	}
 }
 
@@ -1850,7 +1848,7 @@ func TestNotifyGroupSubscribersAggregatesMixedUnavailableOutcomes(t *testing.T) 
 		if strings.Join(args, "\x00") != strings.Join([]string{"agent-deck", "session", "show", "missing", "--json"}, "\x00") {
 			t.Fatalf("unexpected command args: %v", args)
 		}
-		return RunResult{ExitCode: 1, Stdout: `{"success":false}`}, nil
+		return RunResult{ExitCode: 2, Stdout: `{"success":false}`}, nil
 	}}
 	manager := newNotificationManager(commandRunner, newSessionManager(commandRunner, &serverState{}))
 
@@ -3193,13 +3191,13 @@ func TestProcessWakeSchedulerFallsThroughWhenWaypostOverviewUpdateFails(t *testi
 	}
 }
 
-func TestAgentDeckResolveSessionSingleInputRemainsCompatible(t *testing.T) {
+func TestAgentDeckRequireSessionReturnsReadyAndNotFoundWithoutRestart(t *testing.T) {
 	commandRunner := &fakeRunner{t: t, handler: func(args []string, input string) (RunResult, error) {
 		switch strings.Join(args, "\x00") {
 		case strings.Join([]string{"agent-deck", "session", "show", "worker-ref", "--json"}, "\x00"):
 			return RunResult{ExitCode: 0, Stdout: `{"id":"worker-1","title":"worker","status":"waiting","group":"team","path":"/tmp"}`}, nil
 		case strings.Join([]string{"agent-deck", "session", "show", "missing-ref", "--json"}, "\x00"):
-			return RunResult{ExitCode: 1, Stderr: "not found"}, nil
+			return RunResult{ExitCode: 2, Stderr: "not found"}, nil
 		default:
 			t.Fatalf("unexpected command args: %v", args)
 			return RunResult{}, nil
@@ -3211,9 +3209,13 @@ func TestAgentDeckResolveSessionSingleInputRemainsCompatible(t *testing.T) {
 	})
 	service.state.autoBindAttempted = true
 
-	found := callServiceTool(t, service, "agent_deck_resolve_session", map[string]any{"session": "worker-ref"})
-	if got := found["status"]; got != "found" {
-		t.Fatalf("status = %v, want found", got)
+	found := callServiceTool(t, service, "agent_deck_require_session", map[string]any{
+		"session_ref":  "worker-ref",
+		"workdir":      "/tmp",
+		"auto_restart": false,
+	})
+	if got := found["status"]; got != "ready" {
+		t.Fatalf("status = %v, want ready", got)
 	}
 	if got := found["session_id"]; got != "worker-1" {
 		t.Fatalf("session_id = %v, want worker-1", got)
@@ -3225,19 +3227,23 @@ func TestAgentDeckResolveSessionSingleInputRemainsCompatible(t *testing.T) {
 		t.Fatalf("single-session response unexpectedly includes results: %v", found)
 	}
 
-	notFound := callServiceTool(t, service, "agent_deck_resolve_session", map[string]any{"session": "missing-ref"})
-	if want := map[string]any{"status": "not_found", "session_ref": "missing-ref"}; !reflect.DeepEqual(notFound, want) {
-		t.Fatalf("not-found response = %v, want %v", notFound, want)
+	notFound := callServiceTool(t, service, "agent_deck_require_session", map[string]any{
+		"session_ref":  "missing-ref",
+		"workdir":      "/tmp",
+		"auto_restart": false,
+	})
+	if notFound["status"] != "not_found" || notFound["session_ref"] != "missing-ref" || notFound["started_session"] != false {
+		t.Fatalf("not-found response = %v", notFound)
 	}
 }
 
-func TestAgentDeckResolveSessionBatchReturnsOrderedIndependentResults(t *testing.T) {
+func TestAgentDeckRequireSessionBatchReturnsOrderedIndependentInspectionResults(t *testing.T) {
 	commandRunner := &fakeRunner{t: t, handler: func(args []string, input string) (RunResult, error) {
 		switch strings.Join(args, "\x00") {
 		case strings.Join([]string{"agent-deck", "session", "show", "found-ref", "--json"}, "\x00"):
 			return RunResult{ExitCode: 0, Stdout: `{"id":"worker-1","title":"worker","status":"waiting","path":"/tmp"}`}, nil
 		case strings.Join([]string{"agent-deck", "session", "show", "missing-ref", "--json"}, "\x00"):
-			return RunResult{ExitCode: 1, Stderr: "not found"}, nil
+			return RunResult{ExitCode: 2, Stderr: "not found"}, nil
 		case strings.Join([]string{"agent-deck", "session", "show", "runner-error", "--json"}, "\x00"):
 			return RunResult{}, errors.New("agent-deck is unavailable")
 		case strings.Join([]string{"agent-deck", "session", "show", "invalid-json", "--json"}, "\x00"):
@@ -3253,8 +3259,10 @@ func TestAgentDeckResolveSessionBatchReturnsOrderedIndependentResults(t *testing
 	})
 	service.state.autoBindAttempted = true
 
-	output := callServiceTool(t, service, "agent_deck_resolve_session", map[string]any{
-		"sessions": []string{"found-ref", "missing-ref", "runner-error", "invalid-json"},
+	output := callServiceTool(t, service, "agent_deck_require_session", map[string]any{
+		"sessions":     []string{"found-ref", "missing-ref", "runner-error", "invalid-json"},
+		"workdir":      "/tmp",
+		"auto_restart": false,
 	})
 	results, ok := output["results"].([]any)
 	if !ok {
@@ -3268,8 +3276,8 @@ func TestAgentDeckResolveSessionBatchReturnsOrderedIndependentResults(t *testing
 	if !ok {
 		t.Fatalf("first result = %#v, want map", results[0])
 	}
-	if got := found["status"]; got != "found" {
-		t.Fatalf("first result status = %v, want found", got)
+	if got := found["status"]; got != "ready" {
+		t.Fatalf("first result status = %v, want ready", got)
 	}
 	if got := found["session_ref"]; got != "found-ref" {
 		t.Fatalf("first result session_ref = %v, want found-ref", got)
@@ -3279,8 +3287,8 @@ func TestAgentDeckResolveSessionBatchReturnsOrderedIndependentResults(t *testing
 	if !ok {
 		t.Fatalf("second result = %#v, want map", results[1])
 	}
-	if want := map[string]any{"status": "not_found", "session_ref": "missing-ref"}; !reflect.DeepEqual(missing, want) {
-		t.Fatalf("second result = %v, want %v", missing, want)
+	if missing["status"] != "not_found" || missing["session_ref"] != "missing-ref" || missing["started_session"] != false {
+		t.Fatalf("second result = %v, want structured not_found", missing)
 	}
 
 	for i, session := range []string{"runner-error", "invalid-json"} {
@@ -3303,32 +3311,26 @@ func TestAgentDeckResolveSessionBatchReturnsOrderedIndependentResults(t *testing
 	}
 }
 
-func TestAgentDeckResolveSessionValidatesSingleOrBatchInput(t *testing.T) {
+func TestAgentDeckRequireSessionAutoRestartFalseDoesNotStartInactiveTarget(t *testing.T) {
+	commandRunner := &fakeRunner{t: t, handler: func(args []string, input string) (RunResult, error) {
+		if strings.Join(args, "\x00") != strings.Join([]string{"agent-deck", "session", "show", "coder-ref", "--json"}, "\x00") {
+			t.Fatalf("auto_restart=false must not start the target: %v", args)
+		}
+		return RunResult{ExitCode: 0, Stdout: `{"id":"session-1","title":"coder-123","status":"stopped","path":"/tmp"}`}, nil
+	}}
 	service := newService(Options{
 		WaypostServiceFactory: fakeWaypostServiceFactory{service: &fakeWaypostService{t: t}},
-		CommandRunner: &fakeRunner{t: t, handler: func(args []string, input string) (RunResult, error) {
-			t.Fatalf("unexpected command args: %v", args)
-			return RunResult{}, nil
-		}},
+		CommandRunner:         commandRunner,
 	})
 	service.state.autoBindAttempted = true
 
-	for _, test := range []struct {
-		name string
-		args map[string]any
-		want string
-	}{
-		{name: "missing input", args: map[string]any{}, want: "exactly one of session or sessions"},
-		{name: "both inputs", args: map[string]any{"session": "worker-a", "sessions": []string{"worker-b"}}, want: "exactly one of session or sessions"},
-		{name: "empty batch", args: map[string]any{"sessions": []string{}}, want: "sessions must contain at least one session"},
-		{name: "unknown field", args: map[string]any{"session": "worker-a", "unexpected": true}, want: "unexpected additional properties"},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			err := callServiceToolExpectError(t, service, "agent_deck_resolve_session", test.args)
-			if err == nil || !strings.Contains(err.Error(), test.want) {
-				t.Fatalf("agent_deck_resolve_session error = %v, want %q", err, test.want)
-			}
-		})
+	output := callServiceTool(t, service, "agent_deck_require_session", map[string]any{
+		"session_ref":  "coder-ref",
+		"workdir":      "/tmp",
+		"auto_restart": false,
+	})
+	if output["status"] != "not_ready" || output["session_status"] != "stopped" || output["started_session"] != false {
+		t.Fatalf("inspection output = %v", output)
 	}
 }
 
@@ -3420,7 +3422,7 @@ func TestAgentDeckRequireSessionBatchReturnsOrderedIndependentResults(t *testing
 		case strings.Join([]string{"agent-deck", "session", "show", "active-ref", "--json"}, "\x00"):
 			return RunResult{ExitCode: 0, Stdout: `{"id":"active-1","title":"active","status":"waiting","path":"/tmp"}`}, nil
 		case strings.Join([]string{"agent-deck", "session", "show", "missing-ref", "--json"}, "\x00"):
-			return RunResult{ExitCode: 1, Stderr: "not found"}, nil
+			return RunResult{ExitCode: 2, Stderr: "not found"}, nil
 		case strings.Join([]string{"agent-deck", "session", "show", "stopped-ref", "--json"}, "\x00"):
 			return RunResult{ExitCode: 0, Stdout: `{"id":"stopped-1","title":"stopped","status":"stopped","path":"/tmp"}`}, nil
 		case strings.Join([]string{"agent-deck", "session", "start", "--json", "stopped-1"}, "\x00"):
@@ -3468,14 +3470,14 @@ func TestAgentDeckRequireSessionBatchReturnsOrderedIndependentResults(t *testing
 	if !ok {
 		t.Fatalf("second result = %#v, want map", results[1])
 	}
-	if got := missing["status"]; got != "error" {
-		t.Fatalf("second result status = %v, want error", got)
+	if got := missing["status"]; got != "not_found" {
+		t.Fatalf("second result status = %v, want not_found", got)
 	}
 	if got := missing["session_ref"]; got != "missing-ref" {
 		t.Fatalf("second result session_ref = %v, want missing-ref", got)
 	}
-	if got, ok := missing["error"].(string); !ok || !strings.Contains(got, "target session not found") {
-		t.Fatalf("second result error = %#v, want missing-target error", missing["error"])
+	if got := missing["started_session"]; got != false {
+		t.Fatalf("second result started_session = %v, want false", got)
 	}
 
 	stopped, ok := results[2].(map[string]any)
@@ -3576,7 +3578,7 @@ func TestAgentDeckRequireSessionValidatesTargetBeforeWorkdir(t *testing.T) {
 	}
 }
 
-func TestAgentDeckRequireSessionRejectsMissingTarget(t *testing.T) {
+func TestAgentDeckRequireSessionPropagatesOperationalLookupFailure(t *testing.T) {
 	commandRunner := &fakeRunner{t: t, handler: func(args []string, input string) (RunResult, error) {
 		switch {
 		case strings.Join(args, "\x00") == strings.Join([]string{"agent-deck", "session", "show", "coder-ref", "--json"}, "\x00"):
@@ -3597,8 +3599,8 @@ func TestAgentDeckRequireSessionRejectsMissingTarget(t *testing.T) {
 		"session_ref": "coder-ref",
 		"workdir":     "/tmp",
 	})
-	if err == nil || !strings.Contains(err.Error(), "target session not found") {
-		t.Fatalf("agent_deck_require_session error = %v, want missing target validation", err)
+	if err == nil || !strings.Contains(err.Error(), "agent-deck session show failed with exit code 1") {
+		t.Fatalf("agent_deck_require_session error = %v, want operational lookup failure", err)
 	}
 }
 
@@ -3607,7 +3609,7 @@ func TestProbeSessionShowBestEffortUsesStructuredMissingResult(t *testing.T) {
 		if strings.Join(args, "\x00") != strings.Join([]string{"agent-deck", "session", "show", "coder-ref", "--json"}, "\x00") {
 			t.Fatalf("unexpected command args: %v", args)
 		}
-		return RunResult{ExitCode: 1, Stdout: `{"success":false}`}, nil
+		return RunResult{ExitCode: 2, Stdout: `{"success":false}`}, nil
 	}}
 
 	manager := newSessionManager(commandRunner, &serverState{})
@@ -3690,7 +3692,7 @@ func TestAgentDeckCreateSessionCreatesTargetWithoutDefaultStartupInstruction(t *
 	commandRunner := &fakeRunner{t: t, handler: func(args []string, input string) (RunResult, error) {
 		switch {
 		case strings.Join(args, "\x00") == strings.Join([]string{"agent-deck", "session", "show", "coder-ref", "--json"}, "\x00"):
-			return RunResult{ExitCode: 1, Stderr: "not found"}, nil
+			return RunResult{ExitCode: 2, Stderr: "not found"}, nil
 		case strings.Join(args, "\x00") == strings.Join([]string{"agent-deck", "session", "show", "planner-1", "--json"}, "\x00"):
 			return RunResult{ExitCode: 0, Stdout: `{"id":"planner-1","title":"planner","status":"waiting","path":"/tmp","group":"planning"}`}, nil
 		case strings.Join(args, "\x00") == strings.Join([]string{"agent-deck", "group", "list", "--json"}, "\x00"):
@@ -3732,7 +3734,7 @@ func TestAgentDeckCreateSessionMovesRootGroupParentChildBackToRoot(t *testing.T)
 	commandRunner := &fakeRunner{t: t, handler: func(args []string, input string) (RunResult, error) {
 		switch {
 		case strings.Join(args, "\x00") == strings.Join([]string{"agent-deck", "session", "show", "coder-ref", "--json"}, "\x00"):
-			return RunResult{ExitCode: 1, Stderr: "not found"}, nil
+			return RunResult{ExitCode: 2, Stderr: "not found"}, nil
 		case strings.Join(args, "\x00") == strings.Join([]string{"agent-deck", "session", "show", "planner-1", "--json"}, "\x00"):
 			return RunResult{ExitCode: 0, Stdout: `{"id":"planner-1","title":"planner","status":"waiting","path":"/tmp","group":""}`}, nil
 		case strings.Join(args, "\x00") == strings.Join([]string{"agent-deck", "launch", "--json", "--title", "coder-ref", "--cmd", "codex --model gpt-5.4 --ask-for-approval on-request", "--parent", "planner-1", workdir}, "\x00"):
@@ -3840,7 +3842,7 @@ func TestAgentDeckCreateSessionAllowsDetachedCreateWithoutGroup(t *testing.T) {
 	commandRunner := &fakeRunner{t: t, handler: func(args []string, input string) (RunResult, error) {
 		switch {
 		case strings.Join(args, "\x00") == strings.Join([]string{"agent-deck", "session", "show", "coder-ref", "--json"}, "\x00"):
-			return RunResult{ExitCode: 1, Stderr: "not found"}, nil
+			return RunResult{ExitCode: 2, Stderr: "not found"}, nil
 		case strings.Join(args, "\x00") == strings.Join([]string{"agent-deck", "launch", "--json", "--title", "coder-ref", "--cmd", "codex --model gpt-5.4 --ask-for-approval on-request", "--no-parent", workdir}, "\x00"):
 			return RunResult{ExitCode: 0, Stdout: `{"id":"session-2","title":"coder-ref","status":"waiting","path":"/tmp"}`}, nil
 		default:
@@ -3877,7 +3879,7 @@ func TestAgentDeckCreateSessionDerivesChildGroupFromChildParentSession(t *testin
 	commandRunner := &fakeRunner{t: t, handler: func(args []string, input string) (RunResult, error) {
 		switch {
 		case strings.Join(args, "\x00") == strings.Join([]string{"agent-deck", "session", "show", "coder-ref", "--json"}, "\x00"):
-			return RunResult{ExitCode: 1, Stderr: "not found"}, nil
+			return RunResult{ExitCode: 2, Stderr: "not found"}, nil
 		case strings.Join(args, "\x00") == strings.Join([]string{"agent-deck", "session", "show", "child-planner", "--json"}, "\x00"):
 			return RunResult{ExitCode: 0, Stdout: `{"id":"child-planner","title":"planner-child","status":"waiting","path":"/tmp","group":"planning/active","parent_session_id":"root-planner"}`}, nil
 		case strings.Join(args, "\x00") == strings.Join([]string{"agent-deck", "group", "list", "--json"}, "\x00"):
@@ -3917,7 +3919,7 @@ func TestAgentDeckCreateSessionDerivesTopLevelGroupFromChildParentWithoutGroup(t
 	commandRunner := &fakeRunner{t: t, handler: func(args []string, input string) (RunResult, error) {
 		switch {
 		case strings.Join(args, "\x00") == strings.Join([]string{"agent-deck", "session", "show", "coder-ref", "--json"}, "\x00"):
-			return RunResult{ExitCode: 1, Stderr: "not found"}, nil
+			return RunResult{ExitCode: 2, Stderr: "not found"}, nil
 		case strings.Join(args, "\x00") == strings.Join([]string{"agent-deck", "session", "show", "child-planner", "--json"}, "\x00"):
 			return RunResult{ExitCode: 0, Stdout: `{"id":"child-planner","title":"planner-child","status":"waiting","path":"/tmp","group":"","parent_session_id":"root-planner"}`}, nil
 		case strings.Join(args, "\x00") == strings.Join([]string{"agent-deck", "group", "list", "--json"}, "\x00"):
@@ -3957,7 +3959,7 @@ func TestAgentDeckCreateSessionDropsChildParentLinkForExplicitGroupPath(t *testi
 	commandRunner := &fakeRunner{t: t, handler: func(args []string, input string) (RunResult, error) {
 		switch {
 		case strings.Join(args, "\x00") == strings.Join([]string{"agent-deck", "session", "show", "coder-ref", "--json"}, "\x00"):
-			return RunResult{ExitCode: 1, Stderr: "not found"}, nil
+			return RunResult{ExitCode: 2, Stderr: "not found"}, nil
 		case strings.Join(args, "\x00") == strings.Join([]string{"agent-deck", "session", "show", "child-planner", "--json"}, "\x00"):
 			return RunResult{ExitCode: 0, Stdout: `{"id":"child-planner","title":"planner-child","status":"waiting","path":"/tmp","group":"planning/active","parent_session_id":"root-planner"}`}, nil
 		case strings.Join(args, "\x00") == strings.Join([]string{"agent-deck", "group", "list", "--json"}, "\x00"):
@@ -3996,7 +3998,7 @@ func TestAgentDeckCreateSessionDerivesGroupFromGroupParentSession(t *testing.T) 
 	commandRunner := &fakeRunner{t: t, handler: func(args []string, input string) (RunResult, error) {
 		switch {
 		case strings.Join(args, "\x00") == strings.Join([]string{"agent-deck", "session", "show", "coder-ref", "--json"}, "\x00"):
-			return RunResult{ExitCode: 1, Stderr: "not found"}, nil
+			return RunResult{ExitCode: 2, Stderr: "not found"}, nil
 		case strings.Join(args, "\x00") == strings.Join([]string{"agent-deck", "session", "show", "planner-1", "--json"}, "\x00"):
 			return RunResult{ExitCode: 0, Stdout: `{"id":"planner-1","title":"planner","status":"waiting","group":"planning","path":"/tmp"}`}, nil
 		case strings.Join(args, "\x00") == strings.Join([]string{"agent-deck", "group", "list", "--json"}, "\x00"):
@@ -4102,7 +4104,7 @@ func TestAgentDeckCreateSessionCreatesTargetWithGroupPathAndNoParentLink(t *test
 	commandRunner := &fakeRunner{t: t, handler: func(args []string, input string) (RunResult, error) {
 		switch {
 		case strings.Join(args, "\x00") == strings.Join([]string{"agent-deck", "session", "show", "coder-ref", "--json"}, "\x00"):
-			return RunResult{ExitCode: 1, Stderr: "not found"}, nil
+			return RunResult{ExitCode: 2, Stderr: "not found"}, nil
 		case strings.Join(args, "\x00") == strings.Join([]string{"agent-deck", "group", "list", "--json"}, "\x00"):
 			return RunResult{ExitCode: 0, Stdout: `{"groups":[]}`}, nil
 		case strings.Join(args, "\x00") == strings.Join([]string{"agent-deck", "group", "create", "reviews"}, "\x00"):
@@ -5946,10 +5948,8 @@ func TestOnlyWaypostToolsRequireWaypostStatus(t *testing.T) {
 	statusExempt := map[string]bool{
 		"waypost_status":             true,
 		"waypost_debug":              true,
-		"session_resolve":            true,
 		"session_create":             true,
 		"session_require":            true,
-		"agent_deck_resolve_session": true,
 		"agent_deck_create_session":  true,
 		"agent_deck_require_session": true,
 	}
@@ -5983,10 +5983,8 @@ func TestOnlyWaypostToolsRequireWaypostStatus(t *testing.T) {
 		"waypost_ack":                true,
 		"waypost_release":            true,
 		"waypost_defer":              true,
-		"session_resolve":            true,
 		"session_create":             true,
 		"session_require":            true,
-		"agent_deck_resolve_session": true,
 		"agent_deck_create_session":  true,
 		"agent_deck_require_session": true,
 	}
@@ -6443,7 +6441,7 @@ func TestWaypostStatusWarnsWhenOnlyAgentDeckAddressIsBound(t *testing.T) {
 		case len(args) >= 1 && args[0] == "ps":
 			return RunResult{ExitCode: 1}, nil
 		case strings.Join(args, "\x00") == strings.Join([]string{"agent-deck", "session", "show", "deck-session-1", "--json"}, "\x00"):
-			return RunResult{ExitCode: 1, Stderr: "not found"}, nil
+			return RunResult{ExitCode: 2, Stderr: "not found"}, nil
 		default:
 			t.Fatalf("unexpected command: %v", args)
 			return RunResult{}, nil
@@ -6572,7 +6570,7 @@ func TestWaypostStatusPreservesInvalidToolSessionEnvWarningsAfterAgentDeckUpgrad
 			}
 			return RunResult{ExitCode: 0, Stdout: `{"id":"deck-session-1"}`}, nil
 		case strings.Join([]string{"agent-deck", "session", "show", "deck-session-1", "--json"}, "\x00"):
-			return RunResult{ExitCode: 1, Stderr: "not found"}, nil
+			return RunResult{ExitCode: 2, Stderr: "not found"}, nil
 		default:
 			t.Fatalf("unexpected command: %v", args)
 			return RunResult{}, nil
@@ -6754,7 +6752,7 @@ func TestAutoBindFindsAgentDeckSessionFromCodexStateDB(t *testing.T) {
 		case strings.Join([]string{"agent-deck", "session", "current", "--json"}, "\x00"):
 			return RunResult{ExitCode: 1, Stderr: "not in an agent-deck pane"}, nil
 		case strings.Join([]string{"agent-deck", "session", "show", "deck-session-1", "--json"}, "\x00"):
-			return RunResult{ExitCode: 1, Stderr: "not found"}, nil
+			return RunResult{ExitCode: 2, Stderr: "not found"}, nil
 		default:
 			t.Fatalf("unexpected command: %v", args)
 			return RunResult{}, nil
@@ -6792,7 +6790,7 @@ func TestAutoBindPrefersCodexLinkedAgentDeckSessionOverAmbientCurrent(t *testing
 		case strings.Join([]string{"agent-deck", "session", "current", "--json"}, "\x00"):
 			return RunResult{ExitCode: 0, Stdout: `{"id":"deck-session-2"}`}, nil
 		case strings.Join([]string{"agent-deck", "session", "show", "deck-session-1", "--json"}, "\x00"):
-			return RunResult{ExitCode: 1, Stderr: "not found"}, nil
+			return RunResult{ExitCode: 2, Stderr: "not found"}, nil
 		case strings.Join([]string{"agent-deck", "session", "show", "deck-session-2", "--json"}, "\x00"):
 			t.Fatalf("should not resolve ambient agent-deck current session: %v", args)
 			return RunResult{}, nil
@@ -6843,7 +6841,7 @@ func TestAutoBindDoesNotChooseAgentDeckSessionFromStateDBByWorkdirAlone(t *testi
 		case strings.Join([]string{"agent-deck", "session", "current", "--json"}, "\x00"):
 			return RunResult{ExitCode: 1, Stderr: "not in an agent-deck pane"}, nil
 		case strings.Join([]string{"agent-deck", "session", "show", "deck-session-1", "--json"}, "\x00"):
-			return RunResult{ExitCode: 1, Stderr: "not found"}, nil
+			return RunResult{ExitCode: 2, Stderr: "not found"}, nil
 		default:
 			t.Fatalf("unexpected command: %v", args)
 			return RunResult{}, nil
@@ -6882,7 +6880,7 @@ func TestAutoBindComplementsCurrentAgentDeckSessionFromStateDBByWorkdir(t *testi
 		case strings.Join([]string{"agent-deck", "session", "current", "--json"}, "\x00"):
 			return RunResult{ExitCode: 0, Stdout: `{"id":"deck-session-1"}`}, nil
 		case strings.Join([]string{"agent-deck", "session", "show", "deck-session-1", "--json"}, "\x00"):
-			return RunResult{ExitCode: 1, Stderr: "not found"}, nil
+			return RunResult{ExitCode: 2, Stderr: "not found"}, nil
 		default:
 			t.Fatalf("unexpected command: %v", args)
 			return RunResult{}, nil
@@ -6984,7 +6982,7 @@ func TestAutoBindFindsCurrentSessionWhenNewerCodexSessionSharesWorkdir(t *testin
 		case strings.Join([]string{"agent-deck", "session", "current", "--json"}, "\x00"):
 			return RunResult{ExitCode: 0, Stdout: `{"id":"deck-session-1"}`}, nil
 		case strings.Join([]string{"agent-deck", "session", "show", "deck-session-1", "--json"}, "\x00"):
-			return RunResult{ExitCode: 1, Stderr: "not found"}, nil
+			return RunResult{ExitCode: 2, Stderr: "not found"}, nil
 		default:
 			t.Fatalf("unexpected command: %v", args)
 			return RunResult{}, nil
@@ -7023,7 +7021,7 @@ func TestAutoBindDoesNotRetryStateDBAfterEmptyResultWithoutAgentDeckSignal(t *te
 		case strings.Join([]string{"agent-deck", "session", "current", "--json"}, "\x00"):
 			return RunResult{ExitCode: 1, Stderr: "not in an agent-deck pane"}, nil
 		case strings.Join([]string{"agent-deck", "session", "show", "deck-session-1", "--json"}, "\x00"):
-			return RunResult{ExitCode: 1, Stderr: "not found"}, nil
+			return RunResult{ExitCode: 2, Stderr: "not found"}, nil
 		default:
 			t.Fatalf("unexpected command: %v", args)
 			return RunResult{}, nil
@@ -7067,7 +7065,7 @@ func TestAutoBindRetriesAgentDeckStateDBAfterAgentDeckOnlyResult(t *testing.T) {
 		case strings.Join([]string{"agent-deck", "session", "current", "--json"}, "\x00"):
 			return RunResult{ExitCode: 0, Stdout: `{"id":"deck-session-1"}`}, nil
 		case strings.Join([]string{"agent-deck", "session", "show", "deck-session-1", "--json"}, "\x00"):
-			return RunResult{ExitCode: 1, Stderr: "not found"}, nil
+			return RunResult{ExitCode: 2, Stderr: "not found"}, nil
 		default:
 			t.Fatalf("unexpected command: %v", args)
 			return RunResult{}, nil
@@ -7157,7 +7155,7 @@ func TestAutoBindRetriesAgentDeckAfterCodexOnlyFallback(t *testing.T) {
 			}
 			return RunResult{ExitCode: 0, Stdout: `{"id":"deck-session-1"}`}, nil
 		case strings.Join([]string{"agent-deck", "session", "show", "deck-session-1", "--json"}, "\x00"):
-			return RunResult{ExitCode: 1, Stderr: "not found"}, nil
+			return RunResult{ExitCode: 2, Stderr: "not found"}, nil
 		default:
 			t.Fatalf("unexpected command: %v", args)
 			return RunResult{}, nil
@@ -7213,7 +7211,7 @@ func TestAutoBindRetriesAgentDeckAfterCodexFallbackWithExtraToolAddress(t *testi
 			}
 			return RunResult{ExitCode: 0, Stdout: `{"id":"deck-session-1"}`}, nil
 		case strings.Join([]string{"agent-deck", "session", "show", "deck-session-1", "--json"}, "\x00"):
-			return RunResult{ExitCode: 1, Stderr: "not found"}, nil
+			return RunResult{ExitCode: 2, Stderr: "not found"}, nil
 		default:
 			t.Fatalf("unexpected command: %v", args)
 			return RunResult{}, nil
@@ -7278,7 +7276,7 @@ func TestAutoBindRetriesAgentDeckAfterClaudeOnlyFallback(t *testing.T) {
 			}
 			return RunResult{ExitCode: 0, Stdout: `{"id":"deck-session-1"}`}, nil
 		case strings.Join(args, "\x00") == strings.Join([]string{"agent-deck", "session", "show", "deck-session-1", "--json"}, "\x00"):
-			return RunResult{ExitCode: 1, Stderr: "not found"}, nil
+			return RunResult{ExitCode: 2, Stderr: "not found"}, nil
 		default:
 			t.Fatalf("unexpected command: %v", args)
 			return RunResult{}, nil
@@ -7337,7 +7335,7 @@ func TestWaypostBindDisablesAgentDeckRetryUpgrade(t *testing.T) {
 			}
 			return RunResult{ExitCode: 0, Stdout: `{"id":"deck-session-1"}`}, nil
 		case strings.Join([]string{"agent-deck", "session", "show", "deck-session-1", "--json"}, "\x00"):
-			return RunResult{ExitCode: 1, Stderr: "not found"}, nil
+			return RunResult{ExitCode: 2, Stderr: "not found"}, nil
 		default:
 			t.Fatalf("unexpected command: %v", args)
 			return RunResult{}, nil
@@ -7437,7 +7435,7 @@ func TestAgentDeckRetryRechecksFallbackStateBeforeUpgrade(t *testing.T) {
 		case strings.Join([]string{"agent-deck", "session", "current", "--json"}, "\x00"):
 			return RunResult{ExitCode: 0, Stdout: `{"id":"deck-session-1"}`}, nil
 		case strings.Join([]string{"agent-deck", "session", "show", "deck-session-1", "--json"}, "\x00"):
-			return RunResult{ExitCode: 1, Stderr: "not found"}, nil
+			return RunResult{ExitCode: 2, Stderr: "not found"}, nil
 		default:
 			t.Fatalf("unexpected command: %v", args)
 			return RunResult{}, nil
