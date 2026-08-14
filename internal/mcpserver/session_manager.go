@@ -894,7 +894,13 @@ func (m *sessionManager) createSession(ctx context.Context, input agentDeckCreat
 		expectedParentSessionID = launchParentSessionID
 	}
 	if err := verifyCreatedAgentDeckSessionIdentity(receipt, refreshed, input.EnsureTitle, expectedParentSessionID); err != nil {
-		return agentDeckCreatedUnverifiedResult(refreshed, input.EnsureTitle, workdir, "post_create_identity_mismatch", refreshed.Path, err.Error(), input.StartupInstruction), nil
+		resultData := receipt
+		observedPath := ""
+		if strings.TrimSpace(refreshed.ID) == receipt.ID {
+			resultData = refreshed
+			observedPath = refreshed.Path
+		}
+		return agentDeckCreatedUnverifiedResult(resultData, input.EnsureTitle, workdir, "post_create_identity_mismatch", observedPath, err.Error(), input.StartupInstruction), nil
 	}
 	if strings.TrimSpace(refreshed.Group) != targetGroupPath {
 		return agentDeckCreatedUnverifiedResult(refreshed, input.EnsureTitle, workdir, "post_create_group_mismatch", refreshed.Path, "refreshed agent-deck session group does not match requested group placement", input.StartupInstruction), nil

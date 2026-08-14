@@ -3742,10 +3742,11 @@ func TestAgentDeckCreateSessionReturnsRecoveryAfterConfirmedLaunch(t *testing.T)
 	otherWorkdir := t.TempDir()
 	valid := `{"id":"session-2","title":"coder-ref","status":"waiting","path":` + jsonString(t, workdir) + `}`
 	tests := []struct {
-		name      string
-		show      RunResult
-		showErr   error
-		wantState string
+		name              string
+		show              RunResult
+		showErr           error
+		wantState         string
+		wantReceiptTarget bool
 	}{
 		{
 			name:      "lookup error",
@@ -3758,9 +3759,16 @@ func TestAgentDeckCreateSessionReturnsRecoveryAfterConfirmedLaunch(t *testing.T)
 			wantState: "post_create_lookup_failed",
 		},
 		{
-			name:      "id mismatch",
-			show:      RunResult{ExitCode: 0, Stdout: `{"id":"session-other","title":"coder-ref","status":"waiting","path":` + jsonString(t, workdir) + `}`},
-			wantState: "post_create_identity_mismatch",
+			name:              "id mismatch",
+			show:              RunResult{ExitCode: 0, Stdout: `{"id":"session-other","title":"coder-ref","status":"waiting","path":` + jsonString(t, workdir) + `}`},
+			wantState:         "post_create_identity_mismatch",
+			wantReceiptTarget: true,
+		},
+		{
+			name:              "missing id",
+			show:              RunResult{ExitCode: 0, Stdout: `{"title":"coder-ref","status":"waiting","path":` + jsonString(t, workdir) + `}`},
+			wantState:         "post_create_identity_mismatch",
+			wantReceiptTarget: true,
 		},
 		{
 			name:      "title mismatch",
@@ -3820,6 +3828,18 @@ func TestAgentDeckCreateSessionReturnsRecoveryAfterConfirmedLaunch(t *testing.T)
 			verification, ok := output["verification"].(map[string]any)
 			if !ok || verification["state"] != test.wantState {
 				t.Fatalf("create recovery verification = %v, want state %q", output["verification"], test.wantState)
+			}
+			if test.wantReceiptTarget {
+				if output["session_id"] != "session-2" {
+					t.Fatalf("recovery session_id = %v, want launch receipt id session-2", output["session_id"])
+				}
+				addresses, ok := output["addresses"].([]any)
+				if !ok || !slices.Equal(addresses, []any{"agent-deck/session-2"}) {
+					t.Fatalf("recovery addresses = %v, want launch receipt address", output["addresses"])
+				}
+				if verification["observed_path"] != nil {
+					t.Fatalf("recovery observed_path = %v, want nil for an untrusted refreshed identity", verification["observed_path"])
+				}
 			}
 			if launches != 1 {
 				t.Fatalf("launch count = %d, want 1", launches)
