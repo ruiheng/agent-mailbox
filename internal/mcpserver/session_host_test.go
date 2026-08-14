@@ -382,10 +382,11 @@ func TestGenericSessionCreateRequiresSelectedLaunchValueBeforeHostCommands(t *te
 	}
 }
 
-func TestGenericSessionCreateUsesCallerSuppliedThurboxKeyAndVerifiedParent(t *testing.T) {
+func TestGenericSessionCreateUsesCallerSuppliedThurboxKeyAcrossParentWorkdir(t *testing.T) {
 	workdir := t.TempDir()
 	canonicalWorkdir := canonicalTestWorkdir(t, workdir)
-	parent := thurboxSessionRecord(t, thurboxPlannerID, "planner", canonicalWorkdir, "", "idle")
+	parentWorkdir := canonicalTestWorkdir(t, t.TempDir())
+	parent := thurboxSessionRecord(t, thurboxPlannerID, "planner", parentWorkdir, "", "idle")
 	created := thurboxCreatedSessionRecord(t, thurboxReviewID, "architect-reviewer", canonicalWorkdir, thurboxPlannerID)
 	refreshed := thurboxSessionRecord(t, thurboxReviewID, "architect-reviewer", canonicalWorkdir, thurboxPlannerID, "idle")
 
@@ -433,10 +434,11 @@ func TestGenericSessionCreateUsesCallerSuppliedThurboxKeyAndVerifiedParent(t *te
 	}
 }
 
-func TestGenericAgentDeckCreateUsesReceiptIDAndAuthoritativeRefreshedRecord(t *testing.T) {
+func TestGenericAgentDeckCreateAllowsDifferentParentWorkdirAndUsesAuthoritativeRecord(t *testing.T) {
 	workdir := t.TempDir()
 	canonicalWorkdir := canonicalTestWorkdir(t, workdir)
-	parent := `{"id":"agent-parent","title":"planner","status":"waiting","group":"waypost","path":` + jsonString(t, canonicalWorkdir) + `}`
+	parentWorkdir := canonicalTestWorkdir(t, t.TempDir())
+	parent := `{"id":"agent-parent","title":"planner","status":"waiting","group":"waypost","path":` + jsonString(t, parentWorkdir) + `}`
 	launchReceipt := `{"id":"agent-child"}`
 	refreshed := `{"id":"agent-child","title":"architect-reviewer","status":"waiting","group":"waypost","path":` + jsonString(t, canonicalWorkdir) + `,"parent_session_id":"agent-parent"}`
 	launchCalls := 0

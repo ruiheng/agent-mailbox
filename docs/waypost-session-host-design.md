@@ -23,9 +23,9 @@ Waypost transport; it does not become a role resolver, profile store, command
 registry, Thurbox agent catalog, or generic host framework.
 
 All other shipped two-host behavior remains in force: `session_resolve`,
-`session_require`, the three legacy `agent_deck_*` tools, parent and workdir
-checks, fixture-pinned Thurbox parsing, recovery-safe create/require results,
-binding, notification, and wake behavior.
+`session_require`, the three legacy `agent_deck_*` tools, same-host parent and
+target workdir checks, fixture-pinned Thurbox parsing, recovery-safe
+create/require results, binding, notification, and wake behavior.
 
 ## Problem
 
@@ -62,9 +62,9 @@ The revision is complete when:
    `agents.toml`; it treats the selected launch value as opaque caller input.
 6. Existing `agent_deck_resolve_session`, `agent_deck_create_session`, and
    `agent_deck_require_session` schemas and behavior remain unchanged.
-7. Existing generic host selection, parent/workdir validation, fixture-pinned
-   Thurbox behavior, create/require recovery, binding, notification, and wake
-   behavior remain unchanged.
+7. Existing generic host selection, same-host parent validation, target
+   workdir validation, fixture-pinned Thurbox behavior, create/require
+   recovery, binding, notification, and wake behavior remain unchanged.
 8. Generic results never contain the `full_command_line` or
    `thurbox_agent_key` properties, and Waypost never directly interpolates
    their schema-valid string values into handler-produced errors, diagnostics,
@@ -92,7 +92,8 @@ This revision does not:
 - add a host registry, adapter interface framework, dynamic factory,
   capability table, or third-host extension point;
 - change host selection, address formats, binding, durable delivery, notify,
-  wake, parent/workdir invariants, or recovery result schemas;
+  wake, same-host parent or target workdir invariants, or recovery result
+  schemas;
 - route legacy Agent Deck handlers through the generic tools;
 - replace the typed MCP registration with a custom raw handler or duplicate the
   SDK's object/schema validation solely to redact values that violate the
@@ -226,7 +227,7 @@ The handler uses this order:
    - selected `thurbox`: missing or blank `thurbox_agent_key` returns
      `thurbox_agent_key is required when creating a thurbox session`.
 5. Only after selected launch-value validation does Waypost canonicalize the
-   workdir and perform the existing parent lookup, parent identity/workdir
+   child workdir and perform the existing parent lookup, parent identity
    verification, target-name preflight, and host create command.
 
 Thus an explicit-host request with a missing applicable value invokes no host
@@ -392,8 +393,8 @@ result contracts are preserved:
 2. Validate the generic name and selected launch value.
 3. Canonicalize the existing workdir.
 4. Require a non-empty same-host `parent_session_id`, reject addresses/names in
-   the ID field, resolve the parent, and verify its canonical path equals the
-   requested workdir.
+   the ID field, and resolve the parent. The parent and child may use different
+   workdirs.
 5. Resolve the requested child name; if it exists, verify workdir and return
    `target session already exists` rather than ensuring or replacing it.
 6. Invoke the selected create command through the redacted runner.
@@ -432,9 +433,9 @@ The following are explicit invariants, not redesign targets:
 - Supported generic hosts remain exactly `agent-deck` and `thurbox`.
 - A valid nested `THURBOX_SESSION` wins omitted-host selection; otherwise
   existing Agent Deck detection applies; explicit host overrides detection.
-- Generic create still requires a same-host parent and matching canonical
-  workdir. Parentless/detached/group/startup behavior remains legacy Agent Deck
-  surface only.
+- Generic create still requires a same-host parent. The parent and child may
+  use different workdirs. Parentless/detached/group/startup behavior remains
+  legacy Agent Deck surface only.
 - Thurbox get/list/create/restart parsing remains pinned to the checked-in
   v1.7.1 fixtures and continues to fail closed on grammar drift.
 - The existing normalized session records and addresses remain unchanged.
@@ -754,7 +755,7 @@ baseline commits `760e083` and `0b55ce0`. It does not change the generic
 tools, Agentgear, or durable delivery semantics.
 
 For generic Agent Deck creation, Waypost reads the direct parent's `group`
-from the same authoritative `session show` record used for parent/workdir
+from the same authoritative `session show` record used for parent identity
 validation, requires a top-level parent with a non-empty group, and passes that
 exact preflight snapshot explicitly as `--group <snapshot>` alongside the
 requested `--parent`. The child is created with one redacted launch command,

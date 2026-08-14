@@ -598,9 +598,6 @@ func (m *sessionManager) createHostSession(ctx context.Context, host sessionHost
 	if parent.ID != parentSessionID {
 		return nil, fmt.Errorf("parent_session_id must be a same-host session ID, not a session name: %s", parentSessionID)
 	}
-	if err := validateHostSessionWorkdir(parent, workdir, canonicalWorkdir); err != nil {
-		return nil, err
-	}
 	parentGroupSnapshot := ""
 	if host == sessionHostAgentDeck {
 		if parent.ParentSessionID != "" {
