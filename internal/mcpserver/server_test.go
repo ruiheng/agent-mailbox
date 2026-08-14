@@ -3737,6 +3737,40 @@ func TestAgentDeckCreateSessionCreatesTargetWithoutDefaultStartupInstruction(t *
 	}
 }
 
+func TestAgentDeckCreateSessionPreservesExactTitle(t *testing.T) {
+	workdir := canonicalTestWorkdir(t, "/tmp")
+	title := " coder-ref "
+	commandRunner := &fakeRunner{t: t, handler: func(args []string, input string) (RunResult, error) {
+		switch {
+		case reflect.DeepEqual(args, []string{"agent-deck", "session", "show", title, "--json"}):
+			return RunResult{ExitCode: 2, Stderr: "not found"}, nil
+		case reflect.DeepEqual(args, []string{"agent-deck", "launch", "--json", "--title", title, "--cmd", "codex", "--no-parent", workdir}):
+			return RunResult{ExitCode: 0, Stdout: `{"id":"session-2"}`}, nil
+		case reflect.DeepEqual(args, []string{"agent-deck", "session", "show", "session-2", "--json"}):
+			return RunResult{ExitCode: 0, Stdout: `{"id":"session-2","title":" coder-ref ","status":"waiting","path":` + jsonString(t, workdir) + `}`}, nil
+		default:
+			t.Fatalf("unexpected command args: %v", args)
+			return RunResult{}, nil
+		}
+	}}
+
+	service := newService(Options{
+		WaypostServiceFactory: fakeWaypostServiceFactory{service: &fakeWaypostService{t: t}},
+		CommandRunner:         commandRunner,
+	})
+	service.state.autoBindAttempted = true
+
+	output := callServiceTool(t, service, "agent_deck_create_session", map[string]any{
+		"ensure_title":   title,
+		"ensure_cmd":     "codex",
+		"no_parent_link": true,
+		"workdir":        workdir,
+	})
+	if output["status"] != "created" || output["title"] != title {
+		t.Fatalf("create output = %v, want created session with exact title %q", output, title)
+	}
+}
+
 func TestAgentDeckCreateSessionReturnsRecoveryAfterConfirmedLaunch(t *testing.T) {
 	workdir := canonicalTestWorkdir(t, "/tmp")
 	otherWorkdir := t.TempDir()
@@ -3773,6 +3807,11 @@ func TestAgentDeckCreateSessionReturnsRecoveryAfterConfirmedLaunch(t *testing.T)
 		{
 			name:      "title mismatch",
 			show:      RunResult{ExitCode: 0, Stdout: `{"id":"session-2","title":"other","status":"waiting","path":` + jsonString(t, workdir) + `}`},
+			wantState: "post_create_identity_mismatch",
+		},
+		{
+			name:      "title whitespace mismatch",
+			show:      RunResult{ExitCode: 0, Stdout: `{"id":"session-2","title":" coder-ref ","status":"waiting","path":` + jsonString(t, workdir) + `}`},
 			wantState: "post_create_identity_mismatch",
 		},
 		{

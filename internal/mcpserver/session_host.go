@@ -63,6 +63,23 @@ type hostWorkdirVerification struct {
 	Err          error
 }
 
+type createdHostSessionExpectation struct {
+	Name                string
+	ParentSessionID     string
+	VerifyGroup         bool
+	Group               string
+	GroupMismatchDetail string
+	RequestedWorkdir    string
+	CanonicalWorkdir    string
+}
+
+type createdHostSessionVerification struct {
+	State        string
+	ObservedPath string
+	Detail       string
+	UseRefreshed bool
+}
+
 type hostSessionOutputFailureKind string
 
 const (
@@ -662,23 +679,61 @@ func (m *sessionManager) createHostSession(ctx context.Context, host sessionHost
 	if refreshed == nil {
 		return createdUnverifiedResult(created, name, canonicalWorkdir, "post_create_lookup_failed", "", "target session not found after create"), nil
 	}
-	if err := verifyCreatedHostSessionIdentity(host, created, refreshed, name, parentSessionID); err != nil {
-		resultData := created
-		observedPath := ""
-		if refreshed.ID == created.ID {
-			resultData = refreshed
-			observedPath = refreshed.Path
-		}
-		return createdUnverifiedResult(resultData, name, canonicalWorkdir, "post_create_identity_mismatch", observedPath, err.Error()), nil
-	}
-	if host == sessionHostAgentDeck && strings.TrimSpace(refreshed.Group) != parentGroupSnapshot {
-		return createdUnverifiedResult(refreshed, name, canonicalWorkdir, "post_create_group_mismatch", refreshed.Path, genericAgentDeckGroupMismatchDetail), nil
-	}
-	verification := verifyHostSessionWorkdir(refreshed, workdir, canonicalWorkdir)
+	verification := verifyCreatedHostSession(host, created, refreshed, createdHostSessionExpectation{
+		Name:                name,
+		ParentSessionID:     parentSessionID,
+		VerifyGroup:         host == sessionHostAgentDeck,
+		Group:               parentGroupSnapshot,
+		GroupMismatchDetail: genericAgentDeckGroupMismatchDetail,
+		RequestedWorkdir:    workdir,
+		CanonicalWorkdir:    canonicalWorkdir,
+	})
 	if verification.State != "verified" {
-		return createdUnverifiedResult(refreshed, name, canonicalWorkdir, verification.State, verification.ObservedPath, verification.Err.Error()), nil
+		resultData := created
+		if verification.UseRefreshed {
+			resultData = refreshed
+		}
+		return createdUnverifiedResult(resultData, name, canonicalWorkdir, verification.State, verification.ObservedPath, verification.Detail), nil
 	}
 	return createdVerifiedResult(refreshed, name, canonicalWorkdir), nil
+}
+
+func verifyCreatedHostSession(host sessionHost, created, refreshed *hostSessionData, expected createdHostSessionExpectation) createdHostSessionVerification {
+	if err := verifyCreatedHostSessionIdentity(host, created, refreshed, expected.Name, expected.ParentSessionID); err != nil {
+		useRefreshed := created != nil && refreshed != nil && strings.TrimSpace(created.ID) == strings.TrimSpace(refreshed.ID)
+		observedPath := ""
+		if useRefreshed {
+			observedPath = refreshed.Path
+		}
+		return createdHostSessionVerification{
+			State:        "post_create_identity_mismatch",
+			ObservedPath: observedPath,
+			Detail:       err.Error(),
+			UseRefreshed: useRefreshed,
+		}
+	}
+	if expected.VerifyGroup && strings.TrimSpace(refreshed.Group) != expected.Group {
+		return createdHostSessionVerification{
+			State:        "post_create_group_mismatch",
+			ObservedPath: refreshed.Path,
+			Detail:       expected.GroupMismatchDetail,
+			UseRefreshed: true,
+		}
+	}
+	workdir := verifyHostSessionWorkdir(refreshed, expected.RequestedWorkdir, expected.CanonicalWorkdir)
+	if workdir.State != "verified" {
+		return createdHostSessionVerification{
+			State:        workdir.State,
+			ObservedPath: workdir.ObservedPath,
+			Detail:       workdir.Err.Error(),
+			UseRefreshed: true,
+		}
+	}
+	return createdHostSessionVerification{
+		State:        "verified",
+		ObservedPath: refreshed.Path,
+		UseRefreshed: true,
+	}
 }
 
 func verifyCreatedHostSessionIdentity(host sessionHost, created, refreshed *hostSessionData, requestedName, requestedParentSessionID string) error {
