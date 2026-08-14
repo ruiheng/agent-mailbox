@@ -50,12 +50,13 @@ func (a *App) prepareListCommand(args []string) (preparedCommand, error) {
 	if _, err := normalizePageParams(PageParams{Limit: limit, Cursor: cursor}); err != nil {
 		return nil, err
 	}
+	person = strings.TrimSpace(person)
+	if person != "" && strings.TrimSpace(state) != "" {
+		return nil, errors.New("--state is not supported with --as")
+	}
 
 	return func(ctx context.Context, store *Store) error {
-		if strings.TrimSpace(person) != "" {
-			if strings.TrimSpace(state) != "" {
-				return errors.New("--state is not supported with --as")
-			}
+		if person != "" {
 			page, err := store.ListGroupMessagesPage(ctx, GroupListParams{
 				Address:     address,
 				Person:      person,
@@ -363,6 +364,9 @@ func (a *App) prepareWaitCommand(args []string) (preparedCommand, error) {
 		return nil, err
 	}
 	person = strings.TrimSpace(person)
+	if person != "" && len(normalizedAddresses) != 1 {
+		return nil, errors.New("--as requires exactly one --for address")
+	}
 
 	params := WaitParams{
 		Addresses: normalizedAddresses,
@@ -371,9 +375,6 @@ func (a *App) prepareWaitCommand(args []string) (preparedCommand, error) {
 
 	return func(ctx context.Context, store *Store) error {
 		if person != "" {
-			if len(normalizedAddresses) != 1 {
-				return errors.New("--as requires exactly one --for address")
-			}
 			message, err := store.WaitGroupMessage(ctx, GroupWaitParams{
 				Address: normalizedAddresses[0],
 				Person:  person,

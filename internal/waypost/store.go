@@ -264,7 +264,7 @@ func (s *Store) RegisterEndpoint(ctx context.Context, address string) (EndpointR
 	address, err := NormalizeAddress(rawAddress)
 	if err != nil {
 		if strings.TrimSpace(rawAddress) == "" {
-			return EndpointRegistration{}, errors.New("endpoint address is required")
+			return EndpointRegistration{}, invalidArgumentError(errors.New("endpoint address is required"))
 		}
 		return EndpointRegistration{}, err
 	}
@@ -293,7 +293,7 @@ func (s *Store) Send(ctx context.Context, params SendParams) (SendResult, error)
 	toAddress, err := NormalizeAddress(params.ToAddress)
 	if err != nil {
 		if strings.TrimSpace(params.ToAddress) == "" {
-			return SendResult{}, errors.New("recipient address is required")
+			return SendResult{}, invalidArgumentError(errors.New("recipient address is required"))
 		}
 		return SendResult{}, err
 	}
@@ -320,7 +320,7 @@ func (s *Store) Send(ctx context.Context, params SendParams) (SendResult, error)
 	asPerson := strings.TrimSpace(params.AsPerson)
 	if params.Group {
 		if !IsGroupAddress(toAddress) {
-			return SendResult{}, fmt.Errorf("invalid group address %q: group addresses must start with group/", params.ToAddress)
+			return SendResult{}, invalidArgumentError(fmt.Errorf("invalid group address %q: group addresses must start with group/", params.ToAddress))
 		}
 		if _, found, err := lookupGroupRecord(ctx, s.readDB, toAddress); err != nil {
 			return SendResult{}, fmt.Errorf("resolve group address %q: %w", toAddress, err)
@@ -329,7 +329,7 @@ func (s *Store) Send(ctx context.Context, params SendParams) (SendResult, error)
 		}
 	} else {
 		if asPerson != "" {
-			return SendResult{}, errors.New("as_person requires group send")
+			return SendResult{}, invalidArgumentError(errors.New("as_person requires group send"))
 		}
 		if err := s.rejectGroupAddress(ctx, toAddress); err != nil {
 			return SendResult{}, err
@@ -1040,7 +1040,7 @@ func (s *Store) ListPage(ctx context.Context, params ListParams) (Page[ListedDel
 	address, err := NormalizeAddress(rawAddress)
 	if err != nil {
 		if strings.TrimSpace(rawAddress) == "" {
-			return Page[ListedDelivery]{}, errors.New("recipient address is required")
+			return Page[ListedDelivery]{}, invalidArgumentError(errors.New("recipient address is required"))
 		}
 		return Page[ListedDelivery]{}, err
 	}
@@ -1085,7 +1085,7 @@ func (s *Store) ListPage(ctx context.Context, params ListParams) (Page[ListedDel
 func (s *Store) ReadDelivery(ctx context.Context, deliveryID string) (ReadDelivery, error) {
 	deliveryID = strings.TrimSpace(deliveryID)
 	if deliveryID == "" {
-		return ReadDelivery{}, errors.New("delivery id is required")
+		return ReadDelivery{}, invalidArgumentError(errors.New("delivery id is required"))
 	}
 
 	var result ReadDelivery
@@ -1178,7 +1178,7 @@ WHERE d.delivery_id = ?
 func (s *Store) ReadMessage(ctx context.Context, messageID string) (ReadMessage, error) {
 	messageID = strings.TrimSpace(messageID)
 	if messageID == "" {
-		return ReadMessage{}, errors.New("message id is required")
+		return ReadMessage{}, invalidArgumentError(errors.New("message id is required"))
 	}
 
 	var result ReadMessage

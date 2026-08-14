@@ -28,39 +28,39 @@ type ParsedAddress struct {
 func ParseAddress(address string) (ParsedAddress, error) {
 	trimmed := strings.TrimSpace(address)
 	if trimmed == "" {
-		return ParsedAddress{}, fmt.Errorf("address is required")
+		return ParsedAddress{}, invalidArgumentError(fmt.Errorf("address is required"))
 	}
 
 	scheme, id, ok := strings.Cut(trimmed, "/")
 	if !ok || scheme == "" || id == "" {
-		return ParsedAddress{}, fmt.Errorf("invalid address %q: expected scheme/id", address)
+		return ParsedAddress{}, invalidArgumentError(fmt.Errorf("invalid address %q: expected scheme/id", address))
 	}
 	if err := validateAddressToken(trimmed, "scheme", scheme); err != nil {
-		return ParsedAddress{}, err
+		return ParsedAddress{}, invalidArgumentError(err)
 	}
 
 	segments := strings.Split(id, "/")
 	for _, segment := range segments {
 		if segment == "" {
-			return ParsedAddress{}, fmt.Errorf("invalid address %q: empty id segment", address)
+			return ParsedAddress{}, invalidArgumentError(fmt.Errorf("invalid address %q: empty id segment", address))
 		}
 		if err := validateAddressToken(trimmed, "id segment", segment); err != nil {
-			return ParsedAddress{}, err
+			return ParsedAddress{}, invalidArgumentError(err)
 		}
 	}
 
 	if _, ok := strictSessionAddressSchemes[scheme]; ok {
 		if len(segments) != 1 {
-			return ParsedAddress{}, fmt.Errorf("invalid address %q: %s addresses require a single target segment", address, scheme)
+			return ParsedAddress{}, invalidArgumentError(fmt.Errorf("invalid address %q: %s addresses require a single target segment", address, scheme))
 		}
 		if !strictSessionAddressTargetPattern.MatchString(segments[0]) {
-			return ParsedAddress{}, fmt.Errorf(
+			return ParsedAddress{}, invalidArgumentError(fmt.Errorf(
 				"invalid address %q: %s target %q must match %s",
 				address,
 				scheme,
 				segments[0],
 				strictSessionAddressTargetPattern.String(),
-			)
+			))
 		}
 	}
 
@@ -86,7 +86,7 @@ func NormalizeGroupAddress(address string) (string, error) {
 		return "", err
 	}
 	if parsed.Scheme != AddressKindGroup {
-		return "", fmt.Errorf("invalid group address %q: group addresses must start with group/", address)
+		return "", invalidArgumentError(fmt.Errorf("invalid group address %q: group addresses must start with group/", address))
 	}
 	return parsed.Address, nil
 }
@@ -122,14 +122,14 @@ func NormalizeAddressList(values []string) ([]string, error) {
 
 func NormalizeRequiredAddressValues(values []string, flagName string) ([]string, error) {
 	if len(values) == 0 {
-		return nil, fmt.Errorf("%s is required", flagName)
+		return nil, invalidArgumentError(fmt.Errorf("%s is required", flagName))
 	}
 	normalized, err := NormalizeAddressList(values)
 	if err != nil {
 		return nil, err
 	}
 	if len(normalized) == 0 {
-		return nil, fmt.Errorf("%s is required", flagName)
+		return nil, invalidArgumentError(fmt.Errorf("%s is required", flagName))
 	}
 	return normalized, nil
 }

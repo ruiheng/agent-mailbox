@@ -80,43 +80,53 @@ func (a *App) RunWithStateDir(ctx context.Context, stateDir string, args []strin
 
 func (a *App) prepareCommand(args []string) (preparedCommand, error) {
 	if len(args) == 0 {
-		return nil, errors.New("expected a command: doc, send, forward, recv, wait, watch, read, ack, renew, release, defer, undefer, fail, list, stale, group, or address")
+		return nil, invalidArgumentError(errors.New("expected a command: doc, send, forward, recv, wait, watch, read, ack, renew, release, defer, undefer, fail, list, stale, group, or address"))
 	}
 
 	switch args[0] {
 	case "send":
-		return a.prepareSendCommand(args[1:])
+		return classifyPreparedCommand(a.prepareSendCommand(args[1:]))
 	case "forward":
-		return a.prepareForwardCommand(args[1:])
+		return classifyPreparedCommand(a.prepareForwardCommand(args[1:]))
 	case "recv":
-		return a.prepareRecvCommand(args[1:])
+		return classifyPreparedCommand(a.prepareRecvCommand(args[1:]))
 	case "wait":
-		return a.prepareWaitCommand(args[1:])
+		return classifyPreparedCommand(a.prepareWaitCommand(args[1:]))
 	case "watch":
-		return a.prepareWatchCommand(args[1:])
+		return classifyPreparedCommand(a.prepareWatchCommand(args[1:]))
 	case "read":
-		return a.prepareReadCommand(args[1:])
+		return classifyPreparedCommand(a.prepareReadCommand(args[1:]))
 	case "ack":
-		return a.prepareAckCommand(args[1:])
+		return classifyPreparedCommand(a.prepareAckCommand(args[1:]))
 	case "renew":
-		return a.prepareRenewCommand(args[1:])
+		return classifyPreparedCommand(a.prepareRenewCommand(args[1:]))
 	case "release":
-		return a.prepareReleaseCommand(args[1:])
+		return classifyPreparedCommand(a.prepareReleaseCommand(args[1:]))
 	case "defer":
-		return a.prepareDeferCommand(args[1:])
+		return classifyPreparedCommand(a.prepareDeferCommand(args[1:]))
 	case "undefer":
-		return a.prepareUndeferCommand(args[1:])
+		return classifyPreparedCommand(a.prepareUndeferCommand(args[1:]))
 	case "fail":
-		return a.prepareFailCommand(args[1:])
+		return classifyPreparedCommand(a.prepareFailCommand(args[1:]))
 	case "list":
-		return a.prepareListCommand(args[1:])
+		return classifyPreparedCommand(a.prepareListCommand(args[1:]))
 	case "stale":
-		return a.prepareStaleCommand(args[1:])
+		return classifyPreparedCommand(a.prepareStaleCommand(args[1:]))
 	case "group":
-		return a.prepareGroupCommand(args[1:])
+		return classifyPreparedCommand(a.prepareGroupCommand(args[1:]))
 	case "address":
-		return a.prepareAddressCommand(args[1:])
+		return classifyPreparedCommand(a.prepareAddressCommand(args[1:]))
 	default:
-		return nil, fmt.Errorf("unknown command %q", args[0])
+		return nil, invalidArgumentError(fmt.Errorf("unknown command %q", args[0]))
 	}
+}
+
+func classifyPreparedCommand(command preparedCommand, err error) (preparedCommand, error) {
+	if err == nil || errors.Is(err, ErrHelpRequested) {
+		return command, err
+	}
+	if errors.Is(err, ErrInvalidArgument) || errors.Is(err, ErrInvalidState) || errors.Is(err, errInternalCLI) {
+		return nil, err
+	}
+	return nil, invalidArgumentError(err)
 }

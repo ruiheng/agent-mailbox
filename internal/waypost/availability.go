@@ -582,13 +582,13 @@ func (s *Store) resolveGroup(ctx context.Context, querier rowQuerier, groupAddre
 	groupAddress, err := NormalizeGroupAddress(rawGroupAddress)
 	if err != nil {
 		if strings.TrimSpace(rawGroupAddress) == "" {
-			return groupAvailabilityScope{}, errors.New("group address is required")
+			return groupAvailabilityScope{}, invalidArgumentError(errors.New("group address is required"))
 		}
 		return groupAvailabilityScope{}, err
 	}
 	person = strings.TrimSpace(person)
 	if person == "" {
-		return groupAvailabilityScope{}, errors.New("person is required")
+		return groupAvailabilityScope{}, invalidArgumentError(errors.New("person is required"))
 	}
 
 	group, found, err := lookupGroupRecord(ctx, querier, groupAddress)

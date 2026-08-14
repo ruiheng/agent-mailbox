@@ -234,7 +234,7 @@ func (s *Store) ReceiveBatch(ctx context.Context, params ReceiveBatchParams) (Re
 
 	maxMessages := params.Max
 	if maxMessages < 1 || maxMessages > maxReceiveBatchSize {
-		return ReceiveResult{}, fmt.Errorf("--max must be between 1 and %d", maxReceiveBatchSize)
+		return ReceiveResult{}, invalidArgumentError(fmt.Errorf("--max must be between 1 and %d", maxReceiveBatchSize))
 	}
 
 	return s.receiveBatchWithLeasePolicy(ctx, addresses, maxMessages, legacyReceiveLeasePolicy)
@@ -339,7 +339,7 @@ func (s *Store) Release(ctx context.Context, deliveryID, leaseToken string) (Del
 func (s *Store) Defer(ctx context.Context, deliveryID, leaseToken string, until time.Time) (DeliveryTransitionResult, error) {
 	return s.transitionLeasedDelivery(ctx, deliveryID, leaseToken, func(now time.Time, delivery leasedDeliveryRecord) (deliveryTransitionSpec, error) {
 		if !until.UTC().After(now) {
-			return deliveryTransitionSpec{}, errors.New("defer time must be in the future")
+			return deliveryTransitionSpec{}, invalidArgumentError(errors.New("defer time must be in the future"))
 		}
 		visibleAt := formatTimestamp(until)
 		return deliveryTransitionSpec{
@@ -379,10 +379,10 @@ func (s *Store) Undefer(ctx context.Context, deliveryID string) (DeliveryTransit
 		return DeliveryTransitionResult{}, fmt.Errorf("load delivery %q: %w", deliveryID, err)
 	}
 	if delivery.State != "queued" {
-		return DeliveryTransitionResult{}, fmt.Errorf("delivery %q is in state %q, want queued", deliveryID, delivery.State)
+		return DeliveryTransitionResult{}, invalidStateError(fmt.Errorf("delivery %q is in state %q, want queued", deliveryID, delivery.State))
 	}
 	if delivery.VisibleAt <= visibleAt {
-		return DeliveryTransitionResult{}, fmt.Errorf("delivery %q is already visible", deliveryID)
+		return DeliveryTransitionResult{}, invalidStateError(fmt.Errorf("delivery %q is already visible", deliveryID))
 	}
 
 	result, err := tx.ExecContext(ctx, `
@@ -400,7 +400,7 @@ WHERE delivery_id = ?
 		return DeliveryTransitionResult{}, fmt.Errorf("read undefer rows affected for %q: %w", deliveryID, err)
 	}
 	if rowsAffected == 0 {
-		return DeliveryTransitionResult{}, fmt.Errorf("delivery %q changed while undeferring", deliveryID)
+		return DeliveryTransitionResult{}, invalidStateError(fmt.Errorf("delivery %q changed while undeferring", deliveryID))
 	}
 
 	eventTimestamp := formatTimestamp(now)
@@ -427,7 +427,7 @@ WHERE delivery_id = ?
 func (s *Store) Fail(ctx context.Context, deliveryID, leaseToken, reason string) (DeliveryTransitionResult, error) {
 	reason = strings.TrimSpace(reason)
 	if reason == "" {
-		return DeliveryTransitionResult{}, errors.New("failure reason is required")
+		return DeliveryTransitionResult{}, invalidArgumentError(errors.New("failure reason is required"))
 	}
 
 	return s.transitionLeasedDelivery(ctx, deliveryID, leaseToken, func(now time.Time, delivery leasedDeliveryRecord) (deliveryTransitionSpec, error) {
@@ -469,7 +469,7 @@ func (s *Store) Renew(ctx context.Context, deliveryID, leaseToken string, extend
 		return LeaseRenewResult{}, err
 	}
 	if extendBy <= 0 {
-		return LeaseRenewResult{}, errors.New("renew duration must be greater than 0")
+		return LeaseRenewResult{}, invalidArgumentError(errors.New("renew duration must be greater than 0"))
 	}
 
 	now := s.now()
@@ -586,7 +586,7 @@ func (s *Store) receiveOnceWithLeasePolicy(ctx context.Context, addresses []stri
 
 func normalizeReceiveLeasePolicy(policy receiveLeasePolicy) (receiveLeasePolicy, error) {
 	if policy.LeaseTTL <= 0 {
-		return receiveLeasePolicy{}, errors.New("receive lease ttl must be greater than 0")
+		return receiveLeasePolicy{}, invalidArgumentError(errors.New("receive lease ttl must be greater than 0"))
 	}
 	return policy, nil
 }
@@ -881,7 +881,7 @@ WHERE delivery_id = ?
 		return DeliveryTransitionResult{}, fmt.Errorf("read transition rows affected for %q: %w", deliveryID, err)
 	}
 	if rowsAffected == 0 {
-		return DeliveryTransitionResult{}, fmt.Errorf("delivery %q changed while updating", deliveryID)
+		return DeliveryTransitionResult{}, invalidStateError(fmt.Errorf("delivery %q changed while updating", deliveryID))
 	}
 
 	eventTimestamp := formatTimestamp(now)
@@ -917,7 +917,7 @@ func validateLeaseMutationInput(deliveryID, leaseToken string) (string, string, 
 	}
 	leaseToken = strings.TrimSpace(leaseToken)
 	if leaseToken == "" {
-		return "", "", errors.New("lease token is required")
+		return "", "", invalidArgumentError(errors.New("lease token is required"))
 	}
 	return deliveryID, leaseToken, nil
 }
@@ -925,7 +925,7 @@ func validateLeaseMutationInput(deliveryID, leaseToken string) (string, string, 
 func validateDeliveryIDInput(deliveryID string) (string, error) {
 	deliveryID = strings.TrimSpace(deliveryID)
 	if deliveryID == "" {
-		return "", errors.New("delivery id is required")
+		return "", invalidArgumentError(errors.New("delivery id is required"))
 	}
 	return deliveryID, nil
 }

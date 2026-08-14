@@ -445,21 +445,124 @@ func TestCLIJSONNotFoundErrorsUseStructuralIdentity(t *testing.T) {
 	}
 }
 
-func TestCLIJSONNotFoundTextWithoutStructuralIdentityIsInternal(t *testing.T) {
-	var stdout bytes.Buffer
-	var stderr bytes.Buffer
-	exitCode := runCommand(context.Background(), []string{"forward", "--json"}, nil, &stdout, &stderr, func(context.Context, []string) error {
-		return errors.New(`reload existing endpoint address "agent/example": not found after conflict`)
-	})
-	if exitCode != 1 || stdout.Len() != 0 {
-		t.Fatalf("exit=%d stdout=%q, want exit 1 and empty stdout", exitCode, stdout.String())
+func TestCLIJSONUnclassifiedTextRemainsInternal(t *testing.T) {
+	for _, message := range []string{
+		`reload existing endpoint address "agent/example": not found after conflict`,
+		`delivery changed while updating`,
+		`invalid persisted migration stage`,
+		`parse stored state: empty document`,
+	} {
+		t.Run(message, func(t *testing.T) {
+			var stdout bytes.Buffer
+			var stderr bytes.Buffer
+			exitCode := runCommand(context.Background(), []string{"forward", "--json"}, nil, &stdout, &stderr, func(context.Context, []string) error {
+				return errors.New(message)
+			})
+			if exitCode != 1 || stdout.Len() != 0 {
+				t.Fatalf("exit=%d stdout=%q, want exit 1 and empty stdout", exitCode, stdout.String())
+			}
+			var failure map[string]any
+			if err := json.Unmarshal(stderr.Bytes(), &failure); err != nil {
+				t.Fatalf("json.Unmarshal(stderr) error = %v; stderr = %q", err, stderr.String())
+			}
+			if failure["error_code"] != "internal" || failure["retryable"] != false {
+				t.Fatalf("error payload = %v", failure)
+			}
+		})
+	}
+}
+
+func TestCLIJSONCallerValidationErrorsUseStructuralClassification(t *testing.T) {
+	stateDir := filepath.Join(t.TempDir(), "waypost-state")
+	tests := []struct {
+		name        string
+		args        []string
+		wantMessage string
+	}{
+		{
+			name:        "global flag",
+			args:        []string{"--bogus", "forward", "--json"},
+			wantMessage: "flag provided but not defined: -bogus",
+		},
+		{
+			name: "list group state",
+			args: []string{"--state-dir", stateDir,
+				"list", "--for", "group/x", "--as", "p", "--state", "queued", "--json"},
+			wantMessage: "--state is not supported with --as",
+		},
+		{
+			name: "wait group address count",
+			args: []string{"--state-dir", stateDir,
+				"wait", "--for", "group/x", "--for", "group/y", "--as", "p", "--json"},
+			wantMessage: "--as requires exactly one --for address",
+		},
+		{
+			name:        "group web flag",
+			args:        []string{"group", "web", "--bogus", "--json"},
+			wantMessage: "flag provided but not defined: -bogus",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			result := runCLI(t, "", test.args...)
+			if result.exitCode != 1 || result.stdout != "" {
+				t.Fatalf("result = %+v, want JSON failure on stderr only", result)
+			}
+			var failure map[string]any
+			if err := json.Unmarshal([]byte(result.stderr), &failure); err != nil {
+				t.Fatalf("json.Unmarshal(stderr) error = %v; stderr = %q", err, result.stderr)
+			}
+			if failure["status"] != "error" || failure["error_code"] != "invalid_argument" || failure["retryable"] != false {
+				t.Fatalf("error payload = %v", failure)
+			}
+			if failure["message"] != test.wantMessage {
+				t.Fatalf("error message = %v, want %q", failure["message"], test.wantMessage)
+			}
+		})
+	}
+}
+
+func TestCLIJSONRuntimeErrorsUseStructuralClassification(t *testing.T) {
+	stateDir := filepath.Join(t.TempDir(), "waypost-state")
+
+	invalid := runCLI(t, "", "--state-dir", stateDir,
+		"group", "create", "--group", "workflow/not-a-group", "--json")
+	if invalid.exitCode != 1 || invalid.stdout != "" {
+		t.Fatalf("invalid group result = %+v, want JSON failure on stderr only", invalid)
 	}
 	var failure map[string]any
-	if err := json.Unmarshal(stderr.Bytes(), &failure); err != nil {
-		t.Fatalf("json.Unmarshal(stderr) error = %v; stderr = %q", err, stderr.String())
+	if err := json.Unmarshal([]byte(invalid.stderr), &failure); err != nil {
+		t.Fatalf("json.Unmarshal(invalid group stderr) error = %v; stderr = %q", err, invalid.stderr)
 	}
-	if failure["error_code"] != "internal" || failure["retryable"] != false {
-		t.Fatalf("error payload = %v", failure)
+	if failure["error_code"] != "invalid_argument" || failure["retryable"] != false {
+		t.Fatalf("invalid group error payload = %v", failure)
+	}
+
+	sent := runCLI(t, "body", "--state-dir", stateDir,
+		"send", "--to", "workflow/visible", "--body-file", "-", "--json")
+	if sent.exitCode != 0 || sent.stderr != "" {
+		t.Fatalf("send result = %+v", sent)
+	}
+	var receipt map[string]any
+	if err := json.Unmarshal([]byte(sent.stdout), &receipt); err != nil {
+		t.Fatalf("json.Unmarshal(send stdout) error = %v; stdout = %q", err, sent.stdout)
+	}
+	deliveryID, _ := receipt["delivery_id"].(string)
+	if deliveryID == "" {
+		t.Fatalf("send receipt = %v, want delivery_id", receipt)
+	}
+
+	invalidState := runCLI(t, "", "--state-dir", stateDir,
+		"undefer", "--delivery", deliveryID, "--json")
+	if invalidState.exitCode != 1 || invalidState.stdout != "" {
+		t.Fatalf("undefer result = %+v, want JSON failure on stderr only", invalidState)
+	}
+	if err := json.Unmarshal([]byte(invalidState.stderr), &failure); err != nil {
+		t.Fatalf("json.Unmarshal(undefer stderr) error = %v; stderr = %q", err, invalidState.stderr)
+	}
+	if failure["error_code"] != "invalid_state" || failure["retryable"] != false {
+		t.Fatalf("undefer error payload = %v", failure)
 	}
 }
 

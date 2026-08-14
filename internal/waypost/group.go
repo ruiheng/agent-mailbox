@@ -72,7 +72,7 @@ func (s *Store) CreateGroup(ctx context.Context, address string) (GroupRecord, e
 	address, err := NormalizeGroupAddress(rawAddress)
 	if err != nil {
 		if strings.TrimSpace(rawAddress) == "" {
-			return GroupRecord{}, errors.New("group address is required")
+			return GroupRecord{}, invalidArgumentError(errors.New("group address is required"))
 		}
 		return GroupRecord{}, err
 	}
@@ -140,13 +140,13 @@ func (s *Store) AddGroupMember(ctx context.Context, groupAddress, person string)
 	groupAddress, err := NormalizeGroupAddress(rawGroupAddress)
 	if err != nil {
 		if strings.TrimSpace(rawGroupAddress) == "" {
-			return GroupMembershipRecord{}, errors.New("group address is required")
+			return GroupMembershipRecord{}, invalidArgumentError(errors.New("group address is required"))
 		}
 		return GroupMembershipRecord{}, err
 	}
 	person = strings.TrimSpace(person)
 	if person == "" {
-		return GroupMembershipRecord{}, errors.New("person is required")
+		return GroupMembershipRecord{}, invalidArgumentError(errors.New("person is required"))
 	}
 
 	tx, err := s.writeDB.BeginTx(ctx, nil)
@@ -220,13 +220,13 @@ func (s *Store) RemoveGroupMember(ctx context.Context, groupAddress, person stri
 	groupAddress, err := NormalizeGroupAddress(rawGroupAddress)
 	if err != nil {
 		if strings.TrimSpace(rawGroupAddress) == "" {
-			return GroupMembershipRecord{}, errors.New("group address is required")
+			return GroupMembershipRecord{}, invalidArgumentError(errors.New("group address is required"))
 		}
 		return GroupMembershipRecord{}, err
 	}
 	person = strings.TrimSpace(person)
 	if person == "" {
-		return GroupMembershipRecord{}, errors.New("person is required")
+		return GroupMembershipRecord{}, invalidArgumentError(errors.New("person is required"))
 	}
 
 	tx, err := s.writeDB.BeginTx(ctx, nil)
@@ -274,7 +274,7 @@ WHERE membership_id = ?
 		return GroupMembershipRecord{}, fmt.Errorf("read remove-member rows affected: %w", err)
 	}
 	if rowsAffected != 1 {
-		return GroupMembershipRecord{}, fmt.Errorf("close membership %q: changed while updating", membership.MembershipID)
+		return GroupMembershipRecord{}, invalidStateError(fmt.Errorf("close membership %q: changed while updating", membership.MembershipID))
 	}
 
 	if err := tx.Commit(); err != nil {
@@ -303,7 +303,7 @@ func (s *Store) ListGroupMembersPage(ctx context.Context, groupAddress string, p
 	groupAddress, err = NormalizeGroupAddress(rawGroupAddress)
 	if err != nil {
 		if strings.TrimSpace(rawGroupAddress) == "" {
-			return Page[GroupMembershipRecord]{}, errors.New("group address is required")
+			return Page[GroupMembershipRecord]{}, invalidArgumentError(errors.New("group address is required"))
 		}
 		return Page[GroupMembershipRecord]{}, err
 	}
@@ -437,7 +437,7 @@ func (s *Store) AddGroupNotificationSubscriber(ctx context.Context, groupAddress
 	groupAddress, err := NormalizeGroupAddress(rawGroupAddress)
 	if err != nil {
 		if strings.TrimSpace(rawGroupAddress) == "" {
-			return GroupNotificationSubscriberRecord{}, errors.New("group address is required")
+			return GroupNotificationSubscriberRecord{}, invalidArgumentError(errors.New("group address is required"))
 		}
 		return GroupNotificationSubscriberRecord{}, err
 	}
@@ -445,16 +445,16 @@ func (s *Store) AddGroupNotificationSubscriber(ctx context.Context, groupAddress
 	notifyAddress, err = NormalizeAddress(rawNotifyAddress)
 	if err != nil {
 		if strings.TrimSpace(rawNotifyAddress) == "" {
-			return GroupNotificationSubscriberRecord{}, errors.New("notify address is required")
+			return GroupNotificationSubscriberRecord{}, invalidArgumentError(errors.New("notify address is required"))
 		}
 		return GroupNotificationSubscriberRecord{}, err
 	}
 	if IsGroupAddress(notifyAddress) {
-		return GroupNotificationSubscriberRecord{}, fmt.Errorf("notify address %q uses reserved group/ prefix", notifyAddress)
+		return GroupNotificationSubscriberRecord{}, invalidArgumentError(fmt.Errorf("notify address %q uses reserved group/ prefix", notifyAddress))
 	}
 	person = strings.TrimSpace(person)
 	if person == "" {
-		return GroupNotificationSubscriberRecord{}, errors.New("person is required")
+		return GroupNotificationSubscriberRecord{}, invalidArgumentError(errors.New("person is required"))
 	}
 
 	tx, err := s.writeDB.BeginTx(ctx, nil)
@@ -515,7 +515,7 @@ WHERE subscriber_id = ?
 					return GroupNotificationSubscriberRecord{}, fmt.Errorf("read repair-subscriber rows affected: %w", err)
 				}
 				if rowsAffected != 1 {
-					return GroupNotificationSubscriberRecord{}, fmt.Errorf("repair legacy subscriber %q: changed while updating", existing.SubscriberID)
+					return GroupNotificationSubscriberRecord{}, invalidStateError(fmt.Errorf("repair legacy subscriber %q: changed while updating", existing.SubscriberID))
 				}
 				if err := tx.Commit(); err != nil {
 					return GroupNotificationSubscriberRecord{}, fmt.Errorf("commit repair-subscriber transaction: %w", err)
@@ -548,7 +548,7 @@ func (s *Store) RemoveGroupNotificationSubscriber(ctx context.Context, groupAddr
 	groupAddress, err := NormalizeGroupAddress(rawGroupAddress)
 	if err != nil {
 		if strings.TrimSpace(rawGroupAddress) == "" {
-			return GroupNotificationSubscriberRecord{}, errors.New("group address is required")
+			return GroupNotificationSubscriberRecord{}, invalidArgumentError(errors.New("group address is required"))
 		}
 		return GroupNotificationSubscriberRecord{}, err
 	}
@@ -556,7 +556,7 @@ func (s *Store) RemoveGroupNotificationSubscriber(ctx context.Context, groupAddr
 	notifyAddress, err = NormalizeAddress(rawNotifyAddress)
 	if err != nil {
 		if strings.TrimSpace(rawNotifyAddress) == "" {
-			return GroupNotificationSubscriberRecord{}, errors.New("notify address is required")
+			return GroupNotificationSubscriberRecord{}, invalidArgumentError(errors.New("notify address is required"))
 		}
 		return GroupNotificationSubscriberRecord{}, err
 	}
@@ -598,7 +598,7 @@ WHERE subscriber_id = ?
 		return GroupNotificationSubscriberRecord{}, fmt.Errorf("read remove-subscriber rows affected: %w", err)
 	}
 	if rowsAffected != 1 {
-		return GroupNotificationSubscriberRecord{}, fmt.Errorf("close subscriber %q: changed while updating", subscriber.SubscriberID)
+		return GroupNotificationSubscriberRecord{}, invalidStateError(fmt.Errorf("close subscriber %q: changed while updating", subscriber.SubscriberID))
 	}
 
 	if err := tx.Commit(); err != nil {
@@ -627,7 +627,7 @@ func (s *Store) ListGroupNotificationSubscribersPage(ctx context.Context, groupA
 	groupAddress, err = NormalizeGroupAddress(rawGroupAddress)
 	if err != nil {
 		if strings.TrimSpace(rawGroupAddress) == "" {
-			return Page[GroupNotificationSubscriberRecord]{}, errors.New("group address is required")
+			return Page[GroupNotificationSubscriberRecord]{}, invalidArgumentError(errors.New("group address is required"))
 		}
 		return Page[GroupNotificationSubscriberRecord]{}, err
 	}
@@ -695,7 +695,7 @@ func (s *Store) InspectAddress(ctx context.Context, address string) (AddressInsp
 	address, err := NormalizeAddress(rawAddress)
 	if err != nil {
 		if strings.TrimSpace(rawAddress) == "" {
-			return AddressInspection{}, errors.New("address is required")
+			return AddressInspection{}, invalidArgumentError(errors.New("address is required"))
 		}
 		return AddressInspection{}, err
 	}
@@ -808,7 +808,7 @@ func (s *Store) ListGroupTranscriptPage(ctx context.Context, params GroupTranscr
 	groupAddress, err := NormalizeGroupAddress(rawAddress)
 	if err != nil {
 		if strings.TrimSpace(rawAddress) == "" {
-			return Page[GroupTranscriptMessage]{}, errors.New("group address is required")
+			return Page[GroupTranscriptMessage]{}, invalidArgumentError(errors.New("group address is required"))
 		}
 		return Page[GroupTranscriptMessage]{}, err
 	}
@@ -993,7 +993,7 @@ LIMIT 1
 
 func (s *Store) WaitGroupMessage(ctx context.Context, params GroupWaitParams) (GroupListedMessage, error) {
 	if params.Timeout < 0 {
-		return GroupListedMessage{}, errors.New("--timeout must be greater than or equal to 0")
+		return GroupListedMessage{}, invalidArgumentError(errors.New("--timeout must be greater than or equal to 0"))
 	}
 
 	var deadline time.Time

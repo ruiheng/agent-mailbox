@@ -37,7 +37,7 @@ func (s *Store) ListStaleAddresses(ctx context.Context, params StaleAddressesPar
 		return nil, err
 	}
 	if params.OlderThan <= 0 {
-		return nil, errors.New("older_than must be greater than 0")
+		return nil, invalidArgumentError(errors.New("older_than must be greater than 0"))
 	}
 
 	stale := make([]StaleAddress, 0)
@@ -153,13 +153,13 @@ func normalizeGroupStaleViews(groupViews []GroupStaleView) ([]GroupStaleView, er
 		address, err := NormalizeAddress(groupView.Address)
 		if err != nil {
 			if strings.TrimSpace(groupView.Address) == "" {
-				return nil, errors.New("--for is required")
+				return nil, invalidArgumentError(errors.New("--for is required"))
 			}
 			return nil, err
 		}
 		person := strings.TrimSpace(groupView.Person)
 		if person == "" {
-			return nil, errors.New("--as is required")
+			return nil, invalidArgumentError(errors.New("--as is required"))
 		}
 		key := address + "\x00" + person
 		if _, ok := seen[key]; ok {

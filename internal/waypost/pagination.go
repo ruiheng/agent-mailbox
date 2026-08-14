@@ -41,11 +41,11 @@ type pageCursor struct {
 
 func normalizePageParams(params PageParams) (PageParams, error) {
 	if params.Limit < 1 || params.Limit > MaxPageSize {
-		return PageParams{}, fmt.Errorf("limit must be between 1 and %d", MaxPageSize)
+		return PageParams{}, invalidArgumentError(fmt.Errorf("limit must be between 1 and %d", MaxPageSize))
 	}
 	params.Cursor = strings.TrimSpace(params.Cursor)
 	if len(params.Cursor) > maxCursorLength {
-		return PageParams{}, fmt.Errorf("%w: cursor is too long", ErrInvalidPaginationCursor)
+		return PageParams{}, invalidArgumentError(fmt.Errorf("%w: cursor is too long", ErrInvalidPaginationCursor))
 	}
 	return params, nil
 }
@@ -100,7 +100,7 @@ func decodePageCursor(raw, kind, scope string, keyCount int) ([]string, error) {
 
 func validateInputItemCount(label string, count int) error {
 	if count > MaxInputItems {
-		return fmt.Errorf("%s accepts at most %d items", label, MaxInputItems)
+		return invalidArgumentError(fmt.Errorf("%s accepts at most %d items", label, MaxInputItems))
 	}
 	return nil
 }

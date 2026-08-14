@@ -99,13 +99,13 @@ func (a *App) readBody(bodyFile string) ([]byte, error) {
 	case "-":
 		body, err := io.ReadAll(a.stdin)
 		if err != nil {
-			return nil, fmt.Errorf("read stdin body: %w", err)
+			return nil, internalCLIError(fmt.Errorf("read stdin body: %w", err))
 		}
 		return body, nil
 	default:
 		body, err := os.ReadFile(bodyFile)
 		if err != nil {
-			return nil, fmt.Errorf("read body file: %w", err)
+			return nil, internalCLIError(fmt.Errorf("read body file: %w", err))
 		}
 		return body, nil
 	}

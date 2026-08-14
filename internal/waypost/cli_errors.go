@@ -99,7 +99,6 @@ func cliErrorFor(err error) cliErrorDocument {
 		}
 		return document
 	}
-
 	switch {
 	case errors.Is(err, ErrBodyIntegrity):
 		document.ErrorCode = "integrity_error"
@@ -108,36 +107,14 @@ func cliErrorFor(err error) cliErrorDocument {
 		document.Retryable = true
 	case errors.Is(err, ErrLeaseNotFound), errors.Is(err, ErrDeliveryNotFound), errors.Is(err, ErrMessageNotFound), errors.Is(err, ErrGroupNotFound):
 		document.ErrorCode = "not_found"
+	case errors.Is(err, ErrInvalidArgument), errors.Is(err, ErrInvalidPaginationCursor):
+		document.ErrorCode = "invalid_argument"
+	case errors.Is(err, ErrInvalidState):
+		document.ErrorCode = "invalid_state"
 	case errors.Is(err, ErrGroupExists), errors.Is(err, ErrActiveMembershipExists), errors.Is(err, ErrActiveSubscriberExists):
 		document.ErrorCode = "already_exists"
 	case errors.Is(err, ErrLeaseExpired), errors.Is(err, ErrLeaseNotLeased), errors.Is(err, ErrLeaseRenewChanged), errors.Is(err, ErrLeaseTokenMismatch), errors.Is(err, ErrActiveMembershipMissing), errors.Is(err, ErrActiveSubscriberMissing), errors.Is(err, ErrAddressReservedByEndpoint), errors.Is(err, ErrAddressReservedByGroup):
 		document.ErrorCode = "invalid_state"
-	case cliInvalidStateError(err):
-		document.ErrorCode = "invalid_state"
-	case cliInvalidArgumentError(err):
-		document.ErrorCode = "invalid_argument"
 	}
 	return document
-}
-
-func cliInvalidStateError(err error) bool {
-	message := strings.ToLower(err.Error())
-	return strings.Contains(message, "is in state") ||
-		strings.Contains(message, "already visible") ||
-		strings.Contains(message, "changed while")
-}
-
-func cliInvalidArgumentError(err error) bool {
-	message := strings.ToLower(err.Error())
-	return strings.Contains(message, " is required") ||
-		strings.Contains(message, "must ") ||
-		strings.Contains(message, "exactly one") ||
-		strings.Contains(message, "mutually exclusive") ||
-		strings.Contains(message, "not supported") ||
-		strings.Contains(message, "provided but not defined") ||
-		strings.Contains(message, "needs an argument") ||
-		strings.Contains(message, "unknown ") ||
-		strings.Contains(message, "parse ") ||
-		strings.Contains(message, "invalid ") ||
-		strings.Contains(message, "empty")
 }

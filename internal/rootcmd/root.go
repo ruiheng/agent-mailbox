@@ -84,7 +84,7 @@ func parseGlobalArgs(args []string) (string, []string, bool, bool, error) {
 		if errors.Is(err, flag.ErrHelp) {
 			return "", nil, true, false, nil
 		}
-		return "", nil, false, false, err
+		return "", nil, false, false, waypost.MarkInvalidArgument(err)
 	}
 	return stateDir, fs.Args(), false, versionRequested, nil
 }
@@ -158,7 +158,7 @@ func (a *App) runGroupWebCommand(ctx context.Context, stateDir string, args []st
 			a.writeGroupWebHelp()
 			return waypost.ErrHelpRequested
 		}
-		return err
+		return waypost.MarkInvalidArgument(err)
 	}
 	if fs.NArg() != 0 {
 		return fmt.Errorf("group web does not accept positional arguments")
