@@ -31,6 +31,18 @@ You can also override it per command:
 waypost --state-dir /tmp/waypost-demo list --for workflow/reviewer/task-123
 ```
 
+## Version
+
+Report the CLI version:
+
+```bash
+waypost --version
+# waypost 0.5.0
+```
+
+The CLI version is the same value advertised by the built-in MCP server during
+initialization and returned as `server_version` by `waypost_status`.
+
 ### Migrate previous local state
 
 Stop all previous-version processes, then move the previous default state

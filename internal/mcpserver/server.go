@@ -13,12 +13,13 @@ import (
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+	"github.com/ruiheng/waypost/internal/version"
 	"github.com/ruiheng/waypost/internal/waypost"
 )
 
 const (
 	serverName                   = "waypost"
-	serverVersion                = "0.4.0"
+	serverVersion                = version.Version
 	syncCmdTimeout               = 30 * time.Second
 	ensureSessionShowTimeout     = 30 * time.Second
 	defaultMCPLeaseTTL           = 30 * time.Second

@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ruiheng/waypost/internal/version"
 	"github.com/ruiheng/waypost/internal/waypost"
 )
 
@@ -27,9 +28,16 @@ func TestWaypostStatusReportsAuthoritativeCLIContext(t *testing.T) {
 	})
 	service.state.autoBindAttempted = true
 
+	clientSession, cleanup := connectTestClientSession(t, service.Server(), nil)
+	defer cleanup()
+	serverInfo := clientSession.InitializeResult().ServerInfo
+	if serverInfo == nil || serverInfo.Version != version.Version {
+		t.Fatalf("MCP server info = %v, want version %q", serverInfo, version.Version)
+	}
+
 	status := callServiceTool(t, service, "waypost_status", map[string]any{})
-	if got := status["server_version"]; got != serverVersion {
-		t.Fatalf("server_version = %v, want %q", got, serverVersion)
+	if got := status["server_version"]; got != version.Version {
+		t.Fatalf("server_version = %v, want %q", got, version.Version)
 	}
 	if got := status["executable"]; got != "/opt/waypost/bin/waypost" {
 		t.Fatalf("executable = %v, want authoritative executable", got)

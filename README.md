@@ -96,6 +96,13 @@ On Windows, the PowerShell wrapper builds:
 .\bin\waypost.exe
 ```
 
+Report the CLI version (the same value advertised by the built-in MCP server):
+
+```bash
+waypost --version
+# waypost 0.5.0
+```
+
 Run the full test suite:
 
 ```bash

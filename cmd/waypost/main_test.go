@@ -12,8 +12,22 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ruiheng/waypost/internal/version"
 	"github.com/ruiheng/waypost/internal/waypost"
 )
+
+func TestCLIVersionMatchesSharedVersion(t *testing.T) {
+	result := runCLI(t, "", "--version")
+	if result.exitCode != 0 {
+		t.Fatalf("version exit code = %d, stderr = %q", result.exitCode, result.stderr)
+	}
+	if got, want := result.stdout, "waypost "+version.Version+"\n"; got != want {
+		t.Fatalf("version stdout = %q, want %q", got, want)
+	}
+	if result.stderr != "" {
+		t.Fatalf("version stderr = %q, want empty", result.stderr)
+	}
+}
 
 func TestCLISendRecvAckFlow(t *testing.T) {
 	stateDir := filepath.Join(t.TempDir(), "waypost-state")

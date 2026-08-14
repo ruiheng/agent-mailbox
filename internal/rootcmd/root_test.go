@@ -30,6 +30,23 @@ func TestRunRootHelpIncludesMCP(t *testing.T) {
 	if strings.Contains(stdout.String(), "  web") {
 		t.Fatalf("root help = %q, want no top-level web command", stdout.String())
 	}
+	if !strings.Contains(stdout.String(), "--version") {
+		t.Fatalf("root help = %q, want version option", stdout.String())
+	}
+}
+
+func TestRunVersion(t *testing.T) {
+	t.Parallel()
+
+	var stdout bytes.Buffer
+	app := New(strings.NewReader(""), &stdout, &bytes.Buffer{})
+
+	if err := app.Run(context.Background(), []string{"--version"}); err != nil {
+		t.Fatalf("Run(--version) error = %v", err)
+	}
+	if got, want := stdout.String(), "waypost 0.5.0\n"; got != want {
+		t.Fatalf("Run(--version) output = %q, want %q", got, want)
+	}
 }
 
 func TestRunRootHelpIncludesForward(t *testing.T) {

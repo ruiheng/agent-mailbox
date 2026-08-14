@@ -10,6 +10,7 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/ruiheng/waypost/internal/mcpserver"
+	"github.com/ruiheng/waypost/internal/version"
 	"github.com/ruiheng/waypost/internal/waypost"
 	"github.com/ruiheng/waypost/internal/webui"
 )
@@ -39,13 +40,17 @@ func New(stdin io.Reader, stdout, stderr io.Writer) *App {
 }
 
 func (a *App) Run(ctx context.Context, args []string) error {
-	stateDir, rest, helpRequested, err := parseGlobalArgs(args)
+	stateDir, rest, helpRequested, versionRequested, err := parseGlobalArgs(args)
 	if err != nil {
 		return err
 	}
 	if helpRequested {
 		a.writeRootHelp()
 		return waypost.ErrHelpRequested
+	}
+	if versionRequested {
+		_, err := fmt.Fprintf(a.stdout, "waypost %s\n", version.Version)
+		return err
 	}
 	if len(rest) == 0 {
 		return errors.New("expected a command: mcp, migrate, doc, send, forward, recv, wait, watch, read, ack, renew, release, defer, undefer, fail, list, stale, group, or address")
@@ -66,20 +71,22 @@ func (a *App) Run(ctx context.Context, args []string) error {
 	}).RunWithStateDir(ctx, stateDir, forwarded)
 }
 
-func parseGlobalArgs(args []string) (string, []string, bool, error) {
+func parseGlobalArgs(args []string) (string, []string, bool, bool, error) {
 	fs := flag.NewFlagSet("waypost", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 
 	var stateDir string
+	var versionRequested bool
 	fs.StringVar(&stateDir, "state-dir", "", "override waypost state directory")
+	fs.BoolVar(&versionRequested, "version", false, "show version")
 
 	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
-			return "", nil, true, nil
+			return "", nil, true, false, nil
 		}
-		return "", nil, false, err
+		return "", nil, false, false, err
 	}
-	return stateDir, fs.Args(), false, nil
+	return stateDir, fs.Args(), false, versionRequested, nil
 }
 
 func (a *App) runMCPCommand(ctx context.Context, stateDir string, args []string) error {
@@ -214,6 +221,7 @@ func (a *App) writeRootHelp() {
 		"",
 		"Global options:",
 		"  --state-dir PATH    Override waypost state directory",
+		"  --version           Show version",
 		"  --help              Show help",
 		"",
 		"Use \"waypost <command> --help\" for command-specific details.",
