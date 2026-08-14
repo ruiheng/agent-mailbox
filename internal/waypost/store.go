@@ -19,7 +19,28 @@ import (
 	"unicode"
 )
 
-var ErrEmptyBody = errors.New("message body must not be empty")
+var (
+	ErrEmptyBody        = errors.New("message body must not be empty")
+	ErrDeliveryNotFound = errors.New("delivery not found")
+	ErrMessageNotFound  = errors.New("message not found")
+)
+
+type resourceNotFoundError struct {
+	message string
+	cause   error
+}
+
+func (e *resourceNotFoundError) Error() string {
+	return e.message
+}
+
+func (e *resourceNotFoundError) Unwrap() error {
+	return e.cause
+}
+
+func missingResourceError(message string, cause error) error {
+	return &resourceNotFoundError{message: message, cause: cause}
+}
 
 type blobTempFile interface {
 	Write([]byte) (int, error)
@@ -1125,7 +1146,7 @@ WHERE d.delivery_id = ?
 	)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			return ReadDelivery{}, fmt.Errorf("delivery %q not found", deliveryID)
+			return ReadDelivery{}, missingResourceError(fmt.Sprintf("delivery %q not found", deliveryID), ErrDeliveryNotFound)
 		}
 		return ReadDelivery{}, fmt.Errorf("load delivery %q: %w", deliveryID, err)
 	}
@@ -1203,7 +1224,7 @@ WHERE m.message_id = ?
 	)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			return ReadMessage{}, fmt.Errorf("message %q not found", messageID)
+			return ReadMessage{}, missingResourceError(fmt.Sprintf("message %q not found", messageID), ErrMessageNotFound)
 		}
 		return ReadMessage{}, fmt.Errorf("load message %q: %w", messageID, err)
 	}

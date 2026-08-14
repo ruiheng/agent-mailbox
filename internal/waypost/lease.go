@@ -374,7 +374,7 @@ func (s *Store) Undefer(ctx context.Context, deliveryID string) (DeliveryTransit
 	delivery, err := loadDeliveryRecord(ctx, tx, deliveryID)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			return DeliveryTransitionResult{}, fmt.Errorf("delivery %q not found", deliveryID)
+			return DeliveryTransitionResult{}, missingResourceError(fmt.Sprintf("delivery %q not found", deliveryID), ErrDeliveryNotFound)
 		}
 		return DeliveryTransitionResult{}, fmt.Errorf("load delivery %q: %w", deliveryID, err)
 	}

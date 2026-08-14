@@ -3414,6 +3414,12 @@ func TestAgentDeckRequireSessionStartsInactiveTarget(t *testing.T) {
 	if got := output["startup_instruction_status"]; got != "started" {
 		t.Fatalf("startup_instruction_status = %v, want started", got)
 	}
+	if _, found := output["recovery_required"]; found {
+		t.Fatalf("created output unexpectedly includes recovery_required: %v", output)
+	}
+	if _, found := output["verification"]; found {
+		t.Fatalf("created output unexpectedly includes verification: %v", output)
+	}
 }
 
 func TestAgentDeckRequireSessionBatchReturnsOrderedIndependentResults(t *testing.T) {
@@ -3698,7 +3704,9 @@ func TestAgentDeckCreateSessionCreatesTargetWithoutDefaultStartupInstruction(t *
 		case strings.Join(args, "\x00") == strings.Join([]string{"agent-deck", "group", "list", "--json"}, "\x00"):
 			return RunResult{ExitCode: 0, Stdout: `{"groups":[{"path":"planning"}]}`}, nil
 		case strings.Join(args, "\x00") == strings.Join([]string{"agent-deck", "launch", "--json", "--title", "coder-ref", "--cmd", "codex --model gpt-5.4 --ask-for-approval on-request", "--group", "planning", "--parent", "planner-1", workdir}, "\x00"):
-			return RunResult{ExitCode: 0, Stdout: `{"id":"session-2","title":"coder-ref","status":"waiting"}`}, nil
+			return RunResult{ExitCode: 0, Stdout: `{"id":"session-2"}`}, nil
+		case strings.Join(args, "\x00") == strings.Join([]string{"agent-deck", "session", "show", "session-2", "--json"}, "\x00"):
+			return RunResult{ExitCode: 0, Stdout: `{"id":"session-2","title":"coder-ref","status":"waiting","path":"/tmp","group":"planning","parent_session_id":"planner-1"}`}, nil
 		default:
 			t.Fatalf("unexpected command args: %v", args)
 			return RunResult{}, nil
@@ -3726,6 +3734,181 @@ func TestAgentDeckCreateSessionCreatesTargetWithoutDefaultStartupInstruction(t *
 	}
 	if got := output["startup_instruction_status"]; got != "started" {
 		t.Fatalf("startup_instruction_status = %v, want started", got)
+	}
+}
+
+func TestAgentDeckCreateSessionReturnsRecoveryAfterConfirmedLaunch(t *testing.T) {
+	workdir := canonicalTestWorkdir(t, "/tmp")
+	otherWorkdir := t.TempDir()
+	valid := `{"id":"session-2","title":"coder-ref","status":"waiting","path":` + jsonString(t, workdir) + `}`
+	tests := []struct {
+		name      string
+		show      RunResult
+		showErr   error
+		wantState string
+	}{
+		{
+			name:      "lookup error",
+			showErr:   errors.New("session show unavailable"),
+			wantState: "post_create_lookup_failed",
+		},
+		{
+			name:      "lookup missing",
+			show:      RunResult{ExitCode: 2, Stderr: "not found"},
+			wantState: "post_create_lookup_failed",
+		},
+		{
+			name:      "id mismatch",
+			show:      RunResult{ExitCode: 0, Stdout: `{"id":"session-other","title":"coder-ref","status":"waiting","path":` + jsonString(t, workdir) + `}`},
+			wantState: "post_create_identity_mismatch",
+		},
+		{
+			name:      "title mismatch",
+			show:      RunResult{ExitCode: 0, Stdout: `{"id":"session-2","title":"other","status":"waiting","path":` + jsonString(t, workdir) + `}`},
+			wantState: "post_create_identity_mismatch",
+		},
+		{
+			name:      "parent mismatch",
+			show:      RunResult{ExitCode: 0, Stdout: valid[:len(valid)-1] + `,"parent_session_id":"planner-1"}`},
+			wantState: "post_create_identity_mismatch",
+		},
+		{
+			name:      "group mismatch",
+			show:      RunResult{ExitCode: 0, Stdout: valid[:len(valid)-1] + `,"group":"unexpected"}`},
+			wantState: "post_create_group_mismatch",
+		},
+		{
+			name:      "workdir mismatch",
+			show:      RunResult{ExitCode: 0, Stdout: `{"id":"session-2","title":"coder-ref","status":"waiting","path":` + jsonString(t, otherWorkdir) + `}`},
+			wantState: "path_mismatch",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			launches := 0
+			commandRunner := &fakeRunner{t: t, handler: func(args []string, input string) (RunResult, error) {
+				switch {
+				case reflect.DeepEqual(args, []string{"agent-deck", "session", "show", "coder-ref", "--json"}):
+					return RunResult{ExitCode: 2, Stderr: "not found"}, nil
+				case reflect.DeepEqual(args, []string{"agent-deck", "launch", "--json", "--title", "coder-ref", "--cmd", "codex", "--no-parent", workdir}):
+					launches++
+					return RunResult{ExitCode: 0, Stdout: `{"id":"session-2"}`}, nil
+				case reflect.DeepEqual(args, []string{"agent-deck", "session", "show", "session-2", "--json"}):
+					return test.show, test.showErr
+				default:
+					t.Fatalf("unexpected command args: %v", args)
+					return RunResult{}, nil
+				}
+			}}
+
+			service := newService(Options{
+				WaypostServiceFactory: fakeWaypostServiceFactory{service: &fakeWaypostService{t: t}},
+				CommandRunner:         commandRunner,
+			})
+			service.state.autoBindAttempted = true
+
+			output := callServiceTool(t, service, "agent_deck_create_session", map[string]any{
+				"ensure_title":   "coder-ref",
+				"ensure_cmd":     "codex",
+				"no_parent_link": true,
+				"workdir":        workdir,
+			})
+			if output["status"] != "created_unverified" || output["created_target"] != true || output["started_session"] != true || output["recovery_required"] != true {
+				t.Fatalf("create recovery output = %v", output)
+			}
+			verification, ok := output["verification"].(map[string]any)
+			if !ok || verification["state"] != test.wantState {
+				t.Fatalf("create recovery verification = %v, want state %q", output["verification"], test.wantState)
+			}
+			if launches != 1 {
+				t.Fatalf("launch count = %d, want 1", launches)
+			}
+		})
+	}
+}
+
+func TestAgentDeckCreateSessionReturnsRecoveryForUnusableLaunchReceipt(t *testing.T) {
+	workdir := canonicalTestWorkdir(t, "/tmp")
+	launches := 0
+	commandRunner := &fakeRunner{t: t, handler: func(args []string, input string) (RunResult, error) {
+		switch {
+		case reflect.DeepEqual(args, []string{"agent-deck", "session", "show", "coder-ref", "--json"}):
+			return RunResult{ExitCode: 2, Stderr: "not found"}, nil
+		case reflect.DeepEqual(args, []string{"agent-deck", "launch", "--json", "--title", "coder-ref", "--cmd", "codex", "--no-parent", workdir}):
+			launches++
+			return RunResult{ExitCode: 0, Stdout: `{"success":true}`}, nil
+		default:
+			t.Fatalf("unexpected command args: %v", args)
+			return RunResult{}, nil
+		}
+	}}
+
+	service := newService(Options{
+		WaypostServiceFactory: fakeWaypostServiceFactory{service: &fakeWaypostService{t: t}},
+		CommandRunner:         commandRunner,
+	})
+	service.state.autoBindAttempted = true
+
+	output := callServiceTool(t, service, "agent_deck_create_session", map[string]any{
+		"ensure_title":   "coder-ref",
+		"ensure_cmd":     "codex",
+		"no_parent_link": true,
+		"workdir":        workdir,
+	})
+	if output["status"] != "create_recovery_required" || output["created_target"] != nil || output["started_session"] != nil || output["recovery_required"] != true || output["session_id"] != nil {
+		t.Fatalf("create recovery output = %v", output)
+	}
+	verification, ok := output["verification"].(map[string]any)
+	if !ok || verification["state"] != "create_output_unparseable" {
+		t.Fatalf("create recovery verification = %v", output["verification"])
+	}
+	if launches != 1 {
+		t.Fatalf("launch count = %d, want 1", launches)
+	}
+}
+
+func TestAgentDeckCreateSessionReturnsRecoveryWhenRootGroupMoveFails(t *testing.T) {
+	workdir := canonicalTestWorkdir(t, "/tmp")
+	launches := 0
+	commandRunner := &fakeRunner{t: t, handler: func(args []string, input string) (RunResult, error) {
+		switch {
+		case reflect.DeepEqual(args, []string{"agent-deck", "session", "show", "coder-ref", "--json"}):
+			return RunResult{ExitCode: 2, Stderr: "not found"}, nil
+		case reflect.DeepEqual(args, []string{"agent-deck", "session", "show", "planner-1", "--json"}):
+			return RunResult{ExitCode: 0, Stdout: `{"id":"planner-1","title":"planner","status":"waiting","path":` + jsonString(t, workdir) + `}`}, nil
+		case reflect.DeepEqual(args, []string{"agent-deck", "launch", "--json", "--title", "coder-ref", "--cmd", "codex", "--parent", "planner-1", workdir}):
+			launches++
+			return RunResult{ExitCode: 0, Stdout: `{"id":"session-2"}`}, nil
+		case reflect.DeepEqual(args, []string{"agent-deck", "group", "move", "session-2", ""}):
+			return RunResult{}, errors.New("group move unavailable")
+		default:
+			t.Fatalf("unexpected command args: %v", args)
+			return RunResult{}, nil
+		}
+	}}
+
+	service := newService(Options{
+		WaypostServiceFactory: fakeWaypostServiceFactory{service: &fakeWaypostService{t: t}},
+		CommandRunner:         commandRunner,
+	})
+	service.state.autoBindAttempted = true
+
+	output := callServiceTool(t, service, "agent_deck_create_session", map[string]any{
+		"ensure_title":      "coder-ref",
+		"ensure_cmd":        "codex",
+		"parent_session_id": "planner-1",
+		"workdir":           workdir,
+	})
+	if output["status"] != "created_unverified" || output["recovery_required"] != true {
+		t.Fatalf("group-move recovery output = %v", output)
+	}
+	verification, ok := output["verification"].(map[string]any)
+	if !ok || verification["state"] != "post_create_group_move_failed" {
+		t.Fatalf("group-move recovery verification = %v", output["verification"])
+	}
+	if launches != 1 {
+		t.Fatalf("launch count = %d, want 1", launches)
 	}
 }
 
@@ -3845,6 +4028,8 @@ func TestAgentDeckCreateSessionAllowsDetachedCreateWithoutGroup(t *testing.T) {
 			return RunResult{ExitCode: 2, Stderr: "not found"}, nil
 		case strings.Join(args, "\x00") == strings.Join([]string{"agent-deck", "launch", "--json", "--title", "coder-ref", "--cmd", "codex --model gpt-5.4 --ask-for-approval on-request", "--no-parent", workdir}, "\x00"):
 			return RunResult{ExitCode: 0, Stdout: `{"id":"session-2","title":"coder-ref","status":"waiting","path":"/tmp"}`}, nil
+		case strings.Join(args, "\x00") == strings.Join([]string{"agent-deck", "session", "show", "session-2", "--json"}, "\x00"):
+			return RunResult{ExitCode: 0, Stdout: `{"id":"session-2","title":"coder-ref","status":"waiting","path":"/tmp"}`}, nil
 		default:
 			t.Fatalf("unexpected command args: %v", args)
 			return RunResult{}, nil
@@ -3888,6 +4073,8 @@ func TestAgentDeckCreateSessionDerivesChildGroupFromChildParentSession(t *testin
 			return RunResult{ExitCode: 0}, nil
 		case strings.Join(args, "\x00") == strings.Join([]string{"agent-deck", "launch", "--json", "--title", "coder-ref", "--cmd", "codex --model gpt-5.4 --ask-for-approval on-request", "--group", "planning/active/planner-child", "--no-parent", workdir}, "\x00"):
 			return RunResult{ExitCode: 0, Stdout: `{"id":"session-2","title":"coder-ref","status":"waiting","group":"planning/active/planner-child","path":"/tmp"}`}, nil
+		case strings.Join(args, "\x00") == strings.Join([]string{"agent-deck", "session", "show", "session-2", "--json"}, "\x00"):
+			return RunResult{ExitCode: 0, Stdout: `{"id":"session-2","title":"coder-ref","status":"waiting","group":"planning/active/planner-child","path":"/tmp"}`}, nil
 		default:
 			t.Fatalf("unexpected command args: %v", args)
 			return RunResult{}, nil
@@ -3928,6 +4115,8 @@ func TestAgentDeckCreateSessionDerivesTopLevelGroupFromChildParentWithoutGroup(t
 			return RunResult{ExitCode: 0}, nil
 		case strings.Join(args, "\x00") == strings.Join([]string{"agent-deck", "launch", "--json", "--title", "coder-ref", "--cmd", "codex --model gpt-5.4 --ask-for-approval on-request", "--group", "planner-child", "--no-parent", workdir}, "\x00"):
 			return RunResult{ExitCode: 0, Stdout: `{"id":"session-2","title":"coder-ref","status":"waiting","group":"planner-child","path":"/tmp"}`}, nil
+		case strings.Join(args, "\x00") == strings.Join([]string{"agent-deck", "session", "show", "session-2", "--json"}, "\x00"):
+			return RunResult{ExitCode: 0, Stdout: `{"id":"session-2","title":"coder-ref","status":"waiting","group":"planner-child","path":"/tmp"}`}, nil
 		default:
 			t.Fatalf("unexpected command args: %v", args)
 			return RunResult{}, nil
@@ -3965,6 +4154,8 @@ func TestAgentDeckCreateSessionDropsChildParentLinkForExplicitGroupPath(t *testi
 		case strings.Join(args, "\x00") == strings.Join([]string{"agent-deck", "group", "list", "--json"}, "\x00"):
 			return RunResult{ExitCode: 0, Stdout: `{"groups":[{"path":"planning"},{"path":"planning/active"},{"path":"reviews"},{"path":"reviews/ready"}]}`}, nil
 		case strings.Join(args, "\x00") == strings.Join([]string{"agent-deck", "launch", "--json", "--title", "coder-ref", "--cmd", "codex --model gpt-5.4 --ask-for-approval on-request", "--group", "reviews/ready", "--no-parent", workdir}, "\x00"):
+			return RunResult{ExitCode: 0, Stdout: `{"id":"session-2","title":"coder-ref","status":"waiting","group":"reviews/ready","path":"/tmp"}`}, nil
+		case strings.Join(args, "\x00") == strings.Join([]string{"agent-deck", "session", "show", "session-2", "--json"}, "\x00"):
 			return RunResult{ExitCode: 0, Stdout: `{"id":"session-2","title":"coder-ref","status":"waiting","group":"reviews/ready","path":"/tmp"}`}, nil
 		default:
 			t.Fatalf("unexpected command args: %v", args)
@@ -4006,6 +4197,8 @@ func TestAgentDeckCreateSessionDerivesGroupFromGroupParentSession(t *testing.T) 
 		case strings.Join(args, "\x00") == strings.Join([]string{"agent-deck", "group", "create", "coder-review", "--parent", "planning"}, "\x00"):
 			return RunResult{ExitCode: 0}, nil
 		case strings.Join(args, "\x00") == strings.Join([]string{"agent-deck", "launch", "--json", "--title", "coder-ref", "--cmd", "codex --model gpt-5.4 --ask-for-approval on-request", "--group", "planning/coder-review", workdir}, "\x00"):
+			return RunResult{ExitCode: 0, Stdout: `{"id":"session-2","title":"coder-ref","status":"waiting","group":"planning/coder-review","path":"/tmp"}`}, nil
+		case strings.Join(args, "\x00") == strings.Join([]string{"agent-deck", "session", "show", "session-2", "--json"}, "\x00"):
 			return RunResult{ExitCode: 0, Stdout: `{"id":"session-2","title":"coder-ref","status":"waiting","group":"planning/coder-review","path":"/tmp"}`}, nil
 		default:
 			t.Fatalf("unexpected command args: %v", args)
@@ -4110,6 +4303,8 @@ func TestAgentDeckCreateSessionCreatesTargetWithGroupPathAndNoParentLink(t *test
 		case strings.Join(args, "\x00") == strings.Join([]string{"agent-deck", "group", "create", "reviews"}, "\x00"):
 			return RunResult{ExitCode: 0}, nil
 		case strings.Join(args, "\x00") == strings.Join([]string{"agent-deck", "launch", "--json", "--title", "coder-ref", "--cmd", "codex --model gpt-5.4 --ask-for-approval on-request", "--group", "reviews", "--no-parent", workdir}, "\x00"):
+			return RunResult{ExitCode: 0, Stdout: `{"id":"session-2","title":"coder-ref","status":"waiting","group":"reviews","path":"/tmp"}`}, nil
+		case strings.Join(args, "\x00") == strings.Join([]string{"agent-deck", "session", "show", "session-2", "--json"}, "\x00"):
 			return RunResult{ExitCode: 0, Stdout: `{"id":"session-2","title":"coder-ref","status":"waiting","group":"reviews","path":"/tmp"}`}, nil
 		default:
 			t.Fatalf("unexpected command args: %v", args)

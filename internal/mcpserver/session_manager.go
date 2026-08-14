@@ -870,24 +870,41 @@ func (m *sessionManager) createSession(ctx context.Context, input agentDeckCreat
 	if err != nil {
 		return nil, err
 	}
-	data, err := parseSessionData(launchResult.Stdout, "agent-deck launch")
-	if err != nil {
-		return nil, err
+	receipt, err := parseSessionData(launchResult.Stdout, "agent-deck launch")
+	if err != nil || receipt == nil || strings.TrimSpace(receipt.ID) == "" || (receipt.Success != nil && !*receipt.Success) {
+		return agentDeckCreateRecoveryResult(input.EnsureTitle, workdir), nil
 	}
+	receipt.ID = strings.TrimSpace(receipt.ID)
 	if moveToRootGroupAfterLaunch {
-		if _, err := runCommand(ctx, m.runner, []string{"agent-deck", "group", "move", data.ID, ""}, runOptions{}); err != nil {
-			return nil, err
-		}
-		refreshed, err := m.resolveSessionShow(ctx, data.ID, ensureSessionShowTimeout)
-		if err != nil {
-			return nil, err
-		}
-		if refreshed != nil {
-			data = refreshed
+		if _, err := runCommand(ctx, m.runner, []string{"agent-deck", "group", "move", receipt.ID, ""}, runOptions{}); err != nil {
+			return agentDeckCreatedUnverifiedResult(receipt, input.EnsureTitle, workdir, "post_create_group_move_failed", "", err.Error(), input.StartupInstruction), nil
 		}
 	}
 
-	out := sessionInfoMap(data, input.EnsureTitle)
+	refreshed, err := m.resolveSessionShow(ctx, receipt.ID, ensureSessionShowTimeout)
+	if err != nil {
+		return agentDeckCreatedUnverifiedResult(receipt, input.EnsureTitle, workdir, "post_create_lookup_failed", "", err.Error(), input.StartupInstruction), nil
+	}
+	if refreshed == nil {
+		return agentDeckCreatedUnverifiedResult(receipt, input.EnsureTitle, workdir, "post_create_lookup_failed", "", "target session not found after create", input.StartupInstruction), nil
+	}
+
+	expectedParentSessionID := ""
+	if !launchNoParentLink {
+		expectedParentSessionID = launchParentSessionID
+	}
+	if err := verifyCreatedAgentDeckSessionIdentity(receipt, refreshed, input.EnsureTitle, expectedParentSessionID); err != nil {
+		return agentDeckCreatedUnverifiedResult(refreshed, input.EnsureTitle, workdir, "post_create_identity_mismatch", refreshed.Path, err.Error(), input.StartupInstruction), nil
+	}
+	if strings.TrimSpace(refreshed.Group) != targetGroupPath {
+		return agentDeckCreatedUnverifiedResult(refreshed, input.EnsureTitle, workdir, "post_create_group_mismatch", refreshed.Path, "refreshed agent-deck session group does not match requested group placement", input.StartupInstruction), nil
+	}
+	verification := verifyHostSessionWorkdir(hostSessionFromAgentDeck(refreshed), input.Workdir, workdir)
+	if verification.State != "verified" {
+		return agentDeckCreatedUnverifiedResult(refreshed, input.EnsureTitle, workdir, verification.State, verification.ObservedPath, verification.Err.Error(), input.StartupInstruction), nil
+	}
+
+	out := sessionInfoMap(refreshed, input.EnsureTitle)
 	out["status"] = "created"
 	out["created_target"] = true
 	out["started_session"] = true
@@ -898,6 +915,56 @@ func (m *sessionManager) createSession(ctx context.Context, input agentDeckCreat
 		out["startup_instruction_status"] = "started"
 	}
 	return out, nil
+}
+
+func verifyCreatedAgentDeckSessionIdentity(receipt, refreshed *sessionData, requestedTitle, requestedParentSessionID string) error {
+	if receipt == nil || refreshed == nil {
+		return errors.New("target session identity unavailable after create")
+	}
+	if strings.TrimSpace(receipt.ID) != strings.TrimSpace(refreshed.ID) {
+		return fmt.Errorf("created session id %q does not match refreshed session id %q", receipt.ID, refreshed.ID)
+	}
+	if refreshed.Title != requestedTitle {
+		return fmt.Errorf("refreshed session title %q does not match requested title %q", refreshed.Title, requestedTitle)
+	}
+	if strings.TrimSpace(refreshed.ParentSessionID) != requestedParentSessionID {
+		return fmt.Errorf("refreshed session parent %q does not match requested parent %q", refreshed.ParentSessionID, requestedParentSessionID)
+	}
+	return nil
+}
+
+func agentDeckCreatedUnverifiedResult(data *sessionData, sessionRef, canonicalWorkdir, state, observedPath, detail, startupInstruction string) map[string]any {
+	out := sessionInfoMap(data, sessionRef)
+	out["status"] = "created_unverified"
+	out["created_target"] = true
+	out["started_session"] = true
+	out["notify_needed"] = false
+	out["recovery_required"] = true
+	out["verification"] = verificationMap(state, canonicalWorkdir, observedPath, detail)
+	if strings.TrimSpace(startupInstruction) != "" {
+		out["startup_instruction_status"] = "started_waiting"
+	} else {
+		out["startup_instruction_status"] = "started"
+	}
+	return out
+}
+
+func agentDeckCreateRecoveryResult(sessionRef, canonicalWorkdir string) map[string]any {
+	return map[string]any{
+		"status":            "create_recovery_required",
+		"created_target":    nil,
+		"started_session":   nil,
+		"notify_needed":     false,
+		"recovery_required": true,
+		"verification":      verificationMap("create_output_unparseable", canonicalWorkdir, "", "agent-deck session create returned unusable output"),
+		"session_id":        nil,
+		"session_ref":       sessionRef,
+		"title":             nil,
+		"session_status":    nil,
+		"group":             nil,
+		"path":              nil,
+		"addresses":         []string{},
+	}
 }
 
 func (m *sessionManager) requireSession(ctx context.Context, input agentDeckRequireSessionInput) (map[string]any, error) {

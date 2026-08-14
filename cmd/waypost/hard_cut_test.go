@@ -399,6 +399,70 @@ func TestCLIJSONErrorsAndEmbeddedDocs(t *testing.T) {
 	}
 }
 
+func TestCLIJSONNotFoundErrorsUseStructuralIdentity(t *testing.T) {
+	stateDir := filepath.Join(t.TempDir(), "waypost-state")
+	tests := []struct {
+		name string
+		args []string
+	}{
+		{
+			name: "forward message",
+			args: []string{"forward", "--message", "msg_missing", "--to", "workflow/target", "--json"},
+		},
+		{
+			name: "forward delivery",
+			args: []string{"forward", "--delivery", "dlv_missing", "--to", "workflow/target", "--json"},
+		},
+		{
+			name: "read message",
+			args: []string{"read", "--message", "msg_missing", "--json"},
+		},
+		{
+			name: "read delivery",
+			args: []string{"read", "--delivery", "dlv_missing", "--json"},
+		},
+		{
+			name: "undefer delivery",
+			args: []string{"undefer", "--delivery", "dlv_missing", "--json"},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			args := append([]string{"--state-dir", stateDir}, test.args...)
+			result := runCLI(t, "", args...)
+			if result.exitCode != 1 || result.stdout != "" {
+				t.Fatalf("result = %+v, want JSON failure on stderr only", result)
+			}
+			var failure map[string]any
+			if err := json.Unmarshal([]byte(result.stderr), &failure); err != nil {
+				t.Fatalf("json.Unmarshal(stderr) error = %v; stderr = %q", err, result.stderr)
+			}
+			if failure["error_code"] != "not_found" || failure["retryable"] != false {
+				t.Fatalf("error payload = %v", failure)
+			}
+		})
+	}
+}
+
+func TestCLIJSONNotFoundTextWithoutStructuralIdentityIsInternal(t *testing.T) {
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	exitCode := runCommand(context.Background(), []string{"forward", "--json"}, nil, &stdout, &stderr, func(context.Context, []string) error {
+		return errors.New(`reload existing endpoint address "agent/example": not found after conflict`)
+	})
+	if exitCode != 1 || stdout.Len() != 0 {
+		t.Fatalf("exit=%d stdout=%q, want exit 1 and empty stdout", exitCode, stdout.String())
+	}
+	var failure map[string]any
+	if err := json.Unmarshal(stderr.Bytes(), &failure); err != nil {
+		t.Fatalf("json.Unmarshal(stderr) error = %v; stderr = %q", err, stderr.String())
+	}
+	if failure["error_code"] != "internal" || failure["retryable"] != false {
+		t.Fatalf("error payload = %v", failure)
+	}
+}
+
 func TestCLIReceiveRecoveryErrorWritesStructuredJSON(t *testing.T) {
 	recovery := &waypost.ReceiveRecoveryRequiredError{
 		Cause: errors.New("remaining-state query failed"),

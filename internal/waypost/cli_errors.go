@@ -106,24 +106,18 @@ func cliErrorFor(err error) cliErrorDocument {
 	case isSQLiteBusy(err):
 		document.ErrorCode = "busy"
 		document.Retryable = true
-	case errors.Is(err, ErrLeaseNotFound), errors.Is(err, ErrGroupNotFound):
+	case errors.Is(err, ErrLeaseNotFound), errors.Is(err, ErrDeliveryNotFound), errors.Is(err, ErrMessageNotFound), errors.Is(err, ErrGroupNotFound):
 		document.ErrorCode = "not_found"
 	case errors.Is(err, ErrGroupExists), errors.Is(err, ErrActiveMembershipExists), errors.Is(err, ErrActiveSubscriberExists):
 		document.ErrorCode = "already_exists"
 	case errors.Is(err, ErrLeaseExpired), errors.Is(err, ErrLeaseNotLeased), errors.Is(err, ErrLeaseRenewChanged), errors.Is(err, ErrLeaseTokenMismatch), errors.Is(err, ErrActiveMembershipMissing), errors.Is(err, ErrActiveSubscriberMissing), errors.Is(err, ErrAddressReservedByEndpoint), errors.Is(err, ErrAddressReservedByGroup):
 		document.ErrorCode = "invalid_state"
-	case cliNotFoundError(err):
-		document.ErrorCode = "not_found"
 	case cliInvalidStateError(err):
 		document.ErrorCode = "invalid_state"
 	case cliInvalidArgumentError(err):
 		document.ErrorCode = "invalid_argument"
 	}
 	return document
-}
-
-func cliNotFoundError(err error) bool {
-	return strings.Contains(strings.ToLower(err.Error()), "not found")
 }
 
 func cliInvalidStateError(err error) bool {

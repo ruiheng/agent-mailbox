@@ -62,7 +62,7 @@ func PrepareForward(ctx context.Context, reader ForwardSourceReader, label strin
 			return PreparedForward{}, err
 		}
 		if len(messages) != 1 {
-			return PreparedForward{}, fmt.Errorf("%s source message not found: %s", forwardLabel(label), messageID)
+			return PreparedForward{}, missingResourceError(fmt.Sprintf("%s source message not found: %s", forwardLabel(label), messageID), ErrMessageNotFound)
 		}
 		source := messages[0]
 		prepared.SendParams.Subject = buildForwardSubject(source.Subject, params.Subject)
@@ -79,7 +79,7 @@ func PrepareForward(ctx context.Context, reader ForwardSourceReader, label strin
 			return PreparedForward{}, err
 		}
 		if len(deliveries) != 1 {
-			return PreparedForward{}, fmt.Errorf("%s source delivery not found: %s", forwardLabel(label), deliveryID)
+			return PreparedForward{}, missingResourceError(fmt.Sprintf("%s source delivery not found: %s", forwardLabel(label), deliveryID), ErrDeliveryNotFound)
 		}
 		source := deliveries[0]
 		prepared.SendParams.Subject = buildForwardSubject(source.Subject, params.Subject)
