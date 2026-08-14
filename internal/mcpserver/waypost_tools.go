@@ -19,8 +19,10 @@ type waypostBindInput struct {
 }
 
 type waypostStatusInput struct {
-	Limit  *int   `json:"limit,omitempty"`
-	Cursor string `json:"cursor,omitempty"`
+	IncludeDiagnostics  bool   `json:"include_diagnostics,omitempty"`
+	IncludeActiveLeases bool   `json:"include_active_leases,omitempty"`
+	Limit               *int   `json:"limit,omitempty"`
+	Cursor              string `json:"cursor,omitempty"`
 }
 
 type waypostDebugInput struct{}
@@ -142,12 +144,14 @@ func (s *Service) registerWaypostTools(server *mcp.Server) {
 	}, s.waypostBind)
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "waypost_status",
-		Description: "Show bound addresses, defaults, and active personal leases (with tokens) automatically renewed by this MCP server.",
+		Description: "Show compact operational state and the count of active personal leases automatically renewed by this MCP server. Set include_diagnostics or include_active_leases for optional detail.",
 	}, s.waypostStatus)
-	mcp.AddTool(server, &mcp.Tool{
-		Name:        "waypost_debug",
-		Description: "Show read-only MCP and allowlisted session-environment diagnostics without binding or changing state.",
-	}, s.waypostDebug)
+	if s.includeDebugTool {
+		mcp.AddTool(server, &mcp.Tool{
+			Name:        "waypost_debug",
+			Description: "Show read-only MCP and allowlisted session-environment diagnostics without binding or changing state.",
+		}, s.waypostDebug)
+	}
 	addToolRequiringWaypostStatus(server, s, &mcp.Tool{
 		Name:        "waypost_send",
 		Description: "Send a Waypost message; push-notify a non-local target when supported. Set disable_notify_message=true to skip notification.",
@@ -185,9 +189,16 @@ func (s *Service) waypostBind(ctx context.Context, _ *mcp.CallToolRequest, input
 }
 
 func (s *Service) waypostStatus(ctx context.Context, _ *mcp.CallToolRequest, input waypostStatusInput) (*mcp.CallToolResult, map[string]any, error) {
-	pageSize, after, err := normalizeMemoryPage(input.Limit, input.Cursor, "active-leases", "active")
-	if err != nil {
-		return nil, nil, err
+	pageSize := 0
+	after := ""
+	if input.IncludeActiveLeases {
+		var err error
+		pageSize, after, err = normalizeMemoryPage(input.Limit, input.Cursor, "active-leases", "active")
+		if err != nil {
+			return nil, nil, err
+		}
+	} else if input.Limit != nil || input.Cursor != "" {
+		return nil, nil, errors.New("limit and cursor require include_active_leases=true")
 	}
 	bound, err := s.sessions.boundState(ctx)
 	if err != nil {
@@ -202,21 +213,26 @@ func (s *Service) waypostStatus(ctx context.Context, _ *mcp.CallToolRequest, inp
 			return nil, nil, err
 		}
 	}
-	out := boundStateMap(bound)
-	out["server_version"] = serverVersion
+	out := compactWaypostStatusState(bound)
+	if input.IncludeDiagnostics {
+		out = boundStateMap(bound)
+		out["server_version"] = serverVersion
+		out["default_sender"] = orUnset(bound.DefaultSender)
+		out["default_workdir"] = orUnset(bound.DefaultWorkdir)
+	}
 	out["executable"] = executable
 	out["resolved_state_dir"] = stateDir
-	out["default_sender"] = orUnset(bound.DefaultSender)
-	out["default_workdir"] = orUnset(bound.DefaultWorkdir)
 	leases := s.activeLeases.snapshot()
-	activeLeases, nextCursor, err := activeLeaseStatusPage(leases, pageSize, after, "active-leases", "active")
-	if err != nil {
-		return nil, nil, err
-	}
-	out["active_leases"] = activeLeases
 	out["active_lease_count"] = len(leases)
-	if nextCursor != "" {
-		out["next_cursor"] = nextCursor
+	if input.IncludeActiveLeases {
+		activeLeases, nextCursor, err := activeLeaseStatusPage(leases, pageSize, after, "active-leases", "active")
+		if err != nil {
+			return nil, nil, err
+		}
+		out["active_leases"] = activeLeases
+		if nextCursor != "" {
+			out["next_cursor"] = nextCursor
+		}
 	}
 	result, structured, err := s.waypostToolResult(ctx, out)
 	if err != nil {
@@ -224,6 +240,23 @@ func (s *Service) waypostStatus(ctx context.Context, _ *mcp.CallToolRequest, inp
 	}
 	s.markWaypostStatusCalled()
 	return result, structured, nil
+}
+
+func compactWaypostStatusState(bound boundState) map[string]any {
+	out := map[string]any{}
+	if len(bound.BoundAddresses) > 0 {
+		out["bound_addresses"] = bound.BoundAddresses
+	}
+	if defaultSender := strings.TrimSpace(bound.DefaultSender); defaultSender != "" {
+		out["default_sender"] = defaultSender
+	}
+	if defaultWorkdir := strings.TrimSpace(bound.DefaultWorkdir); defaultWorkdir != "" {
+		out["default_workdir"] = defaultWorkdir
+	}
+	if len(bound.Warnings) > 0 {
+		out["warnings"] = bound.Warnings
+	}
+	return out
 }
 
 func activeLeaseStatusPage(leases []activeLease, limit int, after, kind, scope string) ([]map[string]any, string, error) {

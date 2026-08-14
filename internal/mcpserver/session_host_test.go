@@ -307,7 +307,7 @@ func TestNestedThurboxAutoBindingAndManualBindingPrecedence(t *testing.T) {
 		})
 		service.sessions.parentPID = func() int { return 0 }
 
-		status := callServiceTool(t, service, "waypost_status", map[string]any{})
+		status := callServiceTool(t, service, "waypost_status", map[string]any{"include_diagnostics": true})
 		wantAddresses := []any{"thurbox/" + thurboxAuthorID, "agent-deck/outer-agent-deck"}
 		if got := status["bound_addresses"]; !reflect.DeepEqual(got, wantAddresses) {
 			t.Fatalf("bound_addresses = %v, want %v", got, wantAddresses)
@@ -359,7 +359,7 @@ func TestInvalidNestedThurboxIdentityOnlyWarns(t *testing.T) {
 	})
 	service.sessions.parentPID = func() int { return 0 }
 
-	status := callServiceTool(t, service, "waypost_status", map[string]any{})
+	status := callServiceTool(t, service, "waypost_status", map[string]any{"include_diagnostics": true})
 	if got := status["bound_addresses"]; !reflect.DeepEqual(got, []any{"agent-deck/outer-agent-deck"}) {
 		t.Fatalf("invalid Thurbox binding addresses = %v", got)
 	}

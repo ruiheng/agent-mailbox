@@ -143,6 +143,21 @@ func TestWaypostRecvSchemaOmitsTimeout(t *testing.T) {
 	}
 }
 
+func TestWaypostStatusSchemaExposesOptionalDetailControls(t *testing.T) {
+	schema, err := jsonschema.For[waypostStatusInput](nil)
+	if err != nil {
+		t.Fatalf("jsonschema.For() error = %v", err)
+	}
+	for _, field := range []string{"include_diagnostics", "include_active_leases"} {
+		if _, ok := schema.Properties[field]; !ok {
+			t.Fatalf("schema.Properties missing %q: %v", field, schema.Properties)
+		}
+		if slices.Contains(schema.Required, field) {
+			t.Fatalf("required fields = %v, do not want %q", schema.Required, field)
+		}
+	}
+}
+
 func TestActiveLeaseHintIsPaginatedWithoutLosingTotalOrAddressOrder(t *testing.T) {
 	service := newService(Options{
 		WaypostServiceFactory: fakeWaypostServiceFactory{service: &fakeWaypostService{t: t}},
@@ -5947,7 +5962,6 @@ func TestOnlyWaypostToolsRequireWaypostStatus(t *testing.T) {
 	registered := map[string]bool{}
 	statusExempt := map[string]bool{
 		"waypost_status":             true,
-		"waypost_debug":              true,
 		"session_create":             true,
 		"session_require":            true,
 		"agent_deck_create_session":  true,
@@ -5970,8 +5984,47 @@ func TestOnlyWaypostToolsRequireWaypostStatus(t *testing.T) {
 	if !registered["waypost_status"] {
 		t.Fatalf("waypost_status is not registered")
 	}
-	if !registered["waypost_debug"] {
-		t.Fatalf("waypost_debug is not registered")
+	if registered["waypost_debug"] {
+		t.Fatal("waypost_debug is registered without IncludeDebugTool")
+	}
+	want := map[string]bool{
+		"waypost_status":             true,
+		"waypost_bind":               true,
+		"waypost_send":               true,
+		"waypost_recv":               true,
+		"waypost_claim_history":      true,
+		"waypost_ack":                true,
+		"waypost_release":            true,
+		"waypost_defer":              true,
+		"session_create":             true,
+		"session_require":            true,
+		"agent_deck_create_session":  true,
+		"agent_deck_require_session": true,
+	}
+	if !reflect.DeepEqual(registered, want) {
+		t.Fatalf("registered MCP tools = %v, want exactly %v", registered, want)
+	}
+}
+
+func TestWaypostDebugToolIsListedWhenEnabled(t *testing.T) {
+	service := newService(Options{
+		WaypostServiceFactory: fakeWaypostServiceFactory{service: &fakeWaypostService{t: t}},
+		CommandRunner:         &fakeRunner{t: t},
+		IncludeDebugTool:      true,
+		DisableWakeScheduler:  true,
+		DisableLeaseRenewLoop: true,
+	})
+	defer service.Close()
+
+	clientSession, cleanup := connectTestClientSession(t, service.Server(), nil)
+	defer cleanup()
+	tools, err := clientSession.ListTools(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("ListTools() error = %v", err)
+	}
+	registered := map[string]bool{}
+	for _, tool := range tools.Tools {
+		registered[tool.Name] = true
 	}
 	want := map[string]bool{
 		"waypost_status":             true,
@@ -5994,20 +6047,39 @@ func TestOnlyWaypostToolsRequireWaypostStatus(t *testing.T) {
 }
 
 func TestServerInstructionsScopeStatusGateToWaypostTools(t *testing.T) {
-	for _, want := range []string{
-		"Once after this MCP server starts, call waypost_status before the first waypost_* tool other than waypost_debug",
-		"This server automatically renews leases for personal deliveries claimed by waypost_recv until it stops or restarts",
-		"Waypost is for durable asynchronous work, not real-time communication.",
-		"<executable> doc\n",
-		"<executable> doc <topic>...\n",
-		"Use the reported executable and resolved_state_dir for stateful CLI commands; never guess either.",
+	for _, tt := range []struct {
+		name             string
+		includeDebugTool bool
+		statusGate       string
+	}{
+		{
+			name:       "default",
+			statusGate: "Once after this MCP server starts, call waypost_status before the first waypost_* tool.",
+		},
+		{
+			name:             "debug enabled",
+			includeDebugTool: true,
+			statusGate:       "Once after this MCP server starts, call waypost_status before the first waypost_* tool other than waypost_debug.",
+		},
 	} {
-		if !strings.Contains(serverInstructions, want) {
-			t.Fatalf("serverInstructions = %q, want %q", serverInstructions, want)
-		}
-	}
-	if strings.Contains(serverInstructions, "All other tools fail") {
-		t.Fatalf("serverInstructions retains the global status gate: %q", serverInstructions)
+		t.Run(tt.name, func(t *testing.T) {
+			instructions := serverInstructions(tt.includeDebugTool)
+			for _, want := range []string{
+				tt.statusGate,
+				"This server automatically renews leases for personal deliveries claimed by waypost_recv until it stops or restarts",
+				"Waypost is for durable asynchronous work, not real-time communication.",
+				"<executable> doc\n",
+				"<executable> doc <topic>...\n",
+				"Use the reported executable and resolved_state_dir for stateful CLI commands; never guess either.",
+			} {
+				if !strings.Contains(instructions, want) {
+					t.Fatalf("serverInstructions = %q, want %q", instructions, want)
+				}
+			}
+			if strings.Contains(instructions, "All other tools fail") {
+				t.Fatalf("serverInstructions retains the global status gate: %q", instructions)
+			}
+		})
 	}
 }
 
@@ -6028,6 +6100,7 @@ func TestWaypostDebugWorksBeforeStatusAndDoesNotAutoBind(t *testing.T) {
 	service := newService(Options{
 		WaypostServiceFactory: fakeWaypostServiceFactory{service: &fakeWaypostService{t: t}},
 		CommandRunner:         runner,
+		IncludeDebugTool:      true,
 		DisableWakeScheduler:  true,
 		DisableLeaseRenewLoop: true,
 	})
@@ -6489,7 +6562,7 @@ func TestWaypostStatusIgnoresInvalidToolSessionEnvValues(t *testing.T) {
 		DisableLeaseRenewLoop: true,
 	})
 
-	status := callServiceTool(t, service, "waypost_status", nil)
+	status := callServiceTool(t, service, "waypost_status", map[string]any{"include_diagnostics": true})
 	if got := status["bound_addresses"]; got != nil && !reflect.DeepEqual(got, []any{}) {
 		t.Fatalf("bound_addresses = %#v, want no env auto-bind", got)
 	}
@@ -6719,7 +6792,7 @@ func TestAutoBindFindsClaudeCodeSessionFromEnv(t *testing.T) {
 				DisableWakeScheduler:  true,
 				DisableLeaseRenewLoop: true,
 			})
-			status := callServiceTool(t, service, "waypost_status", nil)
+			status := callServiceTool(t, service, "waypost_status", map[string]any{"include_diagnostics": true})
 
 			if got := status["default_sender"]; got != tt.wantDefaultSender {
 				t.Fatalf("default_sender = %v, want %v", got, tt.wantDefaultSender)
@@ -6765,7 +6838,7 @@ func TestAutoBindFindsAgentDeckSessionFromCodexStateDB(t *testing.T) {
 		DisableWakeScheduler:  true,
 		DisableLeaseRenewLoop: true,
 	})
-	status := callServiceTool(t, service, "waypost_status", nil)
+	status := callServiceTool(t, service, "waypost_status", map[string]any{"include_diagnostics": true})
 
 	if got := status["default_sender"]; got != "agent-deck/deck-session-1" {
 		t.Fatalf("default_sender = %v, want agent-deck/deck-session-1", got)
@@ -6806,7 +6879,7 @@ func TestAutoBindPrefersCodexLinkedAgentDeckSessionOverAmbientCurrent(t *testing
 		DisableWakeScheduler:  true,
 		DisableLeaseRenewLoop: true,
 	})
-	status := callServiceTool(t, service, "waypost_status", nil)
+	status := callServiceTool(t, service, "waypost_status", map[string]any{"include_diagnostics": true})
 
 	if got := status["default_sender"]; got != "agent-deck/deck-session-1" {
 		t.Fatalf("default_sender = %v, want agent-deck/deck-session-1", got)
@@ -6857,7 +6930,7 @@ func TestAutoBindDoesNotChooseAgentDeckSessionFromStateDBByWorkdirAlone(t *testi
 	service.sessions.parentPID = func() int { return 1 }
 	service.state.defaultWorkdir = workdir
 
-	status := callServiceTool(t, service, "waypost_status", nil)
+	status := callServiceTool(t, service, "waypost_status", map[string]any{"include_diagnostics": true})
 	if got := status["bound_addresses"]; got != nil && !reflect.DeepEqual(got, []any{}) {
 		t.Fatalf("bound_addresses = %v, want empty without current agent-deck session signal", got)
 	}
@@ -6896,7 +6969,7 @@ func TestAutoBindComplementsCurrentAgentDeckSessionFromStateDBByWorkdir(t *testi
 	service.sessions.parentPID = func() int { return 1 }
 	service.state.defaultWorkdir = workdir
 
-	status := callServiceTool(t, service, "waypost_status", nil)
+	status := callServiceTool(t, service, "waypost_status", map[string]any{"include_diagnostics": true})
 	wantAddresses := []any{"agent-deck/deck-session-1", "codex/0123456789abcdef"}
 	if !reflect.DeepEqual(status["bound_addresses"], wantAddresses) {
 		t.Fatalf("bound_addresses = %v, want %v", status["bound_addresses"], wantAddresses)
@@ -6998,7 +7071,7 @@ func TestAutoBindFindsCurrentSessionWhenNewerCodexSessionSharesWorkdir(t *testin
 	service.sessions.parentPID = func() int { return 1 }
 	service.state.defaultWorkdir = workdir
 
-	status := callServiceTool(t, service, "waypost_status", nil)
+	status := callServiceTool(t, service, "waypost_status", map[string]any{"include_diagnostics": true})
 	wantAddresses := []any{"agent-deck/deck-session-1", "codex/0123456789abcdef"}
 	if !reflect.DeepEqual(status["bound_addresses"], wantAddresses) {
 		t.Fatalf("bound_addresses = %v, want %v", status["bound_addresses"], wantAddresses)
@@ -7037,13 +7110,13 @@ func TestAutoBindDoesNotRetryStateDBAfterEmptyResultWithoutAgentDeckSignal(t *te
 	service.sessions.parentPID = func() int { return 1 }
 	service.state.defaultWorkdir = workdir
 
-	first := callServiceTool(t, service, "waypost_status", nil)
+	first := callServiceTool(t, service, "waypost_status", map[string]any{"include_diagnostics": true})
 	if got := first["bound_addresses"]; got != nil && !reflect.DeepEqual(got, []any{}) {
 		t.Fatalf("first bound_addresses = %#v, want empty", got)
 	}
 
 	writeAgentDeckStateDB(t, home, "work", "deck-session-1", workdir, "0123456789abcdef")
-	second := callServiceTool(t, service, "waypost_status", nil)
+	second := callServiceTool(t, service, "waypost_status", map[string]any{"include_diagnostics": true})
 	if got := second["bound_addresses"]; got != nil && !reflect.DeepEqual(got, []any{}) {
 		t.Fatalf("second bound_addresses = %#v, want empty without current agent-deck session signal", got)
 	}
@@ -7081,7 +7154,7 @@ func TestAutoBindRetriesAgentDeckStateDBAfterAgentDeckOnlyResult(t *testing.T) {
 	service.sessions.parentPID = func() int { return 1 }
 	service.state.defaultWorkdir = workdir
 
-	first := callServiceTool(t, service, "waypost_status", nil)
+	first := callServiceTool(t, service, "waypost_status", map[string]any{"include_diagnostics": true})
 	wantFirst := []any{"agent-deck/deck-session-1"}
 	if !reflect.DeepEqual(first["bound_addresses"], wantFirst) {
 		t.Fatalf("first bound_addresses = %v, want %v", first["bound_addresses"], wantFirst)
@@ -7091,7 +7164,7 @@ func TestAutoBindRetriesAgentDeckStateDBAfterAgentDeckOnlyResult(t *testing.T) {
 	}
 
 	writeAgentDeckStateDB(t, home, "work", "deck-session-1", workdir, "0123456789abcdef")
-	second := callServiceTool(t, service, "waypost_status", nil)
+	second := callServiceTool(t, service, "waypost_status", map[string]any{"include_diagnostics": true})
 	wantSecond := []any{"agent-deck/deck-session-1", "codex/0123456789abcdef"}
 	if !reflect.DeepEqual(second["bound_addresses"], wantSecond) {
 		t.Fatalf("second bound_addresses = %v, want %v", second["bound_addresses"], wantSecond)
@@ -7187,7 +7260,7 @@ func TestAutoBindRetriesAgentDeckAfterCodexOnlyFallback(t *testing.T) {
 	if got := recv["warnings"]; got != nil {
 		t.Fatalf("recv warnings = %v, want nil after agent-deck retry succeeds", got)
 	}
-	status = callServiceTool(t, service, "waypost_status", nil)
+	status = callServiceTool(t, service, "waypost_status", map[string]any{"include_diagnostics": true})
 	if got := status["default_sender"]; got != "agent-deck/deck-session-1" {
 		t.Fatalf("upgraded default_sender = %v, want agent-deck/deck-session-1", got)
 	}
@@ -7361,7 +7434,7 @@ func TestWaypostBindDisablesAgentDeckRetryUpgrade(t *testing.T) {
 		t.Fatalf("waypost_bind default_sender = %v, want codex/manual", got)
 	}
 
-	status = callServiceTool(t, service, "waypost_status", nil)
+	status = callServiceTool(t, service, "waypost_status", map[string]any{"include_diagnostics": true})
 	if got := status["default_sender"]; got != "codex/manual" {
 		t.Fatalf("status default_sender = %v, want codex/manual", got)
 	}

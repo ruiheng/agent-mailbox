@@ -226,34 +226,24 @@ command = "C:\\absolute\\path\\to\\waypost\\bin\\waypost.exe"
 args = ["mcp"]
 ```
 
-The Go MCP entrypoint exposes these Waypost tool names:
+The default Go MCP entrypoint exposes these Waypost tools:
 
 - `waypost_bind`
 - `waypost_status`
 - `waypost_send`
-- `waypost_forward`
-- `waypost_wait`
 - `waypost_recv`
-- `waypost_list`
-- `waypost_read`
+- `waypost_claim_history`
 - `waypost_ack`
 - `waypost_release`
 - `waypost_defer`
-- `waypost_undefer`
-- `waypost_fail`
-- `waypost_debug`
-- `waypost_group_create`
-- `waypost_group_add_member`
-- `waypost_group_remove_member`
-- `waypost_group_members`
-- `waypost_group_add_subscriber`
-- `waypost_group_remove_subscriber`
-- `waypost_group_subscribers`
-- `waypost_address_inspect`
 - `agent_deck_create_session`
 - `agent_deck_require_session`
 - `session_create`
 - `session_require`
+
+`waypost_debug` is intentionally absent from that default surface. Start the
+server as `waypost mcp --include-debug-tool` only when its read-only
+environment diagnostics are needed.
 
 The host-neutral `session_create` tool takes the caller-supplied optional
 strings `full_command_line` (Agent Deck) and `thurbox_agent_key` (Thurbox).
@@ -274,8 +264,15 @@ already known, it can also use the agent-deck state database to fill in a Codex
 thread synced later for that same workdir and session.
 That yields addresses such as `agent-deck/<session-id>`, `codex/<session-id>`,
 `claude/<session-id>`, `gemini/<session-id>`, and `opencode/<session-id>`.
-Except for `waypost_debug`, all other Waypost tools fail until
-`waypost_status` succeeds, so callers get the
+`waypost_status` returns compact operational state by default, including the
+authoritative executable and resolved state directory, binding state when
+present, actionable warnings, and an active-lease count. Set
+`include_diagnostics: true` to include detection and version fields, or
+`include_active_leases: true` to include paginated lease details and tokens.
+Use `limit` and `cursor` only with active lease details.
+
+All default Waypost tools other than `waypost_status` fail until it succeeds,
+so callers get the
 current binding state and any recovery warnings before they read, send, claim,
 ack, or alter waypost state. If auto-bind cannot find a supported tool session
 address, call `waypost_status` again after agent-deck has synced state for the
@@ -283,9 +280,10 @@ current session or call `waypost_bind` manually.
 Tool session environment variable values must look like hex session ids; invalid
 values are ignored and reported in the `waypost_status` warnings.
 
-Use `waypost_debug` before or after `waypost_status` when auto-bind behavior is
-unclear. It is read-only, does not auto-bind, and reports only allowlisted tool
-session environment diagnostics for `CODEX_THREAD_ID`,
+When `waypost mcp --include-debug-tool` is in use, `waypost_debug` may run
+before or after `waypost_status` when auto-bind behavior is unclear. It is
+read-only, does not auto-bind, and reports only allowlisted tool session
+environment diagnostics for `CODEX_THREAD_ID`,
 `CLAUDE_CODE_SESSION_ID`, `GEMINI_SESSION_ID`, and `OPENCODE_SESSION_ID`,
 including whether each value is present, accepted by validation, and what
 address it would produce. Its broader debug environment diagnostics also include
@@ -297,30 +295,11 @@ omitted a variable or failed to pass it into the MCP process.
 paths. Set `disable_notify_message = true` to skip only that immediate send-time
 notify.
 
-For MCP receivers that need to block until work appears, use `waypost_wait`
-with a `timeout` such as `30s`, then call `waypost_recv` to claim the
-delivery. `waypost_wait` is observe-only. `waypost_recv` has no `timeout`
-parameter and returns immediately, so an abandoned long-running wait cannot
-claim delivery into an unreachable result.
-
-`waypost_forward` forwards exactly one stored message selected by `message_id`
-or `delivery_id` to a new recipient through the normal `waypost_send` path. It
-reuses the original body, `content_type`, and `schema_version`.
-
-For group waypost flows over MCP, create a group with
-`waypost_group_create`, manage people with `waypost_group_add_member` and
-`waypost_group_remove_member`, then call `waypost_send` with `group = true`.
-Use `waypost_wait` or `waypost_recv` with one `group/...` address and
-`as_person` to read the group stream. Group reads return compact group message
-payloads and do not use delivery leases, `waypost_ack`, `waypost_release`,
-`waypost_defer`, `waypost_undefer`, or `waypost_fail`.
-
-Use `waypost_group_add_subscriber` to register a routable notify target such as
-`agent-deck/<session-id>` for group-message wakeups. Group send queues a normal
-personal delivery for active subscribers whose `person` is a current group
-member, skips a subscriber whose `notify_address` matches the sender's
-`from_address`, rejects group-prefixed notify targets, and keeps immediate
-external wake notification failure best-effort.
+For a blocking receive, forwarding, group work, or durable inspection that is
+not on the retained MCP surface, use the reported CLI binary and state
+directory. `waypost wait --json` observes work without claiming it; after it
+returns a message, call MCP `waypost_recv` to claim a personal delivery. See
+[`docs/cli.md`](docs/cli.md) for the CLI forms and group behavior.
 
 `agent_deck_create_session` is for lifecycle allocation only. It creates a new
 session, errors if the target already exists, supports explicit group placement

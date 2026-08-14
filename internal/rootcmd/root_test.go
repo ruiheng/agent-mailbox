@@ -97,6 +97,9 @@ func TestRunMCPHelp(t *testing.T) {
 	if !strings.Contains(stdout.String(), "deprecated; accepted and ignored") {
 		t.Fatalf("mcp help = %q, want deprecated no-op wording", stdout.String())
 	}
+	if !strings.Contains(stdout.String(), "--include-debug-tool") {
+		t.Fatalf("mcp help = %q, want debug tool opt-in", stdout.String())
+	}
 }
 
 func TestRunMigrateMovesLegacyState(t *testing.T) {
@@ -168,6 +171,28 @@ func TestRunMCPForwardsStateDir(t *testing.T) {
 	}
 }
 
+func TestRunMCPForwardsDebugToolOptIn(t *testing.T) {
+	t.Parallel()
+
+	var gotOptions mcpserver.Options
+	app := &App{
+		stdin:  strings.NewReader(""),
+		stdout: &bytes.Buffer{},
+		stderr: &bytes.Buffer{},
+		runMCP: func(_ context.Context, options mcpserver.Options) error {
+			gotOptions = options
+			return nil
+		},
+	}
+
+	if err := app.Run(context.Background(), []string{"mcp", "--include-debug-tool"}); err != nil {
+		t.Fatalf("Run(mcp --include-debug-tool) error = %v", err)
+	}
+	if !gotOptions.IncludeDebugTool {
+		t.Fatalf("mcp options = %#v, want IncludeDebugTool", gotOptions)
+	}
+}
+
 func TestRunMCPAcceptsDeprecatedSessionHostConfigWithoutReading(t *testing.T) {
 	configPath := filepath.Join(t.TempDir(), "does-not-exist.json")
 	started := false
@@ -190,6 +215,9 @@ func TestRunMCPAcceptsDeprecatedSessionHostConfigWithoutReading(t *testing.T) {
 	}
 	if gotOptions.StateDir != "" {
 		t.Fatalf("deprecated flag altered MCP options: %#v", gotOptions)
+	}
+	if gotOptions.IncludeDebugTool {
+		t.Fatalf("deprecated flag enabled debug tool: %#v", gotOptions)
 	}
 }
 
