@@ -15,12 +15,15 @@ leaving `Store.Send` as the one-recipient, one-transaction primitive.
   `to_addresses`, including a one-element array, selects the batch contract.
 - Normalize all batch recipients before the first write, preserve first-seen
   order, and discard duplicate normalized addresses after their first
-  occurrence. Apply the existing 100-item adapter limit to the raw list before
-  deduplication.
+  occurrence. Apply a send-specific 10-target limit to the raw list before
+  deduplication so persistence and synchronous notification work remain bounded.
 - Execute unique recipients sequentially. Each item calls the existing
   `Store.Send` and, after durable success, the existing notification path.
   Continue after a per-recipient durable-send error so every requested unique
   recipient has an ordered outcome.
+- Treat request-context cancellation as a batch-wide stop signal. Before each
+  new target, stop if the context is canceled; keep prior commits and never
+  synthesize failed results for targets that were not attempted.
 - Do not add a cross-recipient transaction, shared broadcast record, new group
   model, or batch method on `Store`.
 
@@ -66,7 +69,9 @@ The change does not:
   durable success.
 - `internal/waypost/address.go:NormalizeAddressList` and repeatable
   `stringListFlag` users establish first-occurrence ordering and normalized
-  deduplication. `MaxInputItems` establishes a 100-item adapter fan-out limit.
+  deduplication. The repository-wide `MaxInputItems` ceiling is 100, but send
+  needs the tighter `MaxSendRecipients = 10` limit because every target can
+  perform durable writes and synchronous notification work.
 - `internal/mcpserver/session_tools.go` establishes the batch convention of
   continuing after an item error and returning ordered outcomes.
 
@@ -120,7 +125,7 @@ type waypostSendInput struct {
 The registered input schema must express an exclusive choice:
 
 - `to_address`: non-batch, legacy form;
-- `to_addresses`: batch form with `minItems: 1` and `maxItems: 100`;
+- `to_addresses`: batch form with `minItems: 1` and `maxItems: 10`;
 - both or neither: invalid tool arguments before the Waypost service is opened;
 - an empty string or an invalid item: normal address validation error.
 
@@ -148,8 +153,9 @@ func NormalizeSendRecipients(values []string, group bool) ([]string, error)
 
 It performs, in order:
 
-1. Reject more than `MaxInputItems` raw values. Counting before deduplication
-   prevents duplicate-heavy input from bypassing the adapter limit.
+1. Reject more than `MaxSendRecipients` raw values, where
+   `MaxSendRecipients = 10`. Counting before deduplication prevents
+   duplicate-heavy input from bypassing the send limit.
 2. Require at least one value.
 3. Normalize every value with `NormalizeAddress` before any durable call.
 4. Deduplicate by normalized string while retaining the first occurrence and
@@ -207,7 +213,7 @@ func ExecuteSendBatch(
     base SendParams,
     recipients []string,
     notify SendBatchNotifier,
-) SendBatchResult
+) (SendBatchResult, error)
 ```
 
 Exact names may follow local naming style, but the ownership and behavior must
@@ -219,19 +225,33 @@ Execution is sequential in normalized first-seen order:
 
 ```text
 for recipient in recipients:
+    if ctx is canceled:
+        return results_so_far, ctx_error
     params = copy(base); params.ToAddress = recipient
     result, err = sender.Send(ctx, params)
     if err:
+        if ctx is canceled:
+            return results_so_far, ctx_error
         append failed item; continue
     if notify is configured:
         outcome = notify(ctx, {Params: params, Result: result})
     append sent item with optional notification outcome
+return completed_results, nil
 ```
 
 Sequential execution is deliberate: it gives deterministic call and wake order,
 avoids adding database contention, and most closely models repeated current
 calls. The existing group notifier may still fan out to a group's subscribers
 with its current internal concurrency.
+
+Context cancellation is batch-wide rather than a per-recipient durable failure.
+The helper checks `ctx.Err()` before every new `Store.Send` and again when a send
+returns an error, closing the race where cancellation arrives during the call.
+It returns the internal results accumulated so far together with the context
+error. CLI and MCP propagate that cancellation error instead of serializing a
+normal batch envelope: prior successful sends remain committed, the current
+transaction follows existing `Store.Send` cancellation semantics, and later
+targets are unattempted rather than reported as `failed`.
 
 ### Durable semantics
 
@@ -364,6 +384,7 @@ Use quoted formatting for error text.
 | Service/runtime cannot open or sender resolution fails | none | none attempted | existing error, exit 1 | tool error |
 | One `Store.Send` fails | earlier commits remain | continue sequentially | complete envelope on stdout, exit 1 | successful tool result with `partial_failed` or `failed` and per-item errors |
 | One notification fails after send | that send remains committed | continue | item remains sent; exit 0 if all durable calls succeeded | item remains sent; outer durable status unchanged |
+| Request context is canceled | earlier commits remain | stop before the next target; do not synthesize results for unattempted targets | cancellation error, no normal batch envelope | canceled tool call/error, no normal batch result |
 | Output serialization/write fails | all completed sends remain | execution has already completed | output error, exit 1; do not retry automatically | normal MCP serialization error; completed sends remain |
 | Process dies mid-loop | completed transactions remain | unknown/unattempted | no atomic recovery claim | no atomic recovery claim |
 
@@ -481,13 +502,19 @@ successful batch item and retains its current personal and group behavior.
 ### Shared orchestration
 
 - preserves normalized first-seen order;
-- rejects zero and more than 100 raw recipients;
+- rejects zero and more than 10 raw recipients;
 - deduplicates exact and whitespace-normalized duplicates;
 - rejects any invalid address before the fake sender is called;
 - enforces all-personal or all-group mode before the first call;
 - calls the sender sequentially with identical base metadata and a different
   `ToAddress`;
 - continues to item three when item two fails;
+- cancellation before the first target makes no sender call;
+- cancellation between targets preserves accumulated results internally, stops
+  before the next sender call, and returns the context error without creating
+  synthetic failed items;
+- cancellation observed when a sender returns an error stops the batch rather
+  than treating that error as an ordinary per-recipient failure;
 - calls the notifier only for successful durable items and immediately after
   each success;
 - notification failure does not alter sent/failed counts.
@@ -503,19 +530,21 @@ successful batch item and retains its current personal and group behavior.
 - raw duplicates select batch mode but produce only one durable send/result;
 - a comma-containing single value is never split into multiple targets;
 - an invalid later recipient, empty body, invalid sender, mixed group/personal
-  list, or 101 raw flags creates no durable records;
+  list, or 11 raw flags creates no durable records;
 - two existing groups each get an independent group message;
 - an existing group, a missing group, and another existing group demonstrate a
   mid-batch store failure, continued execution, ordered results, retained first
   and third messages, stdout envelope, and exit 1;
 - `--notify` calls once per durable success, reports each outcome, and remains
-  exit 0 when only notification fails.
+  exit 0 when only notification fails;
+- a canceled direct `App` context propagates the context error, writes no normal
+  batch envelope, and performs no sender call after cancellation is observed.
 
 ### MCP
 
 - schema exposes both selectors with exact-one semantics and array bounds;
 - legacy `to_address` success/error output is unchanged;
-- both selectors, neither selector, an empty array, or more than 100 items fail
+- both selectors, neither selector, an empty array, or more than 10 items fail
   before opening/calling the sender;
 - `to_addresses` with one item still returns a batch envelope;
 - sender resolution and Waypost service open occur once per batch;
@@ -524,6 +553,8 @@ successful batch item and retains its current personal and group behavior.
 - fake failure at the middle target does not prevent the final call and returns
   `partial_failed` with the failed item's error;
 - all durable failures return outer `failed` as a successful MCP batch result;
+- request cancellation between targets returns a canceled tool call/error,
+  preserves earlier durable sends, and makes no later sender call;
 - notification failure, disabled notification, local target, unsupported target,
   already-claimed delivery, and group subscriber fan-out preserve current
   per-send outcomes;
@@ -542,8 +573,8 @@ Run `gofmt` on changed Go files, focused package tests for
 - **Partial retry duplicates earlier successes.** Ordered receipts, explicit
   aggregate status, exit semantics, and documentation require retrying only
   failed addresses.
-- **A batch can take longer because notifications are sequential.** This is the
-  closest semantic match to repeated sends and keeps ordering deterministic;
+- **Sequential notifications add to batch duration.** The accepted 10-target
+  limit bounds that work while preserving deterministic repeated-send order;
   the existing per-group subscriber fan-out remains concurrent.
 - **Schema clients must understand the new exact-one choice.** Keep
   `to_address` unchanged, express the choice in JSON Schema and the tool
@@ -577,7 +608,8 @@ Run `gofmt` on changed Go files, focused package tests for
 ## Acceptance criteria
 
 The feature is complete when one CLI invocation or one MCP call can target up
-to 100 raw recipient values, returns ordered outcomes for unique normalized
+to 10 raw recipient values, returns ordered outcomes for unique normalized
 targets, preserves each successful send and notification's current semantics,
-exposes partial durable failures without stopping later targets, and leaves all
-legacy single-recipient contracts and unrelated operations unchanged.
+exposes partial durable failures without stopping later targets, stops before a
+new target when request cancellation is observed, and leaves all legacy
+single-recipient contracts and unrelated operations unchanged.
