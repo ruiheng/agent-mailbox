@@ -104,8 +104,8 @@ Before deletion:
 - add group subscriber add, remove, and list CLI commands
 - add structured JSON output to `undefer` and `fail`
 - preserve acknowledged-message recovery through `read --latest --state acked`
-- make `waypost_status` report the exact executable and resolved state
-  directory used by the MCP process
+- make `waypost_status` report, when `include_cli_context` is requested, the
+  exact executable and resolved state directory used by the MCP process
 - prove an agent can call status and use those reported values to execute a
   removed operation through CLI
 - freeze success, empty-result, ordering, error, exit-code, and stream behavior
@@ -195,19 +195,19 @@ Tests assert the exact twelve default tool names and the thirteen names when
 the debug flag is enabled. A removed tool appearing in either MCP list is a
 test failure.
 
-Default `waypost_status` returns compact operational state needed to use CLI
-against the same Waypost state:
+Default `waypost_status` returns compact operational and binding state:
 
 ```json
 {
-  "executable": "/absolute/path/to/waypost",
-  "resolved_state_dir": "/absolute/path/to/state",
+  "status": "ready",
   "bound_addresses": ["ADDRESS"],
-  "default_sender": "ADDRESS",
-  "active_lease_count": 1
+  "default_sender": "ADDRESS"
 }
 ```
 
+`active_lease_count` is added only when non-zero (or when active lease detail
+is requested). `include_cli_context: true` adds `executable` and
+`resolved_state_dir` for CLI-owned operations.
 `include_diagnostics: true` adds version and session-detection fields.
 `include_active_leases: true` adds paginated lease details and tokens; `limit`
 and `cursor` apply only to that opt-in detail:
@@ -270,7 +270,6 @@ Received:
 ```json
 {
   "status": "received",
-  "addresses": ["ADDRESS"],
   "delivery": {
     "delivery_id": "dlv_...",
     "recipient_address": "ADDRESS",
@@ -278,9 +277,7 @@ Received:
     "subject": "subject",
     "content_type": "text/plain",
     "body": "body"
-  },
-  "remaining_by_state": {"queued": 2, "leased": 1},
-  "warnings": []
+  }
 }
 ```
 
@@ -288,10 +285,7 @@ No message:
 
 ```json
 {
-  "status": "no_message",
-  "addresses": ["ADDRESS"],
-  "remaining_by_state": {"queued": 2},
-  "warnings": []
+  "status": "no_message"
 }
 ```
 
@@ -300,18 +294,15 @@ Active leases:
 ```json
 {
   "status": "active_leases",
-  "addresses": ["ADDRESS"],
   "active_lease_count": 1,
-  "claimed_delivery_ids": ["dlv_..."],
-  "known_delivery_ids": [],
-  "claim_history_tool": "waypost_claim_history",
-  "remaining_by_state": {"leased": 1},
-  "warnings": []
+  "claimed_delivery_ids": ["dlv_..."]
 }
 ```
 
-`remaining_by_state` is a top-level sibling of the status-specific payload.
-Existing active-lease hints remain.
+Set `include_details: true` to add resolved `addresses` and sparse
+`remaining_by_state`. Warnings remain present only when actionable. Returned
+input echoes, derivable counts, tool-name pointers, and repeated usage prose
+are not part of the response contract.
 
 ### CLI personal receive
 
@@ -355,7 +346,8 @@ CLI no-message returns exit `2`, empty stderr, and:
 - future-visible deferred deliveries remain `queued`
 - omit zero-valued keys
 - omit the whole map when all counts are zero
-- include the map on MCP `received`, `no_message`, and `active_leases`
+- include the map on MCP `received`, `no_message`, and `active_leases` only
+  when `include_details` is requested
 - include the map on CLI `received` and `no_message`
 - never interpret `queued` as claimable-now work; only `recv` or `wait`
   answers availability
@@ -426,10 +418,7 @@ MCP tracks and renews every unreleased claim before returning:
 ```json
 {
   "status": "receive_recovery_required",
-  "addresses": ["ADDRESS"],
-  "error_code": "receive_recovery_required",
   "message": "remaining-state query failed and claim rollback was incomplete",
-  "remaining_by_state_status": "unavailable",
   "claims": [
     {
       "delivery_id": "dlv_...",
@@ -437,11 +426,14 @@ MCP tracks and renews every unreleased claim before returning:
       "recipient_address": "ADDRESS",
       "lease_expires_at": "RFC3339"
     }
-  ],
-  "claim_history_tool": "waypost_claim_history",
-  "release_tool": "waypost_release"
+  ]
 }
 ```
+
+With `include_details`, MCP also returns `addresses` and
+`remaining_by_state_status: "unavailable"`. Recovery instructions live in the
+tool description rather than being repeated as tool-name fields in every
+response.
 
 CLI returns exit `1`, empty stdout, and the normal JSON error document with:
 
@@ -468,17 +460,23 @@ CLI returns exit `1`, empty stdout, and the normal JSON error document with:
 The caller releases every listed claim before another receive. It must not ack,
 defer, or fail a claim without the missing message context.
 
-`remaining_by_state` omission means zero only for normal receive statuses.
-Recovery results explicitly report `remaining_by_state_status: "unavailable"`.
+When details are requested, `remaining_by_state` omission means zero only for
+normal receive statuses. Detailed recovery results explicitly report
+`remaining_by_state_status: "unavailable"`.
 
 ### Group receive
 
 Group receive marks one group message read for one person and does not use
 personal delivery states.
 
-MCP and CLI use the same `status`, `addresses`, `as_person`, and `message`
-fields. CLI no-message returns exit `2` with a `status: "no_message"` JSON
-document.
+MCP returns `status` plus `message` when received; `include_details` adds the
+resolved `addresses` and `as_person`. CLI retains its `status`, `addresses`,
+`as_person`, and `message` contract. CLI no-message returns exit `2` with a
+`status: "no_message"` JSON document.
+
+The default MCP group message keeps `message_id`, sender/forwarding identity
+when present, `subject`, `content_type`, and `body`. `include_details` restores
+group identity, creation/read timestamps, and eligibility/read counts.
 
 Group receive never returns `remaining_by_state`, `has_more`, or another
 remaining-count field.

@@ -343,7 +343,7 @@ Notes:
 - use the main `waypost` binary in MCP configs and pass `mcp` as the first argument
 - `--state-dir` remains a global option on the main binary, but the MCP server manages waypost state through its own tool calls rather than per-command CLI flags
 - `waypost_debug` is absent by default; `--include-debug-tool` registers it without changing the normal status gate for other Waypost tools
-- `waypost_status` returns compact operational state by default. Set `include_diagnostics: true` for detection and version data, or `include_active_leases: true` for paginated lease details and tokens; use `limit` and `cursor` only with lease details
+- `waypost_status` returns compact binding state by default. Set `include_cli_context: true` for the executable and resolved state directory, `include_diagnostics: true` for detection and version data, or `include_active_leases: true` for paginated lease details and tokens; use `limit` and `cursor` only with lease details
 
 ### `doc`
 

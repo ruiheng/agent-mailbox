@@ -296,11 +296,13 @@ before advancing to the next recipient.
 When CLI receives one `--to`, retain the current text, JSON, and YAML projections
 exactly, including compact/full and `--notify` variants.
 
-When MCP receives `to_address`, retain the current result map exactly, including
-`status`, effective `from_address`, normalized `to_address`, `subject`, durable
-receipt fields, and `notify_*` fields. Existing durable-send errors remain MCP
-tool errors with no receipt. The MCP `waypost_forward` implementation continues
-to construct this single form internally and is unchanged in scope and output.
+When MCP receives `to_address`, use the compact send contract: `status`, the
+durable receipt, `notify_status`, and `notify_error` only when notification
+fails. `include_details: true` adds effective routing, notification scheme, and
+group storage metadata. `subject` and normalized `to_address` are input echoes
+and are not returned. Existing durable-send errors remain MCP tool errors with
+no receipt. The MCP `waypost_forward` implementation continues to construct the
+single internal form and is unchanged in scope and output.
 
 ### Batch structured output
 
@@ -320,17 +322,13 @@ successful item:
       "to_address": "agent-deck/alpha",
       "status": "sent",
       "delivery_id": "dlv_...",
-      "notify_status": "sent",
-      "notify_scheme": "agent-deck",
-      "notify_error": null
+      "notify_status": "sent"
     },
     {
       "to_address": "agent-deck/beta",
       "status": "failed",
       "error": "commit send transaction: ...",
-      "notify_status": "not_attempted",
-      "notify_scheme": null,
-      "notify_error": null
+      "notify_status": "not_attempted"
     }
   ]
 }

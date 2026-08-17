@@ -20,6 +20,7 @@ type waypostBindInput struct {
 
 type waypostStatusInput struct {
 	IncludeDiagnostics  bool   `json:"include_diagnostics,omitempty"`
+	IncludeCLIContext   bool   `json:"include_cli_context,omitempty"`
 	IncludeActiveLeases bool   `json:"include_active_leases,omitempty"`
 	Limit               *int   `json:"limit,omitempty"`
 	Cursor              string `json:"cursor,omitempty"`
@@ -37,6 +38,7 @@ type waypostSendInput struct {
 	SchemaVersion        string `json:"schema_version,omitempty"`
 	DisableNotifyMessage *bool  `json:"disable_notify_message,omitempty"`
 	Group                bool   `json:"group,omitempty"`
+	IncludeDetails       bool   `json:"include_details,omitempty"`
 	forwardedMessageID   string
 	forwardedFromAddress string
 }
@@ -62,6 +64,7 @@ type waypostRecvInput struct {
 	AsPerson          string   `json:"as_person,omitempty"`
 	KnownDeliveryIDs  []string `json:"known_delivery_ids,omitempty"`
 	ActiveLeaseCursor string   `json:"active_lease_cursor,omitempty"`
+	IncludeDetails    bool     `json:"include_details,omitempty"`
 }
 
 type waypostClaimHistoryInput struct {
@@ -144,7 +147,7 @@ func (s *Service) registerWaypostTools(server *mcp.Server) {
 	}, s.waypostBind)
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "waypost_status",
-		Description: "Show compact operational state and the count of active personal leases automatically renewed by this MCP server. Set include_diagnostics or include_active_leases for optional detail.",
+		Description: "Show compact operational state. Set include_cli_context, include_diagnostics, or include_active_leases only when that detail is needed.",
 	}, s.waypostStatus)
 	if s.includeDebugTool {
 		mcp.AddTool(server, &mcp.Tool{
@@ -154,11 +157,11 @@ func (s *Service) registerWaypostTools(server *mcp.Server) {
 	}
 	addToolRequiringWaypostStatus(server, s, &mcp.Tool{
 		Name:        "waypost_send",
-		Description: "Send a Waypost message; push-notify a non-local target when supported. Set disable_notify_message=true to skip notification.",
+		Description: "Send a Waypost message; push-notify a non-local target when supported. Set disable_notify_message=true to skip notification or include_details=true for low-frequency routing detail.",
 	}, s.waypostSend)
 	addToolRequiringWaypostStatus(server, s, &mcp.Tool{
 		Name:        "waypost_recv",
-		Description: "Immediately claim an available delivery; never blocks. This process's unacknowledged leases return a hint; use known_delivery_ids to suppress known leases. Defaults to all bound addresses; addresses overrides that set for this call. After ack, use the reported CLI to reread persisted deliveries after context loss.",
+		Description: "Immediately claim an available delivery; never blocks. This process's unacknowledged leases return a bounded ID hint; use known_delivery_ids to suppress known leases and include_details=true for address and remaining-state context. On receive_recovery_required, release every returned claim before receiving again. Defaults to all bound addresses; addresses overrides that set for this call.",
 	}, s.waypostRecv)
 	addToolRequiringWaypostStatus(server, s, &mcp.Tool{
 		Name:        "waypost_claim_history",
@@ -204,9 +207,12 @@ func (s *Service) waypostStatus(ctx context.Context, _ *mcp.CallToolRequest, inp
 	if err != nil {
 		return nil, nil, err
 	}
-	executable, stateDir, err := s.executableAndStateDir()
-	if err != nil {
-		return nil, nil, err
+	var executable, stateDir string
+	if input.IncludeCLIContext {
+		executable, stateDir, err = s.executableAndStateDir()
+		if err != nil {
+			return nil, nil, err
+		}
 	}
 	if s.activeLeases.hasTrackedLeases() {
 		if err := s.reconcileTrackedLeases(ctx); err != nil {
@@ -220,10 +226,15 @@ func (s *Service) waypostStatus(ctx context.Context, _ *mcp.CallToolRequest, inp
 		out["default_sender"] = orUnset(bound.DefaultSender)
 		out["default_workdir"] = orUnset(bound.DefaultWorkdir)
 	}
-	out["executable"] = executable
-	out["resolved_state_dir"] = stateDir
+	out["status"] = "ready"
+	if input.IncludeCLIContext {
+		out["executable"] = executable
+		out["resolved_state_dir"] = stateDir
+	}
 	leases := s.activeLeases.snapshot()
-	out["active_lease_count"] = len(leases)
+	if len(leases) > 0 || input.IncludeActiveLeases {
+		out["active_lease_count"] = len(leases)
+	}
 	if input.IncludeActiveLeases {
 		activeLeases, nextCursor, err := activeLeaseStatusPage(leases, pageSize, after, "active-leases", "active")
 		if err != nil {
@@ -249,9 +260,6 @@ func compactWaypostStatusState(bound boundState) map[string]any {
 	}
 	if defaultSender := strings.TrimSpace(bound.DefaultSender); defaultSender != "" {
 		out["default_sender"] = defaultSender
-	}
-	if defaultWorkdir := strings.TrimSpace(bound.DefaultWorkdir); defaultWorkdir != "" {
-		out["default_workdir"] = defaultWorkdir
 	}
 	if len(bound.Warnings) > 0 {
 		out["warnings"] = bound.Warnings
@@ -327,23 +335,17 @@ func (s *Service) sendWaypostMessageWithService(ctx context.Context, input waypo
 	}
 
 	notify := s.notifyWaypostSend(ctx, input, sendResult, service)
-	var notifyScheme any
-	if notify.Scheme != "" {
-		notifyScheme = notify.Scheme
-	}
-	var notifyError any
-	if notify.Err != nil {
-		notifyError = notify.Err.Error()
-	}
-
 	out := map[string]any{
 		"status":        "sent",
 		"from_address":  fromAddress,
 		"to_address":    input.ToAddress,
-		"subject":       input.Subject,
 		"notify_status": notify.Status,
-		"notify_scheme": notifyScheme,
-		"notify_error":  notifyError,
+	}
+	if notify.Scheme != "" {
+		out["notify_scheme"] = notify.Scheme
+	}
+	if notify.Err != nil {
+		out["notify_error"] = notify.Err.Error()
 	}
 	if sendResult.Mode == waypost.SendModeGroup {
 		out["mode"] = sendResult.Mode
@@ -352,7 +354,6 @@ func (s *Service) sendWaypostMessageWithService(ctx context.Context, input waypo
 		out["group_address"] = sendResult.GroupAddress
 		out["eligible_count"] = sendResult.EligibleCount
 		out["message_created_at"] = sendResult.MessageCreatedAt
-		out["delivery_id"] = nil
 	} else {
 		out["delivery_id"] = sendResult.DeliveryID
 	}
@@ -421,7 +422,26 @@ func (s *Service) waypostSend(ctx context.Context, _ *mcp.CallToolRequest, input
 	if err != nil {
 		return nil, nil, err
 	}
-	return s.waypostMutationToolResult(ctx, out)
+	return s.waypostMutationToolResult(ctx, compactWaypostSendResult(out, input.IncludeDetails))
+}
+
+func compactWaypostSendResult(out map[string]any, includeDetails bool) map[string]any {
+	if includeDetails {
+		return out
+	}
+	compact := map[string]any{
+		"status":        out["status"],
+		"notify_status": out["notify_status"],
+	}
+	for _, field := range []string{"delivery_id", "message_id", "eligible_count"} {
+		if value := out[field]; value != nil && value != "" {
+			compact[field] = value
+		}
+	}
+	if notifyError := out["notify_error"]; notifyError != nil {
+		compact["notify_error"] = notifyError
+	}
+	return compact
 }
 
 func (s *Service) waypostForward(ctx context.Context, _ *mcp.CallToolRequest, input waypostForwardInput) (*mcp.CallToolResult, map[string]any, error) {
@@ -557,7 +577,7 @@ func (s *Service) waypostRecv(ctx context.Context, _ *mcp.CallToolRequest, input
 		return nil, nil, err
 	}
 	if person := strings.TrimSpace(input.AsPerson); person != "" {
-		return s.waypostRecvGroup(ctx, addresses, person)
+		return s.waypostRecvGroup(ctx, addresses, person, input.IncludeDetails)
 	}
 	if err := s.reconcileTrackedLeases(ctx); err != nil {
 		return nil, nil, err
@@ -568,25 +588,28 @@ func (s *Service) waypostRecv(ctx context.Context, _ *mcp.CallToolRequest, input
 		return nil, nil, err
 	}
 	if activeLeasePage.Total > 0 {
-		remainingByState, err := s.remainingByState(ctx, addresses, nil)
-		if err != nil {
-			return nil, nil, err
+		var remainingByState map[string]int
+		if input.IncludeDetails {
+			remainingByState, err = s.remainingByState(ctx, addresses, nil)
+			if err != nil {
+				return nil, nil, err
+			}
 		}
 		out := map[string]any{
-			"status":                 "active_leases",
-			"addresses":              addresses,
-			"active_lease_count":     activeLeasePage.Total,
-			"returned_lease_count":   len(activeLeasePage.DeliveryIDs),
-			"claimed_delivery_ids":   activeLeasePage.DeliveryIDs,
-			"known_delivery_ids":     normalizedKnownDeliveryIDs(input.KnownDeliveryIDs),
-			"claim_history_tool":     "waypost_claim_history",
-			"known_delivery_id_hint": "Use active_lease_cursor to continue this bounded hint. If you are already handling returned deliveries, known_delivery_ids can suppress up to 100 IDs. If you lost a lease token, call waypost_claim_history with delivery_id and include_lease_token=true.",
-			"warnings":               warnings,
+			"status":               "active_leases",
+			"active_lease_count":   activeLeasePage.Total,
+			"claimed_delivery_ids": activeLeasePage.DeliveryIDs,
+		}
+		if len(warnings) > 0 {
+			out["warnings"] = warnings
 		}
 		if activeLeasePage.NextCursor != "" {
 			out["next_cursor"] = activeLeasePage.NextCursor
 		}
-		if len(remainingByState) > 0 {
+		if input.IncludeDetails {
+			out["addresses"] = addresses
+		}
+		if input.IncludeDetails && len(remainingByState) > 0 {
 			out["remaining_by_state"] = remainingByState
 		}
 		return s.waypostToolResult(ctx, out)
@@ -595,11 +618,15 @@ func (s *Service) waypostRecv(ctx context.Context, _ *mcp.CallToolRequest, input
 	delivery, err := s.receivePersonalNow(ctx, addresses)
 	if errors.Is(err, waypost.ErrNoMessage) {
 		out := map[string]any{
-			"status":    "no_message",
-			"addresses": addresses,
-			"warnings":  warnings,
+			"status": "no_message",
 		}
-		if len(delivery.RemainingByState) > 0 {
+		if len(warnings) > 0 {
+			out["warnings"] = warnings
+		}
+		if input.IncludeDetails {
+			out["addresses"] = addresses
+		}
+		if input.IncludeDetails && len(delivery.RemainingByState) > 0 {
 			out["remaining_by_state"] = delivery.RemainingByState
 		}
 		return s.waypostToolResult(ctx, out)
@@ -620,16 +647,16 @@ func (s *Service) waypostRecv(ctx context.Context, _ *mcp.CallToolRequest, input
 				"lease_expires_at":  claim.LeaseExpiresAt,
 			})
 		}
-		return s.waypostMutationToolResult(ctx, map[string]any{
-			"status":                    "receive_recovery_required",
-			"addresses":                 addresses,
-			"error_code":                "receive_recovery_required",
-			"message":                   recovery.Error(),
-			"remaining_by_state_status": "unavailable",
-			"claims":                    claims,
-			"claim_history_tool":        "waypost_claim_history",
-			"release_tool":              "waypost_release",
-		})
+		out := map[string]any{
+			"status":  "receive_recovery_required",
+			"message": recovery.Error(),
+			"claims":  claims,
+		}
+		if input.IncludeDetails {
+			out["addresses"] = addresses
+			out["remaining_by_state_status"] = "unavailable"
+		}
+		return s.waypostMutationToolResult(ctx, out)
 	}
 	if err != nil {
 		return nil, nil, err
@@ -640,12 +667,16 @@ func (s *Service) waypostRecv(ctx context.Context, _ *mcp.CallToolRequest, input
 		return nil, nil, errors.New("receive returned an unexpected delivery count")
 	}
 	out := map[string]any{
-		"status":    "received",
-		"addresses": addresses,
-		"delivery":  waypost.CompactReceivedMessage(delivery.Messages[0]),
-		"warnings":  warnings,
+		"status":   "received",
+		"delivery": waypost.CompactReceivedMessage(delivery.Messages[0]),
 	}
-	if len(delivery.RemainingByState) > 0 {
+	if len(warnings) > 0 {
+		out["warnings"] = warnings
+	}
+	if input.IncludeDetails {
+		out["addresses"] = addresses
+	}
+	if input.IncludeDetails && len(delivery.RemainingByState) > 0 {
 		out["remaining_by_state"] = delivery.RemainingByState
 	}
 	return s.waypostMutationToolResult(ctx, out)
@@ -807,28 +838,56 @@ func (s *Service) waypostClaimHistory(ctx context.Context, _ *mcp.CallToolReques
 	return s.waypostToolResult(ctx, out)
 }
 
-func (s *Service) waypostRecvGroup(ctx context.Context, addresses []string, person string) (*mcp.CallToolResult, map[string]any, error) {
+func (s *Service) waypostRecvGroup(ctx context.Context, addresses []string, person string, includeDetails bool) (*mcp.CallToolResult, map[string]any, error) {
 	address, err := singleGroupAddress(addresses, "waypost_recv")
 	if err != nil {
 		return nil, nil, err
 	}
 	message, err := s.receiveGroupNow(ctx, address, person)
 	if errors.Is(err, waypost.ErrNoMessage) {
-		return s.waypostToolResult(ctx, map[string]any{
-			"status":    "no_message",
-			"addresses": []string{address},
-			"as_person": person,
-		})
+		out := map[string]any{
+			"status": "no_message",
+		}
+		if includeDetails {
+			out["addresses"] = []string{address}
+			out["as_person"] = person
+		}
+		return s.waypostToolResult(ctx, out)
 	}
 	if err != nil {
 		return nil, nil, err
 	}
-	return s.waypostMutationToolResult(ctx, map[string]any{
-		"status":    "received",
-		"addresses": []string{address},
-		"as_person": person,
-		"message":   waypost.CompactGroupReceivedMessage(message),
-	})
+	out := map[string]any{
+		"status":  "received",
+		"message": compactWaypostGroupReceivedMessage(message, includeDetails),
+	}
+	if includeDetails {
+		out["addresses"] = []string{address}
+		out["as_person"] = person
+	}
+	return s.waypostMutationToolResult(ctx, out)
+}
+
+func compactWaypostGroupReceivedMessage(message waypost.GroupReceivedMessage, includeDetails bool) any {
+	full := waypost.CompactGroupReceivedMessage(message)
+	if includeDetails {
+		return full
+	}
+	compact := map[string]any{
+		"message_id": full.MessageID,
+		"subject":    full.Subject,
+		"body":       full.Body,
+	}
+	if full.ForwardedFromAddress != nil {
+		compact["forwarded_from_address"] = full.ForwardedFromAddress
+	}
+	if full.SenderAddress != nil {
+		compact["sender_address"] = full.SenderAddress
+	}
+	if full.ContentType != "" {
+		compact["content_type"] = full.ContentType
+	}
+	return compact
 }
 
 func (s *Service) receivePersonalNow(ctx context.Context, addresses []string) (waypost.ReceiveResult, error) {

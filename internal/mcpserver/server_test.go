@@ -125,6 +125,65 @@ func TestWaypostSendSchemaExposesGroup(t *testing.T) {
 	if _, ok := schema.Properties["as_person"]; !ok {
 		t.Fatalf("schema.Properties missing as_person: %v", schema.Properties)
 	}
+	if _, ok := schema.Properties["include_details"]; !ok {
+		t.Fatalf("schema.Properties missing include_details: %v", schema.Properties)
+	}
+}
+
+func TestCompactWaypostSendResultKeepsOnlyActionableFields(t *testing.T) {
+	full := map[string]any{
+		"status":             "sent",
+		"delivery_id":        "dlv_1",
+		"from_address":       "agent/sender",
+		"to_address":         "agent/receiver",
+		"subject":            "subject",
+		"notify_status":      "failed",
+		"notify_scheme":      "agent-deck",
+		"notify_error":       "wake failed",
+		"message_created_at": "2026-08-17T00:00:00Z",
+	}
+	got := compactWaypostSendResult(full, false)
+	want := map[string]any{
+		"status":        "sent",
+		"delivery_id":   "dlv_1",
+		"notify_status": "failed",
+		"notify_error":  "wake failed",
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("compact send result = %v, want %v", got, want)
+	}
+	if detailed := compactWaypostSendResult(full, true); !reflect.DeepEqual(detailed, full) {
+		t.Fatalf("detailed send result = %v, want %v", detailed, full)
+	}
+}
+
+func TestCompactWaypostGroupReceivedMessageOmitsReadMetadata(t *testing.T) {
+	message := waypost.GroupReceivedMessage{
+		MessageID:        "msg_1",
+		GroupID:          "grp_1",
+		GroupAddress:     "group/review",
+		Person:           "alice",
+		Subject:          "review",
+		ContentType:      "text/plain",
+		Body:             "body",
+		ReadCount:        2,
+		EligibleCount:    3,
+		FirstReadAt:      "2026-08-17T00:00:00Z",
+		MessageCreatedAt: "2026-08-16T00:00:00Z",
+	}
+	got := compactWaypostGroupReceivedMessage(message, false)
+	want := map[string]any{
+		"message_id":   "msg_1",
+		"subject":      "review",
+		"content_type": "text/plain",
+		"body":         "body",
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("compact group message = %v, want %v", got, want)
+	}
+	if detailed := compactWaypostGroupReceivedMessage(message, true); reflect.DeepEqual(detailed, got) {
+		t.Fatalf("detailed group message unexpectedly equals compact result: %v", detailed)
+	}
 }
 
 func TestWaypostRecvSchemaOmitsTimeout(t *testing.T) {
@@ -141,6 +200,9 @@ func TestWaypostRecvSchemaOmitsTimeout(t *testing.T) {
 	if _, ok := schema.Properties["active_lease_cursor"]; !ok {
 		t.Fatalf("schema.Properties missing active_lease_cursor: %v", schema.Properties)
 	}
+	if _, ok := schema.Properties["include_details"]; !ok {
+		t.Fatalf("schema.Properties missing include_details: %v", schema.Properties)
+	}
 }
 
 func TestWaypostStatusSchemaExposesOptionalDetailControls(t *testing.T) {
@@ -148,7 +210,7 @@ func TestWaypostStatusSchemaExposesOptionalDetailControls(t *testing.T) {
 	if err != nil {
 		t.Fatalf("jsonschema.For() error = %v", err)
 	}
-	for _, field := range []string{"include_diagnostics", "include_active_leases"} {
+	for _, field := range []string{"include_diagnostics", "include_cli_context", "include_active_leases"} {
 		if _, ok := schema.Properties[field]; !ok {
 			t.Fatalf("schema.Properties missing %q: %v", field, schema.Properties)
 		}
@@ -221,7 +283,7 @@ func TestWaypostRecvReturnsPaginatedActiveLeaseHint(t *testing.T) {
 	first := callServiceTool(t, service, "waypost_recv", map[string]any{
 		"addresses": []string{"agent-deck/self"},
 	})
-	if first["status"] != "active_leases" || first["active_lease_count"] != float64(waypost.MaxPageSize+1) || first["returned_lease_count"] != float64(waypost.MaxPageSize) {
+	if first["status"] != "active_leases" || first["active_lease_count"] != float64(waypost.MaxPageSize+1) {
 		t.Fatalf("first active lease response = %+v", first)
 	}
 	if ids := first["claimed_delivery_ids"].([]any); len(ids) != waypost.MaxPageSize {
@@ -236,7 +298,7 @@ func TestWaypostRecvReturnsPaginatedActiveLeaseHint(t *testing.T) {
 		"addresses":           []string{"agent-deck/self"},
 		"active_lease_cursor": cursor,
 	})
-	if second["active_lease_count"] != float64(waypost.MaxPageSize+1) || second["returned_lease_count"] != float64(1) {
+	if second["active_lease_count"] != float64(waypost.MaxPageSize+1) {
 		t.Fatalf("second active lease response = %+v", second)
 	}
 	if _, ok := second["next_cursor"]; ok {
@@ -821,9 +883,10 @@ func TestWaypostSendNotifiesWorkerTarget(t *testing.T) {
 	service.state.autoBindAttempted = true
 
 	output := callServiceTool(t, service, "waypost_send", map[string]any{
-		"to_address": "agent-deck/target",
-		"subject":    "delegate",
-		"body":       "body",
+		"to_address":      "agent-deck/target",
+		"subject":         "delegate",
+		"body":            "body",
+		"include_details": true,
 	})
 
 	if got := output["delivery_id"]; got != "dlv_1" {
@@ -1342,9 +1405,10 @@ func TestWaypostSendSkipsNotifyWhenDeliveryAlreadyClaimed(t *testing.T) {
 	service.state.autoBindAttempted = true
 
 	output := callServiceTool(t, service, "waypost_send", map[string]any{
-		"to_address": "agent-deck/target",
-		"subject":    "delegate",
-		"body":       "body",
+		"to_address":      "agent-deck/target",
+		"subject":         "delegate",
+		"body":            "body",
+		"include_details": true,
 	})
 
 	if got := output["delivery_id"]; got != "dlv_claimed" {
@@ -1447,6 +1511,7 @@ func TestWaypostSendAllowsAgentDeckNotifyDisable(t *testing.T) {
 		"subject":                "delegate",
 		"body":                   "body",
 		"disable_notify_message": true,
+		"include_details":        true,
 	})
 
 	if got := output["delivery_id"]; got != "dlv_disabled" {
@@ -1481,10 +1546,11 @@ func TestWaypostSendUsesExplicitFromAddressWithoutBoundState(t *testing.T) {
 	})
 
 	output := callServiceTool(t, service, "waypost_send", map[string]any{
-		"to_address":   "workflow/target",
-		"from_address": "agent/sender",
-		"subject":      "delegate",
-		"body":         "body",
+		"to_address":      "workflow/target",
+		"from_address":    "agent/sender",
+		"subject":         "delegate",
+		"body":            "body",
+		"include_details": true,
 	})
 	if got := output["delivery_id"]; got != "dlv_explicit" {
 		t.Fatalf("delivery_id = %v, want dlv_explicit", got)
@@ -1522,12 +1588,13 @@ func TestWaypostSendGroupModeUsesGroupSendParams(t *testing.T) {
 	})
 
 	output := callServiceTool(t, service, "waypost_send", map[string]any{
-		"to_address":   "group/review",
-		"from_address": "agent/sender",
-		"subject":      "group update",
-		"body":         "body",
-		"group":        true,
-		"as_person":    " alice ",
+		"to_address":      "group/review",
+		"from_address":    "agent/sender",
+		"subject":         "group update",
+		"body":            "body",
+		"group":           true,
+		"as_person":       " alice ",
+		"include_details": true,
 	})
 
 	if got := output["mode"]; got != waypost.SendModeGroup {
@@ -1598,11 +1665,12 @@ func TestWaypostSendGroupModeNotifiesSubscriber(t *testing.T) {
 	})
 
 	output := callServiceTool(t, service, "waypost_send", map[string]any{
-		"to_address":   "group/review",
-		"from_address": "agent-deck/expert",
-		"subject":      "expert post",
-		"body":         "body",
-		"group":        true,
+		"to_address":      "group/review",
+		"from_address":    "agent-deck/expert",
+		"subject":         "expert post",
+		"body":            "body",
+		"group":           true,
+		"include_details": true,
 	})
 
 	if got := output["message_id"]; got != "msg_group" {
@@ -1701,10 +1769,11 @@ func TestWaypostSendGroupModeReportsNoSubscribersForResolvedDefaultSender(t *tes
 	service.state.autoBindAttempted = true
 
 	output := callServiceTool(t, service, "waypost_send", map[string]any{
-		"to_address": "group/review",
-		"subject":    "moderator post",
-		"body":       "body",
-		"group":      true,
+		"to_address":      "group/review",
+		"subject":         "moderator post",
+		"body":            "body",
+		"group":           true,
+		"include_details": true,
 	})
 	if got := output["from_address"]; got != "agent-deck/moderator" {
 		t.Fatalf("from_address = %v, want agent-deck/moderator", got)
@@ -2251,6 +2320,7 @@ func TestWaypostSendUsesFixedWakeTextWhenDisableFlagUnset(t *testing.T) {
 		"subject":                "delegate",
 		"body":                   "body",
 		"disable_notify_message": false,
+		"include_details":        true,
 	})
 
 	if got := output["delivery_id"]; got != "dlv_custom" {
@@ -2330,9 +2400,10 @@ func TestWaypostSendReturnsReceiptWhenNotifyFails(t *testing.T) {
 	service.notifications.retryWait = func(context.Context, time.Duration) error { return nil }
 
 	output := callServiceTool(t, service, "waypost_send", map[string]any{
-		"to_address": "agent-deck/target",
-		"subject":    "delegate",
-		"body":       "body",
+		"to_address":      "agent-deck/target",
+		"subject":         "delegate",
+		"body":            "body",
+		"include_details": true,
 	})
 
 	if got := output["status"]; got != "sent" {
@@ -4646,6 +4717,9 @@ func TestWaypostRecvDoesNotWaitForLaterMessage(t *testing.T) {
 	if got := recv["status"]; got != "no_message" {
 		t.Fatalf("recv status = %v, want no_message", got)
 	}
+	if _, ok := recv["addresses"]; ok {
+		t.Fatalf("compact recv exposed addresses: %v", recv)
+	}
 	if service.activeLeases.hasTrackedLeases() {
 		t.Fatal("empty recv tracked active lease")
 	}
@@ -4669,6 +4743,9 @@ func TestWaypostRecvDoesNotWaitForLaterMessage(t *testing.T) {
 	}
 	if got := delivery["sender_address"]; got != "agent-deck/self" {
 		t.Fatalf("second recv sender_address = %v, want agent-deck/self", got)
+	}
+	if _, ok := secondRecv["addresses"]; ok {
+		t.Fatalf("compact recv exposed addresses: %v", secondRecv)
 	}
 }
 
@@ -7270,7 +7347,7 @@ func TestAutoBindUsesSessionShowPathBeforeStateDBWorkdirLookup(t *testing.T) {
 	})
 	service.sessions.parentPID = func() int { return 1 }
 
-	status := callServiceTool(t, service, "waypost_status", nil)
+	status := callServiceTool(t, service, "waypost_status", map[string]any{"include_diagnostics": true})
 	wantAddresses := []any{"agent-deck/deck-session-1", "codex/0123456789abcdef"}
 	if !reflect.DeepEqual(status["bound_addresses"], wantAddresses) {
 		t.Fatalf("bound_addresses = %v, want %v", status["bound_addresses"], wantAddresses)

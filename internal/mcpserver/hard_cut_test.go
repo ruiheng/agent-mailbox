@@ -36,8 +36,17 @@ func TestWaypostStatusReportsAuthoritativeCLIContext(t *testing.T) {
 	if serverInfo == nil || serverInfo.Version != version.Version {
 		t.Fatalf("MCP server info = %v, want version %q", serverInfo, version.Version)
 	}
+	compact := callServiceTool(t, service, "waypost_status", map[string]any{})
+	if compact["status"] != "ready" {
+		t.Fatalf("compact status = %v, want ready", compact)
+	}
+	for _, field := range []string{"executable", "resolved_state_dir", "active_lease_count", "default_workdir"} {
+		if _, ok := compact[field]; ok {
+			t.Fatalf("compact status unexpectedly includes %q: %v", field, compact)
+		}
+	}
 
-	status := callServiceTool(t, service, "waypost_status", map[string]any{})
+	status := callServiceTool(t, service, "waypost_status", map[string]any{"include_cli_context": true})
 	for _, field := range []string{
 		"server_version",
 		"detected_agent_deck_session_id",
@@ -55,8 +64,8 @@ func TestWaypostStatusReportsAuthoritativeCLIContext(t *testing.T) {
 			t.Fatalf("default waypost_status unexpectedly includes %q: %v", field, status)
 		}
 	}
-	if got := status["active_lease_count"]; got != float64(0) {
-		t.Fatalf("active_lease_count = %v, want 0", got)
+	if _, ok := status["active_lease_count"]; ok {
+		t.Fatalf("default waypost_status exposed zero active_lease_count: %v", status)
 	}
 	if got := status["default_sender"]; got != "agent-deck/self" {
 		t.Fatalf("default_sender = %v, want agent-deck/self", got)
@@ -206,7 +215,7 @@ func TestWaypostStatusCLIReplacementForward(t *testing.T) {
 	defer service.Close()
 	service.state.autoBindAttempted = true
 
-	status := callServiceTool(t, service, "waypost_status", map[string]any{})
+	status := callServiceTool(t, service, "waypost_status", map[string]any{"include_cli_context": true})
 	executable, ok := status["executable"].(string)
 	if !ok || executable == "" {
 		t.Fatalf("waypost_status executable = %v, want path", status["executable"])
@@ -319,12 +328,12 @@ func TestExternalDurableFailReconcilesMCPLeaseHistoryAndStatus(t *testing.T) {
 		t.Fatalf("durable Fail() error = %v", err)
 	}
 
-	status := callServiceTool(t, service, "waypost_status", map[string]any{})
+	status := callServiceTool(t, service, "waypost_status", map[string]any{"include_active_leases": true})
 	if got := status["active_lease_count"]; got != float64(0) {
 		t.Fatalf("active_lease_count after external fail = %v, want 0", got)
 	}
-	if _, ok := status["active_leases"]; ok {
-		t.Fatalf("default status exposed active lease detail after external fail: %v", status)
+	if leases := status["active_leases"].([]any); len(leases) != 0 {
+		t.Fatalf("active_leases after external fail = %v, want empty", leases)
 	}
 	detailedStatus := callServiceTool(t, service, "waypost_status", map[string]any{
 		"include_active_leases": true,
@@ -495,9 +504,10 @@ func TestReceiveRecoveryTracksAndRenewsEveryUnreleasedClaim(t *testing.T) {
 	service.state.autoBindAttempted = true
 
 	output := callServiceTool(t, service, "waypost_recv", map[string]any{
-		"addresses": []string{"agent-deck/one", "agent-deck/two"},
+		"addresses":       []string{"agent-deck/one", "agent-deck/two"},
+		"include_details": true,
 	})
-	if output["status"] != "receive_recovery_required" || output["error_code"] != "receive_recovery_required" || output["remaining_by_state_status"] != "unavailable" {
+	if output["status"] != "receive_recovery_required" || output["remaining_by_state_status"] != "unavailable" {
 		t.Fatalf("receive recovery output = %v", output)
 	}
 	responseClaims, ok := output["claims"].([]any)

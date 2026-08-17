@@ -264,12 +264,13 @@ already known, it can also use the agent-deck state database to fill in a Codex
 thread synced later for that same workdir and session.
 That yields addresses such as `agent-deck/<session-id>`, `codex/<session-id>`,
 `claude/<session-id>`, `gemini/<session-id>`, and `opencode/<session-id>`.
-`waypost_status` returns compact operational state by default, including the
-authoritative executable and resolved state directory, binding state when
-present, actionable warnings, and an active-lease count. Set
-`include_diagnostics: true` to include detection and version fields, or
-`include_active_leases: true` to include paginated lease details and tokens.
-Use `limit` and `cursor` only with active lease details.
+`waypost_status` returns only `status`, binding state when present, actionable
+warnings, and a non-zero active-lease count by default. Set
+`include_cli_context: true` when you need the authoritative executable and
+resolved state directory for a CLI-owned operation. Set
+`include_diagnostics: true` for detection and version fields, or
+`include_active_leases: true` for paginated lease details and tokens. Use
+`limit` and `cursor` only with active lease details.
 
 All default Waypost tools other than `waypost_status` fail until it succeeds,
 so callers get the
@@ -293,10 +294,22 @@ omitted a variable or failed to pass it into the MCP process.
 
 `waypost_send` always uses the fixed wakeup text for supported remote notify
 paths. Set `disable_notify_message = true` to skip only that immediate send-time
-notify.
+notify. Its default result contains the durable receipt, `status`, and
+`notify_status`; `notify_error` is added only on failure. Set
+`include_details: true` for effective routing, notification scheme, and group
+storage metadata. Input echoes such as `subject` are not part of the compact
+contract.
+
+`waypost_recv` defaults to the status-specific result only: `delivery` for a
+new claim, a bounded `claimed_delivery_ids` hint for active leases, or just
+`status = no_message`. Actionable warnings remain sparse. Set
+`include_details: true` for resolved addresses and `remaining_by_state`.
+Repeated instructional fields, echoed known IDs, and counts derivable from the
+returned ID list are intentionally omitted.
 
 For a blocking receive, forwarding, group work, or durable inspection that is
-not on the retained MCP surface, use the reported CLI binary and state
+not on the retained MCP surface, call `waypost_status` with
+`include_cli_context: true`, then use the reported CLI binary and state
 directory. `waypost wait --json` observes work without claiming it; after it
 returns a message, call MCP `waypost_recv` to claim a personal delivery. See
 [`docs/cli.md`](docs/cli.md) for the CLI forms and group behavior.
