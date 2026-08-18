@@ -963,6 +963,94 @@ func TestCLISendBatchJSONProducesOrderedIndependentReceipts(t *testing.T) {
 	}
 }
 
+func TestCLISendBatchTextYAMLAndFullProjections(t *testing.T) {
+	for _, testCase := range []struct {
+		name   string
+		flags  []string
+		assert func(*testing.T, cliResult)
+	}{
+		{
+			name: "compact text",
+			assert: func(t *testing.T, send cliResult) {
+				t.Helper()
+				lines := strings.Split(strings.TrimSuffix(send.stdout, "\n"), "\n")
+				if len(lines) != 3 {
+					t.Fatalf("batch text lines = %q, want two items plus aggregate", send.stdout)
+				}
+				for index, address := range []string{"workflow/one", "workflow/two"} {
+					prefix := "to_address=" + address + " status=sent delivery_id=dlv_"
+					if !strings.HasPrefix(lines[index], prefix) {
+						t.Fatalf("batch text line %d = %q, want prefix %q", index, lines[index], prefix)
+					}
+				}
+				if got, want := lines[2], "status=sent recipient_count=2 sent_count=2 failed_count=0"; got != want {
+					t.Fatalf("batch text aggregate = %q, want %q", got, want)
+				}
+				if strings.Contains(send.stdout, "message_id=") || strings.Contains(send.stdout, "blob_id=") {
+					t.Fatalf("compact batch text unexpectedly contains full receipt fields: %q", send.stdout)
+				}
+			},
+		},
+		{
+			name:  "compact YAML",
+			flags: []string{"--yaml"},
+			assert: func(t *testing.T, send cliResult) {
+				t.Helper()
+				for _, want := range []string{
+					"status: \"sent\"\n",
+					"to_addresses:\n  - \"workflow/one\"\n  - \"workflow/two\"\n",
+					"recipient_count: 2\n",
+					"sent_count: 2\n",
+					"failed_count: 0\n",
+					"results:\n  -\n    to_address: \"workflow/one\"\n    status: \"sent\"\n",
+				} {
+					if !strings.Contains(send.stdout, want) {
+						t.Fatalf("batch YAML = %q, want %q", send.stdout, want)
+					}
+				}
+				if strings.Contains(send.stdout, "message_id:") || strings.Contains(send.stdout, "blob_id:") {
+					t.Fatalf("compact batch YAML unexpectedly contains full receipt fields: %q", send.stdout)
+				}
+			},
+		},
+		{
+			name:  "full text",
+			flags: []string{"--full"},
+			assert: func(t *testing.T, send cliResult) {
+				t.Helper()
+				for _, address := range []string{"workflow/one", "workflow/two"} {
+					prefix := "to_address=" + address + " status=sent message_id=msg_"
+					if !strings.Contains(send.stdout, prefix) || !strings.Contains(send.stdout, " delivery_id=dlv_") || !strings.Contains(send.stdout, " blob_id=blob_") {
+						t.Fatalf("full batch text = %q, want full receipt for %s", send.stdout, address)
+					}
+				}
+			},
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			stateDir := filepath.Join(t.TempDir(), "waypost-state")
+			args := []string{
+				"--state-dir", stateDir,
+				"send",
+				"--to", "workflow/one",
+				"--to", "workflow/two",
+				"--from", "agent/sender",
+				"--subject", "batch",
+				"--body-file", "-",
+			}
+			args = append(args, testCase.flags...)
+			send := runCLI(t, "batch body\n", args...)
+			if send.exitCode != 0 {
+				t.Fatalf("batch send exit code = %d, stderr = %q", send.exitCode, send.stderr)
+			}
+			if send.stderr != "" {
+				t.Fatalf("batch send stderr = %q, want empty", send.stderr)
+			}
+			testCase.assert(t, send)
+		})
+	}
+}
+
 func TestCLISendBatchPartialFailureWritesResultsBeforeExitOne(t *testing.T) {
 	stateDir := filepath.Join(t.TempDir(), "waypost-state")
 	runtime, err := waypost.OpenRuntime(context.Background(), stateDir)

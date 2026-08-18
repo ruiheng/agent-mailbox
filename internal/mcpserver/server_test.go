@@ -198,6 +198,290 @@ func TestWaypostSendBatchReturnsOrderedPartialResults(t *testing.T) {
 	}
 }
 
+func TestWaypostSendBatchPluralOneUsesEnvelope(t *testing.T) {
+	waypostService := &fakeWaypostService{t: t}
+	waypostService.sendFunc = func(_ context.Context, params waypost.SendParams) (waypost.SendResult, error) {
+		if params.FromAddress != "agent/sender" || params.ToAddress != "group/review" || !params.Group {
+			t.Fatalf("send params = %+v, want explicit sender and group target", params)
+		}
+		return waypost.SendResult{
+			Mode:             waypost.SendModeGroup,
+			MessageID:        "msg_review",
+			GroupID:          "grp_review",
+			GroupAddress:     params.ToAddress,
+			MessageCreatedAt: "2026-08-18T00:00:00Z",
+		}, nil
+	}
+
+	openCount := 0
+	service := newService(Options{
+		WaypostServiceFactory: fakeWaypostServiceFactory{service: waypostService, openCount: &openCount},
+		CommandRunner: &fakeRunner{t: t, handler: func(args []string, input string) (RunResult, error) {
+			t.Fatalf("unexpected command call: %v", args)
+			return RunResult{}, nil
+		}},
+		DisableWakeScheduler:  true,
+		DisableLeaseRenewLoop: true,
+	})
+	defer service.Close()
+
+	output := callServiceTool(t, service, "waypost_send", map[string]any{
+		"to_addresses": []string{"group/review"},
+		"from_address": "agent/sender",
+		"subject":      "single batch item",
+		"body":         "body",
+		"group":        true,
+	})
+
+	if output["status"] != "sent" || output["recipient_count"] != float64(1) || output["sent_count"] != float64(1) || output["failed_count"] != float64(0) {
+		t.Fatalf("plural-one batch output = %v, want one successful batch item", output)
+	}
+	if got := output["to_addresses"]; !reflect.DeepEqual(got, []any{"group/review"}) {
+		t.Fatalf("plural-one to_addresses = %#v, want one batch recipient", got)
+	}
+	results, ok := output["results"].([]any)
+	if !ok || len(results) != 1 {
+		t.Fatalf("plural-one results = %#v, want one batch result", output["results"])
+	}
+	item := results[0].(map[string]any)
+	if item["from_address"] != "agent/sender" || item["to_address"] != "group/review" || item["message_id"] != "msg_review" {
+		t.Fatalf("plural-one result = %v, want batch receipt", item)
+	}
+	if openCount != 1 {
+		t.Fatalf("waypost service opens = %d, want one per batch", openCount)
+	}
+}
+
+func TestWaypostSendBatchResolvesEffectiveSenderAndOpensOnce(t *testing.T) {
+	// Keep the tool fallback intentionally pending: each sender resolution probes
+	// `agent-deck session current`, making an accidental per-recipient resolution
+	// observable through the runner call count.
+	t.Setenv("AGENTDECK_INSTANCE_ID", "")
+	t.Setenv("THURBOX_SESSION", "")
+
+	waypostService := &fakeWaypostService{t: t}
+	var sendAddresses []string
+	waypostService.sendFunc = func(_ context.Context, params waypost.SendParams) (waypost.SendResult, error) {
+		if params.FromAddress != "claude/aaaaaaaaaaaaaaaa" || !params.Group {
+			t.Fatalf("send params = %+v, want one resolved sender for every group item", params)
+		}
+		sendAddresses = append(sendAddresses, params.ToAddress)
+		return waypost.SendResult{
+			Mode:             waypost.SendModeGroup,
+			MessageID:        "msg_" + strings.TrimPrefix(params.ToAddress, "group/"),
+			GroupID:          "grp_" + strings.TrimPrefix(params.ToAddress, "group/"),
+			GroupAddress:     params.ToAddress,
+			MessageCreatedAt: "2026-08-18T00:00:00Z",
+		}, nil
+	}
+
+	openCount := 0
+	commandRunner := &fakeRunner{t: t, handler: func(args []string, input string) (RunResult, error) {
+		if !reflect.DeepEqual(args, []string{"agent-deck", "session", "current", "--json"}) {
+			t.Fatalf("unexpected command call: %v", args)
+		}
+		return RunResult{ExitCode: 1}, nil
+	}}
+	service := newService(Options{
+		WaypostServiceFactory: fakeWaypostServiceFactory{service: waypostService, openCount: &openCount},
+		CommandRunner:         commandRunner,
+		DisableWakeScheduler:  true,
+		DisableLeaseRenewLoop: true,
+	})
+	defer service.Close()
+	service.state.boundAddresses = []string{"claude/aaaaaaaaaaaaaaaa"}
+	service.state.defaultSender = "claude/aaaaaaaaaaaaaaaa"
+	service.state.autoBindAttempted = true
+	service.state.autoBoundToolFallback = true
+	service.state.detectedToolSessions = toolSessionIDs{"claude": "aaaaaaaaaaaaaaaa"}
+
+	output := callServiceTool(t, service, "waypost_send", map[string]any{
+		"to_addresses": []string{"group/one", "group/two"},
+		"subject":      "resolved sender batch",
+		"body":         "body",
+		"group":        true,
+	})
+
+	if output["status"] != "sent" || output["sent_count"] != float64(2) {
+		t.Fatalf("resolved sender batch output = %v, want two sent items", output)
+	}
+	if want := []string{"group/one", "group/two"}; !reflect.DeepEqual(sendAddresses, want) {
+		t.Fatalf("batch send addresses = %v, want %v", sendAddresses, want)
+	}
+	if openCount != 1 {
+		t.Fatalf("waypost service opens = %d, want one per batch", openCount)
+	}
+	if calls := commandRunner.Calls(); len(calls) != 1 {
+		t.Fatalf("sender resolution probes = %v, want one for the entire batch", calls)
+	}
+}
+
+func TestWaypostSendBatchAllFailedReturnsEnvelope(t *testing.T) {
+	waypostService := &fakeWaypostService{t: t}
+	var calls []string
+	waypostService.sendFunc = func(_ context.Context, params waypost.SendParams) (waypost.SendResult, error) {
+		calls = append(calls, params.ToAddress)
+		return waypost.SendResult{}, errors.New("commit send transaction: test failure")
+	}
+
+	openCount := 0
+	service := newService(Options{
+		WaypostServiceFactory: fakeWaypostServiceFactory{service: waypostService, openCount: &openCount},
+		CommandRunner: &fakeRunner{t: t, handler: func(args []string, input string) (RunResult, error) {
+			t.Fatalf("unexpected command call: %v", args)
+			return RunResult{}, nil
+		}},
+		DisableWakeScheduler:  true,
+		DisableLeaseRenewLoop: true,
+	})
+	defer service.Close()
+
+	output := callServiceTool(t, service, "waypost_send", map[string]any{
+		"to_addresses":           []string{"workflow/one", "workflow/two"},
+		"from_address":           "agent/sender",
+		"subject":                "all fail",
+		"body":                   "body",
+		"disable_notify_message": true,
+	})
+
+	if output["status"] != "failed" || output["recipient_count"] != float64(2) || output["sent_count"] != float64(0) || output["failed_count"] != float64(2) {
+		t.Fatalf("all-failed batch output = %v, want failed envelope", output)
+	}
+	if want := []string{"workflow/one", "workflow/two"}; !reflect.DeepEqual(calls, want) {
+		t.Fatalf("all-failed send calls = %v, want %v", calls, want)
+	}
+	results, ok := output["results"].([]any)
+	if !ok || len(results) != 2 {
+		t.Fatalf("all-failed results = %#v, want two failed items", output["results"])
+	}
+	for index, address := range []string{"workflow/one", "workflow/two"} {
+		item := results[index].(map[string]any)
+		if item["status"] != "failed" || item["from_address"] != "agent/sender" || item["to_address"] != address || item["subject"] != "all fail" || item["notify_status"] != "not_attempted" {
+			t.Fatalf("all-failed result %d = %v", index, item)
+		}
+		if _, ok := item["delivery_id"]; ok {
+			t.Fatalf("all-failed result %d unexpectedly contains a receipt: %v", index, item)
+		}
+	}
+	if openCount != 1 {
+		t.Fatalf("waypost service opens = %d, want one", openCount)
+	}
+}
+
+func TestWaypostSendBatchKeepsReceiptsForNotificationOutcomes(t *testing.T) {
+	waypostService := &fakeWaypostService{t: t}
+	waypostService.sendFunc = func(_ context.Context, params waypost.SendParams) (waypost.SendResult, error) {
+		return waypost.SendResult{DeliveryID: "dlv_" + strings.TrimPrefix(params.ToAddress, "agent-deck/")}, nil
+	}
+	waypostService.readDeliveriesFunc = func(_ context.Context, deliveryIDs []string) ([]waypost.ReadDelivery, error) {
+		if !reflect.DeepEqual(deliveryIDs, []string{"dlv_target"}) {
+			t.Fatalf("ReadDeliveries ids = %v, want [dlv_target]", deliveryIDs)
+		}
+		return []waypost.ReadDelivery{{DeliveryID: "dlv_target", State: "queued"}}, nil
+	}
+
+	openCount := 0
+	commandRunner := &fakeRunner{t: t, handler: func(args []string, input string) (RunResult, error) {
+		switch {
+		case reflect.DeepEqual(args, []string{"agent-deck", "session", "show", "target", "--json"}):
+			return RunResult{ExitCode: 0, Stdout: `{"id":"target","status":"waiting"}`}, nil
+		case isAgentDeckDeferredSend(args):
+			return RunResult{ExitCode: 1, Stderr: "wakeup failed"}, nil
+		default:
+			t.Fatalf("unexpected command call: %v", args)
+			return RunResult{}, nil
+		}
+	}}
+	service := newService(Options{
+		WaypostServiceFactory: fakeWaypostServiceFactory{service: waypostService, openCount: &openCount},
+		CommandRunner:         commandRunner,
+		NotifyDelay:           -1,
+		DisableWakeScheduler:  true,
+		DisableLeaseRenewLoop: true,
+	})
+	defer service.Close()
+	service.state.boundAddresses = []string{"agent-deck/self"}
+	service.state.defaultSender = "agent-deck/self"
+	service.state.manualBinding = true
+	service.state.autoBindAttempted = true
+	service.notifications.retryWait = func(context.Context, time.Duration) error { return nil }
+
+	output := callServiceTool(t, service, "waypost_send", map[string]any{
+		"to_addresses": []string{"agent-deck/target", "agent-deck/self"},
+		"subject":      "notification outcomes",
+		"body":         "body",
+	})
+
+	if output["status"] != "sent" || output["sent_count"] != float64(2) || output["failed_count"] != float64(0) {
+		t.Fatalf("notification batch output = %v, want durable success", output)
+	}
+	results, ok := output["results"].([]any)
+	if !ok || len(results) != 2 {
+		t.Fatalf("notification batch results = %#v, want two items", output["results"])
+	}
+	first := results[0].(map[string]any)
+	second := results[1].(map[string]any)
+	if first["delivery_id"] != "dlv_target" || first["notify_status"] != "failed" || !strings.Contains(first["notify_error"].(string), "wakeup failed") {
+		t.Fatalf("failed notification batch item = %v, want durable receipt and notification failure", first)
+	}
+	if second["delivery_id"] != "dlv_self" || second["notify_status"] != "skipped_local" {
+		t.Fatalf("local notification batch item = %v, want durable receipt and skipped_local", second)
+	}
+	if openCount != 1 {
+		t.Fatalf("waypost service opens = %d, want one", openCount)
+	}
+}
+
+func TestWaypostSendBatchCancellationStopsBeforeNextRecipient(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	waypostService := &fakeWaypostService{t: t}
+	sendCalls := 0
+	waypostService.sendFunc = func(_ context.Context, params waypost.SendParams) (waypost.SendResult, error) {
+		sendCalls++
+		if params.ToAddress != "group/one" {
+			t.Fatalf("send recipient = %q, want only first recipient", params.ToAddress)
+		}
+		cancel()
+		return waypost.SendResult{
+			Mode:             waypost.SendModeGroup,
+			MessageID:        "msg_one",
+			GroupID:          "grp_one",
+			GroupAddress:     params.ToAddress,
+			MessageCreatedAt: "2026-08-18T00:00:00Z",
+		}, nil
+	}
+
+	service := newService(Options{
+		WaypostServiceFactory: fakeWaypostServiceFactory{service: waypostService},
+		CommandRunner: &fakeRunner{t: t, handler: func(args []string, input string) (RunResult, error) {
+			t.Fatalf("unexpected command call: %v", args)
+			return RunResult{}, nil
+		}},
+		DisableWakeScheduler:  true,
+		DisableLeaseRenewLoop: true,
+	})
+	defer service.Close()
+
+	output, err := service.sendWaypostBatchMessage(ctx, waypostSendInput{
+		ToAddresses: []string{"group/one", "group/two"},
+		FromAddress: "agent/sender",
+		Subject:     "cancel batch",
+		Body:        "body",
+		Group:       true,
+	})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("sendWaypostBatchMessage(canceled) error = %v, want context.Canceled", err)
+	}
+	if output != nil {
+		t.Fatalf("canceled batch output = %v, want no normal envelope", output)
+	}
+	if sendCalls != 1 {
+		t.Fatalf("send calls = %d, want one completed first recipient", sendCalls)
+	}
+}
+
 func TestWaypostSendBatchRejectsInvalidSelectorsBeforeSending(t *testing.T) {
 	waypostService := &fakeWaypostService{t: t}
 	waypostService.sendFunc = func(_ context.Context, params waypost.SendParams) (waypost.SendResult, error) {

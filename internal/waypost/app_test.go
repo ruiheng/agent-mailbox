@@ -8,6 +8,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -991,17 +992,210 @@ func TestAppSendRejectsEmptyBodyInput(t *testing.T) {
 func TestAppSendBatchValidatesEveryRecipientBeforeAnyWrite(t *testing.T) {
 	t.Parallel()
 
+	for _, testCase := range []struct {
+		name       string
+		recipients []string
+	}{
+		{
+			name:       "one later invalid recipient",
+			recipients: []string{"workflow/valid", "not an address"},
+		},
+		{
+			name:       "multiple later invalid recipients",
+			recipients: []string{"workflow/first", "workflow/second", "not an address", "also not an address"},
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			stateDir := filepath.Join(t.TempDir(), "waypost-state")
+			args := []string{"send"}
+			for _, recipient := range testCase.recipients {
+				args = append(args, "--to", recipient)
+			}
+			args = append(args,
+				"--from", "agent/sender",
+				"--body-file", "-",
+			)
+
+			app := NewApp(strings.NewReader("body"), &bytes.Buffer{}, &bytes.Buffer{})
+			err := app.RunWithStateDir(context.Background(), stateDir, args)
+			if err == nil || !strings.Contains(err.Error(), "invalid address") {
+				t.Fatalf("RunWithStateDir(batch invalid recipient) error = %v, want invalid address", err)
+			}
+
+			runtime, err := OpenRuntime(context.Background(), stateDir)
+			if err != nil {
+				t.Fatalf("OpenRuntime() error = %v", err)
+			}
+			defer runtime.Close()
+			for _, table := range []string{"messages", "deliveries"} {
+				var count int
+				if err := runtime.DB().QueryRow("SELECT COUNT(*) FROM " + table).Scan(&count); err != nil {
+					t.Fatalf("count %s error = %v", table, err)
+				}
+				if count != 0 {
+					t.Fatalf("%s count = %d, want 0", table, count)
+				}
+			}
+		})
+	}
+}
+
+func TestAppSendBatchEnforcesRawRecipientLimitBeforeDeduplication(t *testing.T) {
+	t.Parallel()
+
+	for _, testCase := range []struct {
+		name         string
+		rawCount     int
+		wantErr      bool
+		wantMessages int
+	}{
+		{
+			name:         "ten duplicate raw recipients execute once",
+			rawCount:     MaxSendRecipients,
+			wantMessages: 1,
+		},
+		{
+			name:     "eleven duplicate raw recipients are rejected",
+			rawCount: MaxSendRecipients + 1,
+			wantErr:  true,
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			stateDir := filepath.Join(t.TempDir(), "waypost-state")
+			var stdout bytes.Buffer
+			args := []string{"send"}
+			for range testCase.rawCount {
+				args = append(args, "--to", "workflow/duplicate")
+			}
+			args = append(args,
+				"--from", "agent/sender",
+				"--body-file", "-",
+			)
+
+			app := NewApp(strings.NewReader("body"), &stdout, &bytes.Buffer{})
+			err := app.RunWithStateDir(context.Background(), stateDir, args)
+			if testCase.wantErr {
+				if err == nil || !strings.Contains(err.Error(), "at most") {
+					t.Fatalf("RunWithStateDir(%d raw recipients) error = %v, want recipient limit error", testCase.rawCount, err)
+				}
+			} else if err != nil {
+				t.Fatalf("RunWithStateDir(%d raw recipients) error = %v", testCase.rawCount, err)
+			}
+
+			runtime, err := OpenRuntime(context.Background(), stateDir)
+			if err != nil {
+				t.Fatalf("OpenRuntime() error = %v", err)
+			}
+			defer runtime.Close()
+			for _, table := range []string{"messages", "deliveries"} {
+				var count int
+				if err := runtime.DB().QueryRow("SELECT COUNT(*) FROM " + table).Scan(&count); err != nil {
+					t.Fatalf("count %s error = %v", table, err)
+				}
+				if count != testCase.wantMessages {
+					t.Fatalf("%s count = %d, want %d", table, count, testCase.wantMessages)
+				}
+			}
+
+			if !testCase.wantErr && !strings.Contains(stdout.String(), "status=sent recipient_count=1 sent_count=1 failed_count=0") {
+				t.Fatalf("batch stdout = %q, want one-recipient batch envelope", stdout.String())
+			}
+		})
+	}
+}
+
+func TestAppSendBatchNotifyProjectsEveryOutcome(t *testing.T) {
+	t.Parallel()
+
 	stateDir := filepath.Join(t.TempDir(), "waypost-state")
-	app := NewApp(strings.NewReader("body"), &bytes.Buffer{}, &bytes.Buffer{})
+	var stdout bytes.Buffer
+	var notified []string
+	app := NewAppWithOptions(strings.NewReader("body"), &stdout, &bytes.Buffer{}, AppOptions{
+		SendNotifier: func(_ context.Context, _ *Store, request SendNotificationRequest) SendNotificationOutcome {
+			notified = append(notified, request.Params.ToAddress)
+			if request.Params.ToAddress == "workflow/two" {
+				return SendNotificationOutcome{
+					Status: "failed",
+					Scheme: "agent-deck",
+					Err:    errors.New("wakeup failed"),
+				}
+			}
+			return SendNotificationOutcome{Status: "sent", Scheme: "agent-deck"}
+		},
+	})
+
 	err := app.RunWithStateDir(context.Background(), stateDir, []string{
 		"send",
-		"--to", "workflow/valid",
-		"--to", "not an address",
+		"--to", "workflow/one",
+		"--to", "workflow/two",
 		"--from", "agent/sender",
 		"--body-file", "-",
+		"--notify",
+		"--json",
 	})
-	if err == nil || !strings.Contains(err.Error(), "invalid address") {
-		t.Fatalf("RunWithStateDir(batch invalid recipient) error = %v, want invalid address", err)
+	if err != nil {
+		t.Fatalf("RunWithStateDir(batch --notify) error = %v", err)
+	}
+	if want := []string{"workflow/one", "workflow/two"}; !reflect.DeepEqual(notified, want) {
+		t.Fatalf("notified recipients = %v, want %v", notified, want)
+	}
+
+	var output map[string]any
+	if err := json.Unmarshal(stdout.Bytes(), &output); err != nil {
+		t.Fatalf("json.Unmarshal(batch --notify output) error = %v; output = %q", err, stdout.String())
+	}
+	if output["status"] != "sent" || output["sent_count"] != float64(2) || output["failed_count"] != float64(0) {
+		t.Fatalf("batch --notify output = %v, want two durable successes", output)
+	}
+	results, ok := output["results"].([]any)
+	if !ok || len(results) != 2 {
+		t.Fatalf("batch --notify results = %#v, want two items", output["results"])
+	}
+	first := results[0].(map[string]any)
+	second := results[1].(map[string]any)
+	if first["notify_status"] != "sent" || first["notify_scheme"] != "agent-deck" || first["notify_error"] != nil {
+		t.Fatalf("first notification result = %v, want sent agent-deck outcome", first)
+	}
+	if second["notify_status"] != "failed" || second["notify_scheme"] != "agent-deck" || second["notify_error"] != "wakeup failed" {
+		t.Fatalf("second notification result = %v, want failed agent-deck outcome", second)
+	}
+}
+
+func TestAppSendBatchCancellationStopsBeforeNextRecipient(t *testing.T) {
+	t.Parallel()
+
+	stateDir := filepath.Join(t.TempDir(), "waypost-state")
+	ctx, cancel := context.WithCancel(context.Background())
+	var stdout bytes.Buffer
+	notifyCalls := 0
+	app := NewAppWithOptions(strings.NewReader("body"), &stdout, &bytes.Buffer{}, AppOptions{
+		SendNotifier: func(_ context.Context, _ *Store, request SendNotificationRequest) SendNotificationOutcome {
+			notifyCalls++
+			if request.Params.ToAddress != "workflow/one" {
+				t.Fatalf("notification recipient = %q, want only first recipient", request.Params.ToAddress)
+			}
+			cancel()
+			return SendNotificationOutcome{Status: "sent"}
+		},
+	})
+
+	err := app.RunWithStateDir(ctx, stateDir, []string{
+		"send",
+		"--to", "workflow/one",
+		"--to", "workflow/two",
+		"--from", "agent/sender",
+		"--body-file", "-",
+		"--notify",
+		"--json",
+	})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("RunWithStateDir(canceled batch) error = %v, want context.Canceled", err)
+	}
+	if notifyCalls != 1 {
+		t.Fatalf("notification calls = %d, want one", notifyCalls)
+	}
+	if stdout.Len() != 0 {
+		t.Fatalf("canceled batch stdout = %q, want no normal envelope", stdout.String())
 	}
 
 	runtime, err := OpenRuntime(context.Background(), stateDir)
@@ -1014,8 +1208,8 @@ func TestAppSendBatchValidatesEveryRecipientBeforeAnyWrite(t *testing.T) {
 		if err := runtime.DB().QueryRow("SELECT COUNT(*) FROM " + table).Scan(&count); err != nil {
 			t.Fatalf("count %s error = %v", table, err)
 		}
-		if count != 0 {
-			t.Fatalf("%s count = %d, want 0", table, count)
+		if count != 1 {
+			t.Fatalf("%s count = %d, want one durable first-recipient record", table, count)
 		}
 	}
 }
