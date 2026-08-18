@@ -85,7 +85,7 @@ type waypostRecvInput struct {
 	AsPerson          string   `json:"as_person,omitempty"`
 	KnownDeliveryIDs  []string `json:"known_delivery_ids,omitempty"`
 	ActiveLeaseCursor string   `json:"active_lease_cursor,omitempty"`
-	IncludeDetails    bool     `json:"include_details,omitempty"`
+	Diagnostics       bool     `json:"diagnostics,omitempty"`
 }
 
 func waypostRecvInputSchema() *jsonschema.Schema {
@@ -93,11 +93,11 @@ func waypostRecvInputSchema() *jsonschema.Schema {
 	if err != nil {
 		panic(fmt.Errorf("build waypost_recv input schema: %w", err))
 	}
-	includeDetails, ok := schema.Properties["include_details"]
+	diagnostics, ok := schema.Properties["diagnostics"]
 	if !ok {
-		panic("build waypost_recv input schema: missing include_details")
+		panic("build waypost_recv input schema: missing diagnostics")
 	}
-	includeDetails.Description = "Unnecessary for normal receive or sender verification."
+	diagnostics.Description = "Unnecessary for normal receive or sender verification."
 	return schema
 }
 
@@ -753,7 +753,7 @@ func (s *Service) waypostRecv(ctx context.Context, _ *mcp.CallToolRequest, input
 		return nil, nil, err
 	}
 	if person := strings.TrimSpace(input.AsPerson); person != "" {
-		return s.waypostRecvGroup(ctx, addresses, person, input.IncludeDetails)
+		return s.waypostRecvGroup(ctx, addresses, person, input.Diagnostics)
 	}
 	if err := s.reconcileTrackedLeases(ctx); err != nil {
 		return nil, nil, err
@@ -765,7 +765,7 @@ func (s *Service) waypostRecv(ctx context.Context, _ *mcp.CallToolRequest, input
 	}
 	if activeLeasePage.Total > 0 {
 		var remainingByState map[string]int
-		if input.IncludeDetails {
+		if input.Diagnostics {
 			remainingByState, err = s.remainingByState(ctx, addresses, nil)
 			if err != nil {
 				return nil, nil, err
@@ -782,10 +782,10 @@ func (s *Service) waypostRecv(ctx context.Context, _ *mcp.CallToolRequest, input
 		if activeLeasePage.NextCursor != "" {
 			out["next_cursor"] = activeLeasePage.NextCursor
 		}
-		if input.IncludeDetails {
+		if input.Diagnostics {
 			out["addresses"] = addresses
 		}
-		if input.IncludeDetails && len(remainingByState) > 0 {
+		if input.Diagnostics && len(remainingByState) > 0 {
 			out["remaining_by_state"] = remainingByState
 		}
 		return s.waypostToolResult(ctx, out)
@@ -799,10 +799,10 @@ func (s *Service) waypostRecv(ctx context.Context, _ *mcp.CallToolRequest, input
 		if len(warnings) > 0 {
 			out["warnings"] = warnings
 		}
-		if input.IncludeDetails {
+		if input.Diagnostics {
 			out["addresses"] = addresses
 		}
-		if input.IncludeDetails && len(delivery.RemainingByState) > 0 {
+		if input.Diagnostics && len(delivery.RemainingByState) > 0 {
 			out["remaining_by_state"] = delivery.RemainingByState
 		}
 		return s.waypostToolResult(ctx, out)
@@ -828,7 +828,7 @@ func (s *Service) waypostRecv(ctx context.Context, _ *mcp.CallToolRequest, input
 			"message": recovery.Error(),
 			"claims":  claims,
 		}
-		if input.IncludeDetails {
+		if input.Diagnostics {
 			out["addresses"] = addresses
 			out["remaining_by_state_status"] = "unavailable"
 		}
@@ -849,10 +849,10 @@ func (s *Service) waypostRecv(ctx context.Context, _ *mcp.CallToolRequest, input
 	if len(warnings) > 0 {
 		out["warnings"] = warnings
 	}
-	if input.IncludeDetails {
+	if input.Diagnostics {
 		out["addresses"] = addresses
 	}
-	if input.IncludeDetails && len(delivery.RemainingByState) > 0 {
+	if input.Diagnostics && len(delivery.RemainingByState) > 0 {
 		out["remaining_by_state"] = delivery.RemainingByState
 	}
 	return s.waypostMutationToolResult(ctx, out)

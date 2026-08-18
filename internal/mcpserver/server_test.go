@@ -647,12 +647,15 @@ func TestWaypostRecvSchemaOmitsTimeout(t *testing.T) {
 	if _, ok := schema.Properties["active_lease_cursor"]; !ok {
 		t.Fatalf("schema.Properties missing active_lease_cursor: %v", schema.Properties)
 	}
-	includeDetails, ok := schema.Properties["include_details"]
+	diagnostics, ok := schema.Properties["diagnostics"]
 	if !ok {
-		t.Fatalf("schema.Properties missing include_details: %v", schema.Properties)
+		t.Fatalf("schema.Properties missing diagnostics: %v", schema.Properties)
 	}
-	if got, want := includeDetails.Description, "Unnecessary for normal receive or sender verification."; got != want {
-		t.Fatalf("include_details description = %q, want %q", got, want)
+	if _, ok := schema.Properties["include_details"]; ok {
+		t.Fatalf("schema.Properties unexpectedly includes include_details: %v", schema.Properties)
+	}
+	if got, want := diagnostics.Description, "Unnecessary for normal receive or sender verification."; got != want {
+		t.Fatalf("diagnostics description = %q, want %q", got, want)
 	}
 }
 

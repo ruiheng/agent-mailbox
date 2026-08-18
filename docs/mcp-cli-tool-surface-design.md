@@ -299,7 +299,7 @@ Active leases:
 }
 ```
 
-Set `include_details: true` to add resolved `addresses` and sparse
+Set `diagnostics: true` to add resolved `addresses` and sparse
 `remaining_by_state`. Warnings remain present only when actionable. Returned
 input echoes, derivable counts, tool-name pointers, and repeated usage prose
 are not part of the response contract.
@@ -347,7 +347,7 @@ CLI no-message returns exit `2`, empty stderr, and:
 - omit zero-valued keys
 - omit the whole map when all counts are zero
 - include the map on MCP `received`, `no_message`, and `active_leases` only
-  when `include_details` is requested
+  when `diagnostics` is requested
 - include the map on CLI `received` and `no_message`
 - never interpret `queued` as claimable-now work; only `recv` or `wait`
   answers availability
@@ -430,7 +430,7 @@ MCP tracks and renews every unreleased claim before returning:
 }
 ```
 
-With `include_details`, MCP also returns `addresses` and
+With `diagnostics`, MCP also returns `addresses` and
 `remaining_by_state_status: "unavailable"`. Recovery instructions live in the
 tool description rather than being repeated as tool-name fields in every
 response.
@@ -469,13 +469,13 @@ normal receive statuses. Detailed recovery results explicitly report
 Group receive marks one group message read for one person and does not use
 personal delivery states.
 
-MCP returns `status` plus `message` when received; `include_details` adds the
+MCP returns `status` plus `message` when received; `diagnostics` adds the
 resolved `addresses` and `as_person`. CLI retains its `status`, `addresses`,
 `as_person`, and `message` contract. CLI no-message returns exit `2` with a
 `status: "no_message"` JSON document.
 
 The default MCP group message keeps `message_id`, sender/forwarding identity
-when present, `subject`, `content_type`, and `body`. `include_details` restores
+when present, `subject`, `content_type`, and `body`. `diagnostics` restores
 group identity, creation/read timestamps, and eligibility/read counts.
 
 Group receive never returns `remaining_by_state`, `has_more`, or another

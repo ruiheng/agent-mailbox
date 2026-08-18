@@ -504,8 +504,8 @@ func TestReceiveRecoveryTracksAndRenewsEveryUnreleasedClaim(t *testing.T) {
 	service.state.autoBindAttempted = true
 
 	output := callServiceTool(t, service, "waypost_recv", map[string]any{
-		"addresses":       []string{"agent-deck/one", "agent-deck/two"},
-		"include_details": true,
+		"addresses":   []string{"agent-deck/one", "agent-deck/two"},
+		"diagnostics": true,
 	})
 	if output["status"] != "receive_recovery_required" || output["remaining_by_state_status"] != "unavailable" {
 		t.Fatalf("receive recovery output = %v", output)

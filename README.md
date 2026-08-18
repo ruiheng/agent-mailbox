@@ -313,7 +313,7 @@ as `subject` are not part of the singular compact contract.
 `waypost_recv` defaults to the status-specific result only: `delivery` for a
 new claim, a bounded `claimed_delivery_ids` hint for active leases, or just
 `status = no_message`. Actionable warnings remain sparse. Set
-`include_details: true` for resolved addresses and `remaining_by_state`.
+`diagnostics: true` for resolved addresses and `remaining_by_state`.
 Repeated instructional fields, echoed known IDs, and counts derivable from the
 returned ID list are intentionally omitted.
 
