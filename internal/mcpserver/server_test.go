@@ -637,10 +637,7 @@ func TestCompactWaypostGroupReceivedMessageOmitsReadMetadata(t *testing.T) {
 }
 
 func TestWaypostRecvSchemaOmitsTimeout(t *testing.T) {
-	schema, err := jsonschema.For[waypostRecvInput](nil)
-	if err != nil {
-		t.Fatalf("jsonschema.For() error = %v", err)
-	}
+	schema := waypostRecvInputSchema()
 	if _, ok := schema.Properties["timeout"]; ok {
 		t.Fatalf("schema.Properties unexpectedly includes timeout: %v", schema.Properties)
 	}
@@ -650,8 +647,12 @@ func TestWaypostRecvSchemaOmitsTimeout(t *testing.T) {
 	if _, ok := schema.Properties["active_lease_cursor"]; !ok {
 		t.Fatalf("schema.Properties missing active_lease_cursor: %v", schema.Properties)
 	}
-	if _, ok := schema.Properties["include_details"]; !ok {
+	includeDetails, ok := schema.Properties["include_details"]
+	if !ok {
 		t.Fatalf("schema.Properties missing include_details: %v", schema.Properties)
+	}
+	if got, want := includeDetails.Description, "Unnecessary for normal receive or sender verification."; got != want {
+		t.Fatalf("include_details description = %q, want %q", got, want)
 	}
 }
 

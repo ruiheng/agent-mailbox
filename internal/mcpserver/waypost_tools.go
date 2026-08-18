@@ -88,6 +88,19 @@ type waypostRecvInput struct {
 	IncludeDetails    bool     `json:"include_details,omitempty"`
 }
 
+func waypostRecvInputSchema() *jsonschema.Schema {
+	schema, err := jsonschema.For[waypostRecvInput](nil)
+	if err != nil {
+		panic(fmt.Errorf("build waypost_recv input schema: %w", err))
+	}
+	includeDetails, ok := schema.Properties["include_details"]
+	if !ok {
+		panic("build waypost_recv input schema: missing include_details")
+	}
+	includeDetails.Description = "Unnecessary for normal receive or sender verification."
+	return schema
+}
+
 type waypostClaimHistoryInput struct {
 	DeliveryID        string `json:"delivery_id,omitempty"`
 	IncludeTerminal   bool   `json:"include_terminal,omitempty"`
@@ -183,7 +196,8 @@ func (s *Service) registerWaypostTools(server *mcp.Server) {
 	}, s.waypostSend)
 	addToolRequiringWaypostStatus(server, s, &mcp.Tool{
 		Name:        "waypost_recv",
-		Description: "Immediately claim an available delivery; never blocks. This process's unacknowledged leases return a bounded ID hint; use known_delivery_ids to suppress known leases and include_details=true for address and remaining-state context. On receive_recovery_required, release every returned claim before receiving again. Defaults to all bound addresses; addresses overrides that set for this call.",
+		Description: "Immediately claim an available delivery; never blocks. This process's unacknowledged leases return a bounded ID hint; use known_delivery_ids to suppress known leases. On receive_recovery_required, release every returned claim before receiving again. Defaults to all bound addresses; addresses overrides that set for this call.",
+		InputSchema: waypostRecvInputSchema(),
 	}, s.waypostRecv)
 	addToolRequiringWaypostStatus(server, s, &mcp.Tool{
 		Name:        "waypost_claim_history",
