@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/ruiheng/waypost/internal/mcpserver"
+	"github.com/ruiheng/waypost/internal/version"
 	"github.com/ruiheng/waypost/internal/waypost"
 	"github.com/ruiheng/waypost/internal/webui"
 )
@@ -44,7 +45,7 @@ func TestRunVersion(t *testing.T) {
 	if err := app.Run(context.Background(), []string{"--version"}); err != nil {
 		t.Fatalf("Run(--version) error = %v", err)
 	}
-	if got, want := stdout.String(), "waypost 0.6.0\n"; got != want {
+	if got, want := stdout.String(), "waypost "+version.Version+"\n"; got != want {
 		t.Fatalf("Run(--version) output = %q, want %q", got, want)
 	}
 }
