@@ -41,7 +41,7 @@ type waypostSendInput struct {
 	SchemaVersion        string   `json:"schema_version,omitempty"`
 	DisableNotifyMessage *bool    `json:"disable_notify_message,omitempty"`
 	Group                bool     `json:"group,omitempty"`
-	IncludeDetails       bool     `json:"include_details,omitempty"`
+	Diagnostics          bool     `json:"diagnostics,omitempty"`
 	forwardedMessageID   string
 	forwardedFromAddress string
 }
@@ -57,6 +57,11 @@ func waypostSendInputSchema() *jsonschema.Schema {
 	}
 	toAddresses.MinItems = jsonschema.Ptr(1)
 	toAddresses.MaxItems = jsonschema.Ptr(waypost.MaxSendRecipients)
+	diagnostics, ok := schema.Properties["diagnostics"]
+	if !ok {
+		panic("build waypost_send input schema: missing diagnostics")
+	}
+	diagnostics.Description = "Unnecessary for normal send."
 	schema.OneOf = []*jsonschema.Schema{
 		{Required: []string{"to_address"}},
 		{Required: []string{"to_addresses"}},
@@ -104,7 +109,7 @@ func waypostRecvInputSchema() *jsonschema.Schema {
 type waypostClaimHistoryInput struct {
 	DeliveryID        string `json:"delivery_id,omitempty"`
 	IncludeTerminal   bool   `json:"include_terminal,omitempty"`
-	IncludeLeaseToken bool   `json:"include_lease_token,omitempty"`
+	RecoverLeaseToken bool   `json:"recover_lease_token,omitempty"`
 	Limit             *int   `json:"limit,omitempty"`
 	Cursor            string `json:"cursor,omitempty"`
 }
@@ -191,7 +196,7 @@ func (s *Service) registerWaypostTools(server *mcp.Server) {
 	}
 	addToolRequiringWaypostStatus(server, s, &mcp.Tool{
 		Name:        "waypost_send",
-		Description: "Send a Waypost message to exactly one selector: to_address for the legacy single-recipient form, or to_addresses for a 1-10 recipient batch. Push-notify a non-local target when supported. Set disable_notify_message=true to skip notification or include_details=true for low-frequency routing detail.",
+		Description: "Send a Waypost message to exactly one selector: to_address for the legacy single-recipient form, or to_addresses for a 1-10 recipient batch. Push-notify a non-local target when supported. Set disable_notify_message=true to skip notification.",
 		InputSchema: waypostSendInputSchema(),
 	}, s.waypostSend)
 	addToolRequiringWaypostStatus(server, s, &mcp.Tool{
@@ -201,7 +206,7 @@ func (s *Service) registerWaypostTools(server *mcp.Server) {
 	}, s.waypostRecv)
 	addToolRequiringWaypostStatus(server, s, &mcp.Tool{
 		Name:        "waypost_claim_history",
-		Description: "List deliveries claimed by this MCP process. By default, returns active claims without tokens; set delivery_id and include_lease_token=true to recover a lost token.",
+		Description: "List deliveries claimed by this MCP process. By default, returns active claims without tokens; set delivery_id and recover_lease_token=true to recover a lost token.",
 	}, s.waypostClaimHistory)
 	addToolRequiringWaypostStatus(server, s, &mcp.Tool{
 		Name:        "waypost_ack",
@@ -504,7 +509,7 @@ func waypostSendBatchResult(input waypostSendInput, batch waypost.SendBatchResul
 		}
 		result := compactWaypostSendResult(
 			waypostSendResultMap(successInput, input.FromAddress, item.Result, notify),
-			input.IncludeDetails,
+			input.Diagnostics,
 		)
 		// Batch results retain their target, resolved sender, and subject even
 		// in compact mode so partial failures can be retried safely.
@@ -598,7 +603,7 @@ func (s *Service) waypostSend(ctx context.Context, req *mcp.CallToolRequest, inp
 	if batch {
 		return s.waypostMutationToolResult(ctx, out)
 	}
-	return s.waypostMutationToolResult(ctx, compactWaypostSendResult(out, input.IncludeDetails))
+	return s.waypostMutationToolResult(ctx, compactWaypostSendResult(out, input.Diagnostics))
 }
 
 func compactWaypostSendResult(out map[string]any, includeDetails bool) map[string]any {
@@ -933,8 +938,8 @@ func normalizedKnownDeliveryIDs(deliveryIDs []string) []string {
 
 func (s *Service) waypostClaimHistory(ctx context.Context, _ *mcp.CallToolRequest, input waypostClaimHistoryInput) (*mcp.CallToolResult, map[string]any, error) {
 	deliveryID := strings.TrimSpace(input.DeliveryID)
-	if input.IncludeLeaseToken && deliveryID == "" {
-		return nil, nil, errors.New("include_lease_token requires delivery_id")
+	if input.RecoverLeaseToken && deliveryID == "" {
+		return nil, nil, errors.New("recover_lease_token requires delivery_id")
 	}
 	if deliveryID != "" && (input.Limit != nil || strings.TrimSpace(input.Cursor) != "") {
 		return nil, nil, errors.New("limit and cursor are not supported with delivery_id")
@@ -973,7 +978,7 @@ func (s *Service) waypostClaimHistory(ctx context.Context, _ *mcp.CallToolReques
 			"status":            lease.Status,
 			"terminal_at":       nilIfEmpty(lease.TerminalAt),
 		}
-		if input.IncludeLeaseToken && lease.LeaseToken != "" {
+		if input.RecoverLeaseToken && lease.LeaseToken != "" {
 			item["lease_token"] = lease.LeaseToken
 		}
 		items = append(items, item)
@@ -989,8 +994,8 @@ func (s *Service) waypostClaimHistory(ctx context.Context, _ *mcp.CallToolReques
 		"status":                 "listed",
 		"items":                  items,
 		"include_terminal":       input.IncludeTerminal,
-		"lease_tokens_included":  input.IncludeLeaseToken,
-		"lease_token_hint":       "Pass delivery_id and include_lease_token=true only when recovering a token this MCP process previously returned.",
+		"lease_tokens_included":  input.RecoverLeaseToken,
+		"lease_token_hint":       "Pass delivery_id and recover_lease_token=true only when recovering a token this MCP process previously returned.",
 		"current_process_only":   true,
 		"claimed_delivery_count": len(leases),
 		"returned_claim_count":   len(items),

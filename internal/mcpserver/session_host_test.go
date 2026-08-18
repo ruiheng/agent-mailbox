@@ -1449,12 +1449,12 @@ func TestWaypostGroupSubscribersReportHostNeutralNotificationScheme(t *testing.T
 				DisableLeaseRenewLoop: true,
 			})
 			output := callServiceTool(t, service, "waypost_send", map[string]any{
-				"to_address":      "group/review",
-				"from_address":    "agent-deck/expert",
-				"subject":         "group update",
-				"body":            "body",
-				"group":           true,
-				"include_details": true,
+				"to_address":   "group/review",
+				"from_address": "agent-deck/expert",
+				"subject":      "group update",
+				"body":         "body",
+				"group":        true,
+				"diagnostics":  true,
 			})
 			if output["notify_status"] != "sent" || output["notify_scheme"] != test.wantScheme {
 				t.Fatalf("group notify outcome = %v, want scheme %q", output, test.wantScheme)
@@ -1494,10 +1494,10 @@ func TestThurboxWakeFollowsDurableSendAndFailureKeepsDelivery(t *testing.T) {
 	originalFactory := service.waypostServices
 	service.waypostServices = durableFlagFactory{delegate: originalFactory, stored: &durableStored}
 	output := callServiceTool(t, service, "waypost_send", map[string]any{
-		"to_address":      "thurbox/" + thurboxAuthorID,
-		"subject":         "delegate",
-		"body":            "full workflow body must stay in Waypost",
-		"include_details": true,
+		"to_address":  "thurbox/" + thurboxAuthorID,
+		"subject":     "delegate",
+		"body":        "full workflow body must stay in Waypost",
+		"diagnostics": true,
 	})
 	if output["status"] != "sent" || output["delivery_id"] == nil || output["notify_status"] != "failed" || output["notify_scheme"] != "thurbox" || output["notify_error"] == nil {
 		t.Fatalf("durable send with failed Thurbox wake = %v", output)

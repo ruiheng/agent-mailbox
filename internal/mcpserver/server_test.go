@@ -122,8 +122,15 @@ func TestWaypostSendSchemaExposesExclusiveRecipientSelectors(t *testing.T) {
 	if _, ok := schema.Properties["as_person"]; !ok {
 		t.Fatalf("schema.Properties missing as_person: %v", schema.Properties)
 	}
-	if _, ok := schema.Properties["include_details"]; !ok {
-		t.Fatalf("schema.Properties missing include_details: %v", schema.Properties)
+	diagnostics, ok := schema.Properties["diagnostics"]
+	if !ok {
+		t.Fatalf("schema.Properties missing diagnostics: %v", schema.Properties)
+	}
+	if _, ok := schema.Properties["include_details"]; ok {
+		t.Fatalf("schema.Properties unexpectedly includes include_details: %v", schema.Properties)
+	}
+	if got, want := diagnostics.Description, "Unnecessary for normal send."; got != want {
+		t.Fatalf("diagnostics description = %q, want %q", got, want)
 	}
 	if slices.Contains(schema.Required, "to_address") {
 		t.Fatalf("required fields = %v, do not want to_address", schema.Required)
@@ -765,10 +772,13 @@ func TestWaypostClaimHistorySchemaExposesRecoveryFields(t *testing.T) {
 	if err != nil {
 		t.Fatalf("jsonschema.For() error = %v", err)
 	}
-	for _, field := range []string{"delivery_id", "include_terminal", "include_lease_token"} {
+	for _, field := range []string{"delivery_id", "include_terminal", "recover_lease_token"} {
 		if _, ok := schema.Properties[field]; !ok {
 			t.Fatalf("schema.Properties missing %s: %v", field, schema.Properties)
 		}
+	}
+	if _, ok := schema.Properties["include_lease_token"]; ok {
+		t.Fatalf("schema.Properties unexpectedly includes include_lease_token: %v", schema.Properties)
 	}
 }
 
@@ -1337,10 +1347,10 @@ func TestWaypostSendNotifiesWorkerTarget(t *testing.T) {
 	service.state.autoBindAttempted = true
 
 	output := callServiceTool(t, service, "waypost_send", map[string]any{
-		"to_address":      "agent-deck/target",
-		"subject":         "delegate",
-		"body":            "body",
-		"include_details": true,
+		"to_address":  "agent-deck/target",
+		"subject":     "delegate",
+		"body":        "body",
+		"diagnostics": true,
 	})
 
 	if got := output["delivery_id"]; got != "dlv_1" {
@@ -1859,10 +1869,10 @@ func TestWaypostSendSkipsNotifyWhenDeliveryAlreadyClaimed(t *testing.T) {
 	service.state.autoBindAttempted = true
 
 	output := callServiceTool(t, service, "waypost_send", map[string]any{
-		"to_address":      "agent-deck/target",
-		"subject":         "delegate",
-		"body":            "body",
-		"include_details": true,
+		"to_address":  "agent-deck/target",
+		"subject":     "delegate",
+		"body":        "body",
+		"diagnostics": true,
 	})
 
 	if got := output["delivery_id"]; got != "dlv_claimed" {
@@ -1965,7 +1975,7 @@ func TestWaypostSendAllowsAgentDeckNotifyDisable(t *testing.T) {
 		"subject":                "delegate",
 		"body":                   "body",
 		"disable_notify_message": true,
-		"include_details":        true,
+		"diagnostics":            true,
 	})
 
 	if got := output["delivery_id"]; got != "dlv_disabled" {
@@ -2000,11 +2010,11 @@ func TestWaypostSendUsesExplicitFromAddressWithoutBoundState(t *testing.T) {
 	})
 
 	output := callServiceTool(t, service, "waypost_send", map[string]any{
-		"to_address":      "workflow/target",
-		"from_address":    "agent/sender",
-		"subject":         "delegate",
-		"body":            "body",
-		"include_details": true,
+		"to_address":   "workflow/target",
+		"from_address": "agent/sender",
+		"subject":      "delegate",
+		"body":         "body",
+		"diagnostics":  true,
 	})
 	if got := output["delivery_id"]; got != "dlv_explicit" {
 		t.Fatalf("delivery_id = %v, want dlv_explicit", got)
@@ -2042,13 +2052,13 @@ func TestWaypostSendGroupModeUsesGroupSendParams(t *testing.T) {
 	})
 
 	output := callServiceTool(t, service, "waypost_send", map[string]any{
-		"to_address":      "group/review",
-		"from_address":    "agent/sender",
-		"subject":         "group update",
-		"body":            "body",
-		"group":           true,
-		"as_person":       " alice ",
-		"include_details": true,
+		"to_address":   "group/review",
+		"from_address": "agent/sender",
+		"subject":      "group update",
+		"body":         "body",
+		"group":        true,
+		"as_person":    " alice ",
+		"diagnostics":  true,
 	})
 
 	if got := output["mode"]; got != waypost.SendModeGroup {
@@ -2119,12 +2129,12 @@ func TestWaypostSendGroupModeNotifiesSubscriber(t *testing.T) {
 	})
 
 	output := callServiceTool(t, service, "waypost_send", map[string]any{
-		"to_address":      "group/review",
-		"from_address":    "agent-deck/expert",
-		"subject":         "expert post",
-		"body":            "body",
-		"group":           true,
-		"include_details": true,
+		"to_address":   "group/review",
+		"from_address": "agent-deck/expert",
+		"subject":      "expert post",
+		"body":         "body",
+		"group":        true,
+		"diagnostics":  true,
 	})
 
 	if got := output["message_id"]; got != "msg_group" {
@@ -2223,11 +2233,11 @@ func TestWaypostSendGroupModeReportsNoSubscribersForResolvedDefaultSender(t *tes
 	service.state.autoBindAttempted = true
 
 	output := callServiceTool(t, service, "waypost_send", map[string]any{
-		"to_address":      "group/review",
-		"subject":         "moderator post",
-		"body":            "body",
-		"group":           true,
-		"include_details": true,
+		"to_address":  "group/review",
+		"subject":     "moderator post",
+		"body":        "body",
+		"group":       true,
+		"diagnostics": true,
 	})
 	if got := output["from_address"]; got != "agent-deck/moderator" {
 		t.Fatalf("from_address = %v, want agent-deck/moderator", got)
@@ -2774,7 +2784,7 @@ func TestWaypostSendUsesFixedWakeTextWhenDisableFlagUnset(t *testing.T) {
 		"subject":                "delegate",
 		"body":                   "body",
 		"disable_notify_message": false,
-		"include_details":        true,
+		"diagnostics":            true,
 	})
 
 	if got := output["delivery_id"]; got != "dlv_custom" {
@@ -2854,10 +2864,10 @@ func TestWaypostSendReturnsReceiptWhenNotifyFails(t *testing.T) {
 	service.notifications.retryWait = func(context.Context, time.Duration) error { return nil }
 
 	output := callServiceTool(t, service, "waypost_send", map[string]any{
-		"to_address":      "agent-deck/target",
-		"subject":         "delegate",
-		"body":            "body",
-		"include_details": true,
+		"to_address":  "agent-deck/target",
+		"subject":     "delegate",
+		"body":        "body",
+		"diagnostics": true,
 	})
 
 	if got := output["status"]; got != "sent" {
@@ -5261,7 +5271,7 @@ func TestWaypostRecvReportsActiveLeaseImmediately(t *testing.T) {
 
 	history := callServiceTool(t, service, "waypost_claim_history", map[string]any{
 		"delivery_id":         deliveryID,
-		"include_lease_token": true,
+		"recover_lease_token": true,
 	})
 	items := history["items"].([]any)
 	if len(items) != 1 {

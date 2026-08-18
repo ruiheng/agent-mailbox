@@ -298,7 +298,7 @@ exactly, including compact/full and `--notify` variants.
 
 When MCP receives `to_address`, use the compact send contract: `status`, the
 durable receipt, `notify_status`, and `notify_error` only when notification
-fails. `include_details: true` adds effective routing, notification scheme, and
+fails. `diagnostics: true` adds effective routing, notification scheme, and
 group storage metadata. `subject` and normalized `to_address` are input echoes
 and are not returned. Existing durable-send errors remain MCP tool errors with
 no receipt. The MCP `waypost_forward` implementation continues to construct the

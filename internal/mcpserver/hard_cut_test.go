@@ -348,7 +348,7 @@ func TestExternalDurableFailReconcilesMCPLeaseHistoryAndStatus(t *testing.T) {
 	history := callServiceTool(t, service, "waypost_claim_history", map[string]any{
 		"delivery_id":         deliveryID,
 		"include_terminal":    true,
-		"include_lease_token": true,
+		"recover_lease_token": true,
 	})
 	items := history["items"].([]any)
 	if len(items) != 1 {

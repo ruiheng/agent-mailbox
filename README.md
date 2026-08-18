@@ -305,7 +305,7 @@ messages. The singular form and its output remain unchanged.
 paths. Set `disable_notify_message = true` to skip only that immediate send-time
 notify. Its default single-recipient result contains the durable receipt,
 `status`, and `notify_status`; `notify_error` is added only on failure. Set
-`include_details: true` for effective routing, notification scheme, and group
+`diagnostics: true` for effective routing, notification scheme, and group
 storage metadata. Batch result items retain their resolved sender, recipient,
 subject, notification outcome, and applicable receipt fields. Input echoes such
 as `subject` are not part of the singular compact contract.

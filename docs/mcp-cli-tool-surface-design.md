@@ -385,7 +385,7 @@ Reconciliation updates the history entry as follows:
 - a missing delivery uses `missing`; a still-leased delivery with a different
   token uses `lease_replaced`
 - terminal and replaced entries never return the old lease token, including a
-  targeted `include_lease_token` request
+  targeted `recover_lease_token` request
 
 The reconciliation result and history snapshot are applied under the tracker
 lock, so a response cannot race with another local tracker update. An
