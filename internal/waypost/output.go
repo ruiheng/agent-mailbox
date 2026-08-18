@@ -157,6 +157,51 @@ func (a *App) writeSendResultFullTextWithNotification(result SendResultFullWithN
 	return err
 }
 
+func (a *App) writeSendBatchText(result SendBatchOutput, full bool) error {
+	for _, item := range result.Results {
+		if _, err := fmt.Fprintln(a.stdout, formatSendBatchItemText(item, full)); err != nil {
+			return err
+		}
+	}
+	_, err := fmt.Fprintf(
+		a.stdout,
+		"status=%s recipient_count=%d sent_count=%d failed_count=%d\n",
+		result.Status,
+		result.RecipientCount,
+		result.SentCount,
+		result.FailedCount,
+	)
+	return err
+}
+
+func formatSendBatchItemText(item SendBatchItemOutput, full bool) string {
+	prefix := fmt.Sprintf("to_address=%s status=%s", item.ToAddress, item.Status)
+	if item.Status == "failed" {
+		line := fmt.Sprintf("%s error=%q", prefix, item.Error)
+		if item.NotifyStatus != nil {
+			line += " " + formatSendNotificationText(*item.NotifyStatus, item.NotifyScheme, item.NotifyError)
+		}
+		return line
+	}
+
+	line := prefix
+	if item.Mode == SendModeGroup {
+		eligibleCount := 0
+		if item.EligibleCount != nil {
+			eligibleCount = *item.EligibleCount
+		}
+		line += fmt.Sprintf(" message_id=%s group=%s eligible_count=%d", item.MessageID, item.GroupAddress, eligibleCount)
+	} else if full {
+		line += fmt.Sprintf(" message_id=%s delivery_id=%s blob_id=%s", item.MessageID, item.DeliveryID, item.BlobID)
+	} else {
+		line += fmt.Sprintf(" delivery_id=%s", item.DeliveryID)
+	}
+	if item.NotifyStatus != nil {
+		line += " " + formatSendNotificationText(*item.NotifyStatus, item.NotifyScheme, item.NotifyError)
+	}
+	return line
+}
+
 func (a *App) writeForwardResultText(result ForwardResultCompact) error {
 	if result.Mode == SendModeGroup {
 		eligibleCount := 0

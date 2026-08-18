@@ -366,11 +366,12 @@ by two spaces.
 
 ### `send`
 
-Queue one message for a recipient address, or append one message to a known group
-address when `--group` is set.
+Queue one message for a recipient address, or use repeated `--to` flags to
+coordinate independent sends of the same message. With `--group`, every
+recipient must be a known group address.
 
 ```bash
-waypost send --to <address> --body-file <path-or-> [--group] [--notify] [--json | --yaml] [--full]
+waypost send --to <address> [--to <address> ...] --body-file <path-or-> [--group] [--notify] [--json | --yaml] [--full]
 ```
 
 Use `--json` or `--yaml` for scripts and agents.
@@ -388,6 +389,11 @@ Notes:
 
 - `--body-file -` reads from stdin
 - the message body must not be empty
+- repeat `--to` for a batch of up to 10 raw recipient values; comma-separated
+  addresses are not split
+- batch recipients are normalized and deduplicated in first-seen order before
+  the first send; duplicate flags therefore produce one durable send
+- one `--to` keeps the existing single-recipient output and error contract
 - personal send default output is a compact acknowledgement with `delivery_id`
 - personal `--full` returns the legacy identifier payload with `message_id`,
   `delivery_id`, and `blob_id`
@@ -402,6 +408,31 @@ Notes:
   `group_address`, `eligible_count`, and `message_created_at`
 - group send plain-text output is
   `message_id=<id> group=<address> eligible_count=<n>`
+
+For two or more `--to` flags, sends run in normalized order and each target has
+its own durable transaction and optional notification. JSON and YAML return one
+batch envelope such as:
+
+```json
+{
+  "status": "partial_failed",
+  "to_addresses": ["agent-deck/alpha", "agent-deck/beta"],
+  "recipient_count": 2,
+  "sent_count": 1,
+  "failed_count": 1,
+  "results": [
+    {"to_address": "agent-deck/alpha", "status": "sent", "delivery_id": "dlv_..."},
+    {"to_address": "agent-deck/beta", "status": "failed", "error": "..."}
+  ]
+}
+```
+
+The text form emits one line per result and one aggregate line. A durable
+failure does not stop later recipients; the command writes the complete batch
+envelope and then exits 1 with a concise stderr summary. Notification failures
+remain informational. Retry only failed addresses after inspecting `results`,
+because retrying the full batch can create duplicate messages for earlier
+successes.
 
 When `--notify` is set, structured output additionally includes
 `notify_status`, `notify_scheme`, and `notify_error`. A notification failure is

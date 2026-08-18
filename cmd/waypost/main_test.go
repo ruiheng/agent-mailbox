@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -921,6 +922,92 @@ func TestCLISendJSONOutputIsCompact(t *testing.T) {
 	}
 }
 
+func TestCLISendBatchJSONProducesOrderedIndependentReceipts(t *testing.T) {
+	stateDir := filepath.Join(t.TempDir(), "waypost-state")
+
+	send := runCLI(t, "batch body\n", "--state-dir", stateDir,
+		"send",
+		"--to", "workflow/one",
+		"--to", " workflow/two ",
+		"--to", "workflow/one",
+		"--from", "agent/sender",
+		"--subject", "batch",
+		"--body-file", "-",
+		"--json",
+	)
+	if send.exitCode != 0 {
+		t.Fatalf("batch send exit code = %d, stderr = %q", send.exitCode, send.stderr)
+	}
+	if send.stderr != "" {
+		t.Fatalf("batch send stderr = %q, want empty", send.stderr)
+	}
+
+	var output map[string]any
+	if err := json.Unmarshal([]byte(send.stdout), &output); err != nil {
+		t.Fatalf("json.Unmarshal(batch send output) error = %v; stdout = %q", err, send.stdout)
+	}
+	if output["status"] != "sent" || output["recipient_count"] != float64(2) || output["sent_count"] != float64(2) || output["failed_count"] != float64(0) {
+		t.Fatalf("batch output = %v, want two successful recipients", output)
+	}
+	if got := output["to_addresses"]; !reflect.DeepEqual(got, []any{"workflow/one", "workflow/two"}) {
+		t.Fatalf("to_addresses = %#v, want normalized first-seen recipients", got)
+	}
+	results, ok := output["results"].([]any)
+	if !ok || len(results) != 2 {
+		t.Fatalf("results = %#v, want two receipts", output["results"])
+	}
+	first := results[0].(map[string]any)
+	second := results[1].(map[string]any)
+	if first["to_address"] != "workflow/one" || second["to_address"] != "workflow/two" || first["delivery_id"] == "" || second["delivery_id"] == "" || first["delivery_id"] == second["delivery_id"] {
+		t.Fatalf("batch receipts = %v, want ordered independent delivery IDs", results)
+	}
+}
+
+func TestCLISendBatchPartialFailureWritesResultsBeforeExitOne(t *testing.T) {
+	stateDir := filepath.Join(t.TempDir(), "waypost-state")
+	runtime, err := waypost.OpenRuntime(context.Background(), stateDir)
+	if err != nil {
+		t.Fatalf("OpenRuntime() error = %v", err)
+	}
+	for _, address := range []string{"group/one", "group/three"} {
+		if _, err := runtime.Store().CreateGroup(context.Background(), address); err != nil {
+			t.Fatalf("CreateGroup(%q) error = %v", address, err)
+		}
+	}
+	if err := runtime.Close(); err != nil {
+		t.Fatalf("runtime.Close() error = %v", err)
+	}
+
+	send := runCLI(t, "group batch\n", "--state-dir", stateDir,
+		"send",
+		"--to", "group/one",
+		"--to", "group/missing",
+		"--to", "group/three",
+		"--group",
+		"--from", "agent/sender",
+		"--body-file", "-",
+		"--json",
+	)
+	if send.exitCode != 1 {
+		t.Fatalf("partial batch exit code = %d, want 1; stderr = %q", send.exitCode, send.stderr)
+	}
+	if !strings.Contains(send.stderr, "send batch failed for 1 of 3 recipients") {
+		t.Fatalf("partial batch stderr = %q, want concise failure summary", send.stderr)
+	}
+
+	var output map[string]any
+	if err := json.Unmarshal([]byte(send.stdout), &output); err != nil {
+		t.Fatalf("json.Unmarshal(partial batch output) error = %v; stdout = %q", err, send.stdout)
+	}
+	if output["status"] != "partial_failed" || output["sent_count"] != float64(2) || output["failed_count"] != float64(1) {
+		t.Fatalf("partial batch output = %v", output)
+	}
+	results := output["results"].([]any)
+	if results[1].(map[string]any)["status"] != "failed" || results[1].(map[string]any)["notify_status"] != nil {
+		t.Fatalf("failed no-notify batch item = %v, want failed without notification fields", results[1])
+	}
+}
+
 func TestCLISendYAMLOutputIsCompact(t *testing.T) {
 	stateDir := filepath.Join(t.TempDir(), "waypost-state")
 
@@ -1755,7 +1842,7 @@ func TestCLIHelpExitsZeroAndPrintsUsage(t *testing.T) {
 		{
 			name:         "send help",
 			args:         []string{"send", "--help"},
-			wantContains: "Usage:\n  waypost send --to ADDRESS --body-file PATH [options] [--json | --yaml] [--full] [--notify]",
+			wantContains: "Usage:\n  waypost send --to ADDRESS [--to ADDRESS ...] --body-file PATH [options] [--json | --yaml] [--full] [--notify]",
 		},
 		{
 			name:         "renew help",

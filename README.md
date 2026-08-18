@@ -292,13 +292,24 @@ address it would produce. Its broader debug environment diagnostics also include
 chain for those same allowlisted variables so callers can tell whether a tool
 omitted a variable or failed to pass it into the MCP process.
 
+`waypost_send` accepts exactly one recipient selector: the existing
+`to_address` string for the legacy single-recipient contract, or a
+`to_addresses` array with 1-10 raw values for a batch. The plural form
+normalizes and deduplicates recipients in first-seen order, sends them
+sequentially, and always returns a batch envelope with `to_addresses`,
+`recipient_count`, `sent_count`, `failed_count`, and ordered `results`.
+Ordinary per-recipient durable failures appear as `failed` result items without
+stopping later recipients; retry only those failed addresses to avoid duplicate
+messages. The singular form and its output remain unchanged.
+
 `waypost_send` always uses the fixed wakeup text for supported remote notify
 paths. Set `disable_notify_message = true` to skip only that immediate send-time
-notify. Its default result contains the durable receipt, `status`, and
-`notify_status`; `notify_error` is added only on failure. Set
+notify. Its default single-recipient result contains the durable receipt,
+`status`, and `notify_status`; `notify_error` is added only on failure. Set
 `include_details: true` for effective routing, notification scheme, and group
-storage metadata. Input echoes such as `subject` are not part of the compact
-contract.
+storage metadata. Batch result items retain their resolved sender, recipient,
+subject, notification outcome, and applicable receipt fields. Input echoes such
+as `subject` are not part of the singular compact contract.
 
 `waypost_recv` defaults to the status-specific result only: `delivery` for a
 new claim, a bounded `claimed_delivery_ids` hint for active leases, or just
@@ -370,7 +381,10 @@ waypost --state-dir /tmp/waypost-demo \
 ```
 
 `send` requires a non-empty message body. Empty stdin and empty files are
-rejected.
+rejected. Repeat `--to` to deliver the same payload to up to 10 raw recipients;
+the batch form normalizes and deduplicates targets in first-seen order while a
+single `--to` retains the legacy output. A partial durable batch writes ordered
+results and exits 1, so retry only its failed targets.
 
 By default, `send` prints only `delivery_id=...`. Add `--notify` to request a
 best-effort immediate wakeup of a supported remote recipient after the durable

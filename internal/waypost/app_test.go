@@ -988,6 +988,38 @@ func TestAppSendRejectsEmptyBodyInput(t *testing.T) {
 	}
 }
 
+func TestAppSendBatchValidatesEveryRecipientBeforeAnyWrite(t *testing.T) {
+	t.Parallel()
+
+	stateDir := filepath.Join(t.TempDir(), "waypost-state")
+	app := NewApp(strings.NewReader("body"), &bytes.Buffer{}, &bytes.Buffer{})
+	err := app.RunWithStateDir(context.Background(), stateDir, []string{
+		"send",
+		"--to", "workflow/valid",
+		"--to", "not an address",
+		"--from", "agent/sender",
+		"--body-file", "-",
+	})
+	if err == nil || !strings.Contains(err.Error(), "invalid address") {
+		t.Fatalf("RunWithStateDir(batch invalid recipient) error = %v, want invalid address", err)
+	}
+
+	runtime, err := OpenRuntime(context.Background(), stateDir)
+	if err != nil {
+		t.Fatalf("OpenRuntime() error = %v", err)
+	}
+	defer runtime.Close()
+	for _, table := range []string{"messages", "deliveries"} {
+		var count int
+		if err := runtime.DB().QueryRow("SELECT COUNT(*) FROM " + table).Scan(&count); err != nil {
+			t.Fatalf("count %s error = %v", table, err)
+		}
+		if count != 0 {
+			t.Fatalf("%s count = %d, want 0", table, count)
+		}
+	}
+}
+
 func TestInvalidCLIPathsDoNotCreateRuntimeState(t *testing.T) {
 	t.Parallel()
 
@@ -1328,7 +1360,7 @@ func TestHelpCLIPathsDoNotCreateRuntimeState(t *testing.T) {
 		{
 			name:         "send help",
 			args:         []string{"send", "--help"},
-			wantContains: "Usage:\n  waypost send --to ADDRESS --body-file PATH [options] [--json | --yaml] [--full] [--notify]",
+			wantContains: "Usage:\n  waypost send --to ADDRESS [--to ADDRESS ...] --body-file PATH [options] [--json | --yaml] [--full] [--notify]",
 		},
 		{
 			name:         "forward help",

@@ -27,6 +27,14 @@ func (a *App) writeSendOutputWithNotification(format outputFormat, full bool, re
 	return a.writeSendResultTextWithNotification(CompactSendResultWithNotification(result, outcome))
 }
 
+func (a *App) writeSendBatchOutput(format outputFormat, full, includeNotification bool, result SendBatchResult) error {
+	output := SendBatchCLIOutput(result, full, includeNotification)
+	if format != outputFormatText {
+		return a.writeStructuredOutput(format, output)
+	}
+	return a.writeSendBatchText(output, full)
+}
+
 func (a *App) writeForwardOutput(format outputFormat, full bool, result ForwardResult) error {
 	if full {
 		return writeFormattedOutput(a, format, FullForwardResult(result), a.writeForwardResultFullText)

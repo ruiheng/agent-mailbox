@@ -114,11 +114,8 @@ func TestAgentDeckRequireSessionSchemaOmitsCreateOnlyFields(t *testing.T) {
 	}
 }
 
-func TestWaypostSendSchemaExposesGroup(t *testing.T) {
-	schema, err := jsonschema.For[waypostSendInput](nil)
-	if err != nil {
-		t.Fatalf("jsonschema.For() error = %v", err)
-	}
+func TestWaypostSendSchemaExposesExclusiveRecipientSelectors(t *testing.T) {
+	schema := waypostSendInputSchema()
 	if _, ok := schema.Properties["group"]; !ok {
 		t.Fatalf("schema.Properties missing group: %v", schema.Properties)
 	}
@@ -128,6 +125,175 @@ func TestWaypostSendSchemaExposesGroup(t *testing.T) {
 	if _, ok := schema.Properties["include_details"]; !ok {
 		t.Fatalf("schema.Properties missing include_details: %v", schema.Properties)
 	}
+	if slices.Contains(schema.Required, "to_address") {
+		t.Fatalf("required fields = %v, do not want to_address", schema.Required)
+	}
+	if len(schema.OneOf) != 2 || !slices.Contains(schema.OneOf[0].Required, "to_address") || !slices.Contains(schema.OneOf[1].Required, "to_addresses") {
+		t.Fatalf("oneOf = %#v, want exclusive to_address/to_addresses selectors", schema.OneOf)
+	}
+	toAddresses := schema.Properties["to_addresses"]
+	if toAddresses.MinItems == nil || *toAddresses.MinItems != 1 || toAddresses.MaxItems == nil || *toAddresses.MaxItems != waypost.MaxSendRecipients {
+		t.Fatalf("to_addresses schema = %#v, want 1-%d items", toAddresses, waypost.MaxSendRecipients)
+	}
+}
+
+func TestWaypostSendBatchReturnsOrderedPartialResults(t *testing.T) {
+	waypostService := &fakeWaypostService{t: t}
+	var calls []waypost.SendParams
+	waypostService.sendFunc = func(_ context.Context, params waypost.SendParams) (waypost.SendResult, error) {
+		calls = append(calls, params)
+		switch params.ToAddress {
+		case "workflow/two":
+			return waypost.SendResult{}, errors.New("commit send transaction: test failure")
+		default:
+			return waypost.SendResult{DeliveryID: "dlv_" + strings.TrimPrefix(params.ToAddress, "workflow/")}, nil
+		}
+	}
+	service := newService(Options{
+		WaypostServiceFactory: fakeWaypostServiceFactory{service: waypostService},
+		CommandRunner: &fakeRunner{t: t, handler: func(_ []string, _ string) (RunResult, error) {
+			return RunResult{ExitCode: 1}, nil
+		}},
+		DisableWakeScheduler:  true,
+		DisableLeaseRenewLoop: true,
+	})
+	defer service.Close()
+
+	output := callServiceTool(t, service, "waypost_send", map[string]any{
+		"to_addresses":           []string{" workflow/one ", "workflow/two", "workflow/one", "workflow/three"},
+		"from_address":           "agent/sender",
+		"subject":                " batch subject ",
+		"body":                   "body",
+		"disable_notify_message": true,
+	})
+
+	if got := output["status"]; got != "partial_failed" {
+		t.Fatalf("status = %v, want partial_failed", got)
+	}
+	if output["recipient_count"] != float64(3) || output["sent_count"] != float64(2) || output["failed_count"] != float64(1) {
+		t.Fatalf("batch counts = %v, want 3 recipients, 2 sent, 1 failed", output)
+	}
+	if want := []string{"workflow/one", "workflow/two", "workflow/three"}; !reflect.DeepEqual(sendParamAddresses(calls), want) {
+		t.Fatalf("send addresses = %v, want %v", sendParamAddresses(calls), want)
+	}
+	if got := output["to_addresses"]; !reflect.DeepEqual(got, []any{"workflow/one", "workflow/two", "workflow/three"}) {
+		t.Fatalf("to_addresses = %#v, want normalized first-seen order", got)
+	}
+
+	results, ok := output["results"].([]any)
+	if !ok || len(results) != 3 {
+		t.Fatalf("results = %#v, want three items", output["results"])
+	}
+	first := results[0].(map[string]any)
+	if first["status"] != "sent" || first["to_address"] != "workflow/one" || first["from_address"] != "agent/sender" || first["subject"] != "batch subject" {
+		t.Fatalf("first batch result = %v", first)
+	}
+	second := results[1].(map[string]any)
+	if second["status"] != "failed" || second["notify_status"] != "not_attempted" || !strings.Contains(second["error"].(string), "test failure") {
+		t.Fatalf("failed batch result = %v", second)
+	}
+	third := results[2].(map[string]any)
+	if third["status"] != "sent" || third["to_address"] != "workflow/three" {
+		t.Fatalf("third batch result = %v", third)
+	}
+}
+
+func TestWaypostSendBatchRejectsInvalidSelectorsBeforeSending(t *testing.T) {
+	waypostService := &fakeWaypostService{t: t}
+	waypostService.sendFunc = func(_ context.Context, params waypost.SendParams) (waypost.SendResult, error) {
+		t.Fatalf("unexpected Send call: %+v", params)
+		return waypost.SendResult{}, nil
+	}
+	service := newService(Options{
+		WaypostServiceFactory: fakeWaypostServiceFactory{service: waypostService},
+		CommandRunner: &fakeRunner{t: t, handler: func(_ []string, _ string) (RunResult, error) {
+			return RunResult{ExitCode: 1}, nil
+		}},
+		DisableWakeScheduler:  true,
+		DisableLeaseRenewLoop: true,
+	})
+	defer service.Close()
+
+	for _, arguments := range []map[string]any{
+		{
+			"to_address":   "workflow/one",
+			"to_addresses": []string{"workflow/two"},
+			"subject":      "subject",
+			"body":         "body",
+		},
+		{
+			"subject": "subject",
+			"body":    "body",
+		},
+		{
+			"to_addresses": makeMCPRecipientAddresses(waypost.MaxSendRecipients + 1),
+			"subject":      "subject",
+			"body":         "body",
+		},
+	} {
+		if err := callServiceToolExpectError(t, service, "waypost_send", arguments); err == nil {
+			t.Fatalf("waypost_send(%v) error = nil", arguments)
+		}
+	}
+}
+
+func TestWaypostSendBatchGroupUsesSharedGroupMetadata(t *testing.T) {
+	waypostService := &fakeWaypostService{t: t}
+	var calls []waypost.SendParams
+	waypostService.sendFunc = func(_ context.Context, params waypost.SendParams) (waypost.SendResult, error) {
+		calls = append(calls, params)
+		return waypost.SendResult{
+			Mode:         waypost.SendModeGroup,
+			MessageID:    "msg_" + strings.TrimPrefix(params.ToAddress, "group/"),
+			GroupID:      "grp_" + strings.TrimPrefix(params.ToAddress, "group/"),
+			GroupAddress: params.ToAddress,
+		}, nil
+	}
+	service := newService(Options{
+		WaypostServiceFactory: fakeWaypostServiceFactory{service: waypostService},
+		CommandRunner: &fakeRunner{t: t, handler: func(_ []string, _ string) (RunResult, error) {
+			return RunResult{ExitCode: 1}, nil
+		}},
+		DisableWakeScheduler:  true,
+		DisableLeaseRenewLoop: true,
+	})
+	defer service.Close()
+
+	output := callServiceTool(t, service, "waypost_send", map[string]any{
+		"to_addresses": []string{"group/one", "group/two"},
+		"from_address": "agent/sender",
+		"as_person":    " alice ",
+		"subject":      "group batch",
+		"body":         "body",
+		"group":        true,
+	})
+	if output["status"] != "sent" {
+		t.Fatalf("batch status = %v, want sent", output["status"])
+	}
+	if len(calls) != 2 {
+		t.Fatalf("send calls = %d, want 2", len(calls))
+	}
+	for _, params := range calls {
+		if !params.Group || params.AsPerson != "alice" || params.FromAddress != "agent/sender" {
+			t.Fatalf("group batch params = %+v, want shared group metadata", params)
+		}
+	}
+}
+
+func sendParamAddresses(params []waypost.SendParams) []string {
+	addresses := make([]string, len(params))
+	for index := range params {
+		addresses[index] = params[index].ToAddress
+	}
+	return addresses
+}
+
+func makeMCPRecipientAddresses(count int) []string {
+	addresses := make([]string, count)
+	for index := range addresses {
+		addresses[index] = fmt.Sprintf("workflow/recipient-%d", index)
+	}
+	return addresses
 }
 
 func TestCompactWaypostSendResultKeepsOnlyActionableFields(t *testing.T) {

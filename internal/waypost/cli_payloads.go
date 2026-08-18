@@ -48,6 +48,35 @@ type SendResultFullWithNotification struct {
 	NotifyError      *string `json:"notify_error"`
 }
 
+// SendBatchOutput is the opt-in, multi-recipient CLI result envelope. Single
+// recipient sends continue to use the legacy result types above.
+type SendBatchOutput struct {
+	Status         string                `json:"status"`
+	ToAddresses    []string              `json:"to_addresses"`
+	RecipientCount int                   `json:"recipient_count"`
+	SentCount      int                   `json:"sent_count"`
+	FailedCount    int                   `json:"failed_count"`
+	Results        []SendBatchItemOutput `json:"results"`
+}
+
+// SendBatchItemOutput is one CLI batch item's compact or full projection.
+type SendBatchItemOutput struct {
+	ToAddress        string  `json:"to_address"`
+	Status           string  `json:"status"`
+	Mode             string  `json:"mode,omitempty"`
+	MessageID        string  `json:"message_id,omitempty"`
+	DeliveryID       string  `json:"delivery_id,omitempty"`
+	BlobID           string  `json:"blob_id,omitempty"`
+	GroupID          string  `json:"group_id,omitempty"`
+	GroupAddress     string  `json:"group_address,omitempty"`
+	EligibleCount    *int    `json:"eligible_count,omitempty"`
+	MessageCreatedAt string  `json:"message_created_at,omitempty"`
+	NotifyStatus     *string `json:"notify_status,omitempty"`
+	NotifyScheme     *string `json:"notify_scheme,omitempty"`
+	NotifyError      *string `json:"notify_error,omitempty"`
+	Error            string  `json:"error,omitempty"`
+}
+
 type ForwardResultCompact struct {
 	Mode             string `json:"mode,omitempty"`
 	DeliveryID       string `json:"delivery_id,omitempty"`
@@ -241,6 +270,70 @@ func FullSendResultWithNotification(result SendResult, outcome SendNotificationO
 		NotifyScheme:     scheme,
 		NotifyError:      notifyError,
 	}
+}
+
+// SendBatchCLIOutput projects a completed shared batch for the CLI. The full
+// and notification switches affect only the new batch contract; they do not
+// alter legacy single-recipient projections.
+func SendBatchCLIOutput(result SendBatchResult, full, includeNotification bool) SendBatchOutput {
+	output := SendBatchOutput{
+		Status:         result.Status(),
+		ToAddresses:    append([]string(nil), result.ToAddresses...),
+		RecipientCount: len(result.ToAddresses),
+		SentCount:      result.SentCount,
+		FailedCount:    result.FailedCount,
+		Results:        make([]SendBatchItemOutput, 0, len(result.Items)),
+	}
+	for _, item := range result.Items {
+		projected := SendBatchItemOutput{
+			ToAddress: item.ToAddress,
+			Status:    "sent",
+		}
+		if item.Err != nil {
+			projected.Status = "failed"
+			projected.Error = item.Err.Error()
+			if includeNotification {
+				notAttempted := "not_attempted"
+				projected.NotifyStatus = &notAttempted
+			}
+			output.Results = append(output.Results, projected)
+			continue
+		}
+
+		if full {
+			receipt := FullSendResult(item.Result)
+			projected.Mode = receipt.Mode
+			projected.MessageID = receipt.MessageID
+			projected.DeliveryID = receipt.DeliveryID
+			projected.BlobID = receipt.BlobID
+			projected.GroupID = receipt.GroupID
+			projected.GroupAddress = receipt.GroupAddress
+			projected.EligibleCount = receipt.EligibleCount
+			projected.MessageCreatedAt = receipt.MessageCreatedAt
+		} else {
+			receipt := CompactSendResult(item.Result)
+			projected.Mode = receipt.Mode
+			projected.MessageID = receipt.MessageID
+			projected.DeliveryID = receipt.DeliveryID
+			projected.GroupID = receipt.GroupID
+			projected.GroupAddress = receipt.GroupAddress
+			projected.EligibleCount = receipt.EligibleCount
+			projected.MessageCreatedAt = receipt.MessageCreatedAt
+		}
+		if includeNotification {
+			if item.Notification == nil {
+				unknown := "unknown"
+				projected.NotifyStatus = &unknown
+			} else {
+				status, scheme, notifyError := notificationOutputFields(*item.Notification)
+				projected.NotifyStatus = &status
+				projected.NotifyScheme = scheme
+				projected.NotifyError = notifyError
+			}
+		}
+		output.Results = append(output.Results, projected)
+	}
+	return output
 }
 
 func CompactForwardResult(result ForwardResult) ForwardResultCompact {

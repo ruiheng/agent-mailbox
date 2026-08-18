@@ -2,12 +2,14 @@ package mcpserver
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"sort"
 	"strings"
 	"time"
 
+	"github.com/google/jsonschema-go/jsonschema"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/ruiheng/waypost/internal/waypost"
 )
@@ -29,18 +31,37 @@ type waypostStatusInput struct {
 type waypostDebugInput struct{}
 
 type waypostSendInput struct {
-	ToAddress            string `json:"to_address"`
-	FromAddress          string `json:"from_address,omitempty"`
-	AsPerson             string `json:"as_person,omitempty"`
-	Subject              string `json:"subject"`
-	Body                 string `json:"body"`
-	ContentType          string `json:"content_type,omitempty"`
-	SchemaVersion        string `json:"schema_version,omitempty"`
-	DisableNotifyMessage *bool  `json:"disable_notify_message,omitempty"`
-	Group                bool   `json:"group,omitempty"`
-	IncludeDetails       bool   `json:"include_details,omitempty"`
+	ToAddress            string   `json:"to_address,omitempty"`
+	ToAddresses          []string `json:"to_addresses,omitempty"`
+	FromAddress          string   `json:"from_address,omitempty"`
+	AsPerson             string   `json:"as_person,omitempty"`
+	Subject              string   `json:"subject"`
+	Body                 string   `json:"body"`
+	ContentType          string   `json:"content_type,omitempty"`
+	SchemaVersion        string   `json:"schema_version,omitempty"`
+	DisableNotifyMessage *bool    `json:"disable_notify_message,omitempty"`
+	Group                bool     `json:"group,omitempty"`
+	IncludeDetails       bool     `json:"include_details,omitempty"`
 	forwardedMessageID   string
 	forwardedFromAddress string
+}
+
+func waypostSendInputSchema() *jsonschema.Schema {
+	schema, err := jsonschema.For[waypostSendInput](nil)
+	if err != nil {
+		panic(fmt.Errorf("build waypost_send input schema: %w", err))
+	}
+	toAddresses, ok := schema.Properties["to_addresses"]
+	if !ok {
+		panic("build waypost_send input schema: missing to_addresses")
+	}
+	toAddresses.MinItems = jsonschema.Ptr(1)
+	toAddresses.MaxItems = jsonschema.Ptr(waypost.MaxSendRecipients)
+	schema.OneOf = []*jsonschema.Schema{
+		{Required: []string{"to_address"}},
+		{Required: []string{"to_addresses"}},
+	}
+	return schema
 }
 
 type waypostForwardInput struct {
@@ -157,7 +178,8 @@ func (s *Service) registerWaypostTools(server *mcp.Server) {
 	}
 	addToolRequiringWaypostStatus(server, s, &mcp.Tool{
 		Name:        "waypost_send",
-		Description: "Send a Waypost message; push-notify a non-local target when supported. Set disable_notify_message=true to skip notification or include_details=true for low-frequency routing detail.",
+		Description: "Send a Waypost message to exactly one selector: to_address for the legacy single-recipient form, or to_addresses for a 1-10 recipient batch. Push-notify a non-local target when supported. Set disable_notify_message=true to skip notification or include_details=true for low-frequency routing detail.",
+		InputSchema: waypostSendInputSchema(),
 	}, s.waypostSend)
 	addToolRequiringWaypostStatus(server, s, &mcp.Tool{
 		Name:        "waypost_recv",
@@ -335,6 +357,10 @@ func (s *Service) sendWaypostMessageWithService(ctx context.Context, input waypo
 	}
 
 	notify := s.notifyWaypostSend(ctx, input, sendResult, service)
+	return waypostSendResultMap(input, fromAddress, sendResult, notify), nil
+}
+
+func waypostSendResultMap(input waypostSendInput, fromAddress string, sendResult waypost.SendResult, notify notificationOutcome) map[string]any {
 	out := map[string]any{
 		"status":        "sent",
 		"from_address":  fromAddress,
@@ -357,7 +383,131 @@ func (s *Service) sendWaypostMessageWithService(ctx context.Context, input waypo
 	} else {
 		out["delivery_id"] = sendResult.DeliveryID
 	}
-	return out, nil
+	return out
+}
+
+func validateWaypostSendSelector(req *mcp.CallToolRequest, input waypostSendInput) (bool, error) {
+	if req == nil || len(req.Params.Arguments) == 0 {
+		return false, errors.New("waypost_send requires exactly one of to_address or to_addresses")
+	}
+
+	var rawArgs map[string]json.RawMessage
+	if err := json.Unmarshal(req.Params.Arguments, &rawArgs); err != nil {
+		return false, fmt.Errorf("invalid tool arguments: %w", err)
+	}
+	_, hasToAddress := rawArgs["to_address"]
+	_, hasToAddresses := rawArgs["to_addresses"]
+	if hasToAddress == hasToAddresses {
+		return false, errors.New("waypost_send requires exactly one of to_address or to_addresses")
+	}
+	if hasToAddresses && len(input.ToAddresses) == 0 {
+		return false, errors.New("waypost_send to_addresses must contain at least one recipient")
+	}
+	return hasToAddresses, nil
+}
+
+func (s *Service) sendWaypostBatchMessage(ctx context.Context, input waypostSendInput) (map[string]any, error) {
+	recipients, err := waypost.NormalizeSendRecipients(input.ToAddresses, input.Group)
+	if err != nil {
+		return nil, err
+	}
+	input.AsPerson = strings.TrimSpace(input.AsPerson)
+	input.Subject = strings.TrimSpace(input.Subject)
+	input.ContentType = strings.TrimSpace(input.ContentType)
+	input.SchemaVersion = strings.TrimSpace(input.SchemaVersion)
+	input.forwardedMessageID = strings.TrimSpace(input.forwardedMessageID)
+	input.forwardedFromAddress = strings.TrimSpace(input.forwardedFromAddress)
+	if input.AsPerson != "" && !input.Group {
+		return nil, errors.New("as_person requires group send")
+	}
+	if input.Body == "" {
+		return nil, waypost.ErrEmptyBody
+	}
+
+	fromAddress, err := s.sessions.senderAddress(ctx, input.FromAddress)
+	if err != nil {
+		return nil, err
+	}
+	if waypost.IsGroupAddress(fromAddress) {
+		return nil, fmt.Errorf("sender address %q uses reserved group/ prefix", fromAddress)
+	}
+	input.FromAddress = fromAddress
+	base := waypost.SendParams{
+		FromAddress:          fromAddress,
+		AsPerson:             input.AsPerson,
+		Subject:              input.Subject,
+		ContentType:          input.ContentType,
+		SchemaVersion:        input.SchemaVersion,
+		ForwardedMessageID:   input.forwardedMessageID,
+		ForwardedFromAddress: input.forwardedFromAddress,
+		Body:                 []byte(input.Body),
+		Group:                input.Group,
+	}
+
+	return withWaypostService(ctx, s.waypostServices, func(service waypostSender) (map[string]any, error) {
+		notify := func(ctx context.Context, request waypost.SendNotificationRequest) waypost.SendNotificationOutcome {
+			notificationInput := input
+			notificationInput.ToAddress = request.Params.ToAddress
+			outcome := s.notifyWaypostSend(ctx, notificationInput, request.Result, service)
+			return waypost.SendNotificationOutcome{
+				Status: outcome.Status,
+				Scheme: outcome.Scheme,
+				Err:    outcome.Err,
+			}
+		}
+		batch, err := waypost.ExecuteSendBatch(ctx, service, base, recipients, notify)
+		if err != nil {
+			return nil, err
+		}
+		return waypostSendBatchResult(input, batch), nil
+	})
+}
+
+func waypostSendBatchResult(input waypostSendInput, batch waypost.SendBatchResult) map[string]any {
+	results := make([]map[string]any, 0, len(batch.Items))
+	for _, item := range batch.Items {
+		if item.Err != nil {
+			results = append(results, map[string]any{
+				"status":        "failed",
+				"from_address":  input.FromAddress,
+				"to_address":    item.ToAddress,
+				"subject":       input.Subject,
+				"error":         item.Err.Error(),
+				"notify_status": "not_attempted",
+			})
+			continue
+		}
+
+		successInput := input
+		successInput.ToAddress = item.ToAddress
+		notify := notificationOutcome{Status: "unknown"}
+		if item.Notification != nil {
+			notify = notificationOutcome{
+				Status: item.Notification.Status,
+				Scheme: item.Notification.Scheme,
+				Err:    item.Notification.Err,
+			}
+		}
+		result := compactWaypostSendResult(
+			waypostSendResultMap(successInput, input.FromAddress, item.Result, notify),
+			input.IncludeDetails,
+		)
+		// Batch results retain their target, resolved sender, and subject even
+		// in compact mode so partial failures can be retried safely.
+		result["from_address"] = input.FromAddress
+		result["to_address"] = item.ToAddress
+		result["subject"] = input.Subject
+		results = append(results, result)
+	}
+
+	return map[string]any{
+		"status":          batch.Status(),
+		"to_addresses":    batch.ToAddresses,
+		"recipient_count": len(batch.ToAddresses),
+		"sent_count":      batch.SentCount,
+		"failed_count":    batch.FailedCount,
+		"results":         results,
+	}
 }
 
 func (s *Service) notifyWaypostSend(ctx context.Context, input waypostSendInput, sendResult waypost.SendResult, service any) notificationOutcome {
@@ -417,10 +567,22 @@ func (s *Service) deliveryStillQueued(ctx context.Context, service any, delivery
 	return strings.TrimSpace(deliveries[0].State) == "queued", nil
 }
 
-func (s *Service) waypostSend(ctx context.Context, _ *mcp.CallToolRequest, input waypostSendInput) (*mcp.CallToolResult, map[string]any, error) {
-	out, err := s.sendWaypostMessage(ctx, input)
+func (s *Service) waypostSend(ctx context.Context, req *mcp.CallToolRequest, input waypostSendInput) (*mcp.CallToolResult, map[string]any, error) {
+	batch, err := validateWaypostSendSelector(req, input)
 	if err != nil {
 		return nil, nil, err
+	}
+	var out map[string]any
+	if batch {
+		out, err = s.sendWaypostBatchMessage(ctx, input)
+	} else {
+		out, err = s.sendWaypostMessage(ctx, input)
+	}
+	if err != nil {
+		return nil, nil, err
+	}
+	if batch {
+		return s.waypostMutationToolResult(ctx, out)
 	}
 	return s.waypostMutationToolResult(ctx, compactWaypostSendResult(out, input.IncludeDetails))
 }
