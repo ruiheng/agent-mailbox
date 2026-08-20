@@ -338,6 +338,9 @@ target is absent, verifies an existing target belongs to the explicit
 `workdir`, and starts it if needed. `auto_restart` defaults to `true`; set it
 to `false` for a read-only lookup that returns `status = not_ready` instead of
 starting a stopped session. Callers do not need a separate resolve preflight.
+After a confirmed start, an unavailable, missing, or not-ready readback returns
+`status = ready_unverified` with `started_session = true` and recovery details;
+callers must not repeat the start.
 `waypost_send` remains transport-only and does not create downstream sessions.
 Pass `sessions` as a non-empty array of session IDs or refs to require multiple
 sessions in one call. All batch items use the same explicit `workdir`, return

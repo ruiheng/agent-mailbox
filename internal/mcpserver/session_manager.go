@@ -123,6 +123,20 @@ type sessionShowProbeResult struct {
 	Data   *sessionData
 }
 
+type sessionStartVerification struct {
+	State        string
+	ObservedPath string
+	Detail       string
+}
+
+type sessionStartResult struct {
+	Data                     *sessionData
+	StartedSession           bool
+	NotifyNeeded             bool
+	StartupInstructionStatus string
+	Verification             *sessionStartVerification
+}
+
 func newSessionManager(runner Runner, state *serverState) *sessionManager {
 	return &sessionManager{
 		runner:    runner,
@@ -1011,17 +1025,23 @@ func (m *sessionManager) requireSessionWithCanonicalWorkdir(ctx context.Context,
 		return out, nil
 	}
 
-	data, startedSession, notifyNeeded, startupInstructionStatus, err := m.startSessionIfNeeded(ctx, data, "")
+	start, err := m.startSessionIfNeeded(ctx, data, "", input.Workdir, workdir)
 	if err != nil {
 		return nil, err
 	}
 
-	out := sessionInfoMap(data, firstNonEmpty(input.SessionRef, identifier))
-	out["status"] = "ready"
+	out := sessionInfoMap(start.Data, firstNonEmpty(input.SessionRef, identifier))
+	if start.Verification != nil {
+		out["status"] = "ready_unverified"
+		out["recovery_required"] = true
+		out["verification"] = verificationMap(start.Verification.State, workdir, start.Verification.ObservedPath, start.Verification.Detail)
+	} else {
+		out["status"] = "ready"
+	}
 	out["created_target"] = false
-	out["started_session"] = startedSession
-	out["notify_needed"] = notifyNeeded
-	out["startup_instruction_status"] = startupInstructionStatus
+	out["started_session"] = start.StartedSession
+	out["notify_needed"] = start.NotifyNeeded
+	out["startup_instruction_status"] = start.StartupInstructionStatus
 	return out, nil
 }
 
@@ -1108,9 +1128,13 @@ func (m *sessionManager) prepareCreateSessionLaunch(ctx context.Context, input a
 	return targetGroupPath, "", true, false, nil
 }
 
-func (m *sessionManager) startSessionIfNeeded(ctx context.Context, data *sessionData, startupInstruction string) (*sessionData, bool, bool, string, error) {
+func (m *sessionManager) startSessionIfNeeded(ctx context.Context, data *sessionData, startupInstruction, requestedWorkdir, canonicalWorkdir string) (sessionStartResult, error) {
 	if activeSessionStatuses[strings.TrimSpace(data.Status)] {
-		return data, false, true, "not_needed_existing_session", nil
+		return sessionStartResult{
+			Data:                     data,
+			NotifyNeeded:             true,
+			StartupInstructionStatus: "not_needed_existing_session",
+		}, nil
 	}
 
 	startArgs := []string{"agent-deck", "session", "start", "--json"}
@@ -1119,22 +1143,52 @@ func (m *sessionManager) startSessionIfNeeded(ctx context.Context, data *session
 	}
 	startArgs = append(startArgs, data.ID)
 	if _, err := runCommand(ctx, m.runner, startArgs, runOptions{}); err != nil {
-		return nil, false, false, "", err
-	}
-
-	refreshed, err := m.resolveSessionShow(ctx, data.ID, ensureSessionShowTimeout)
-	if err != nil {
-		return nil, false, false, "", err
-	}
-	if refreshed != nil {
-		data = refreshed
+		return sessionStartResult{}, err
 	}
 
 	startupInstructionStatus := "started"
 	if startupInstruction != "" {
 		startupInstructionStatus = "started_waiting"
 	}
-	return data, true, false, startupInstructionStatus, nil
+	unverified := func(state, observedPath, detail string) sessionStartResult {
+		return sessionStartResult{
+			Data:                     data,
+			StartedSession:           true,
+			StartupInstructionStatus: startupInstructionStatus,
+			Verification: &sessionStartVerification{
+				State:        state,
+				ObservedPath: observedPath,
+				Detail:       detail,
+			},
+		}
+	}
+
+	refreshed, err := m.resolveSessionShow(ctx, data.ID, ensureSessionShowTimeout)
+	if err != nil {
+		state := "post_start_lookup_failed"
+		if isHostSessionOutputFailure(err) {
+			state = "post_start_output_unparseable"
+		}
+		return unverified(state, "", err.Error()), nil
+	}
+	if refreshed == nil {
+		return unverified("post_start_disappeared", "", "target session not found after start"), nil
+	}
+	if refreshed.ID != data.ID {
+		return unverified("post_start_output_unparseable", "", fmt.Sprintf("refreshed session id %q does not match started session id %q", refreshed.ID, data.ID)), nil
+	}
+	if !activeSessionStatuses[strings.ToLower(strings.TrimSpace(refreshed.Status))] {
+		return unverified("post_start_not_ready", refreshed.Path, "target session is not ready after start"), nil
+	}
+	workdir := verifyHostSessionWorkdir(hostSessionFromAgentDeck(refreshed), requestedWorkdir, canonicalWorkdir)
+	if workdir.State != "verified" {
+		return unverified(postStartVerificationState(workdir.State), workdir.ObservedPath, workdir.Err.Error()), nil
+	}
+	return sessionStartResult{
+		Data:                     refreshed,
+		StartedSession:           true,
+		StartupInstructionStatus: startupInstructionStatus,
+	}, nil
 }
 
 func (m *sessionManager) listGroupPaths(ctx context.Context) (map[string]bool, error) {

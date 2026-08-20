@@ -3972,6 +3972,134 @@ func TestAgentDeckRequireSessionStartsInactiveTarget(t *testing.T) {
 	}
 }
 
+func TestAgentDeckRequireSessionReturnsRecoveryAfterConfirmedStart(t *testing.T) {
+	otherWorkdir := t.TempDir()
+	tests := []struct {
+		name      string
+		show      RunResult
+		showErr   error
+		wantState string
+	}{
+		{
+			name:      "lookup error",
+			showErr:   errors.New("session show unavailable"),
+			wantState: "post_start_lookup_failed",
+		},
+		{
+			name:      "lookup missing",
+			show:      RunResult{ExitCode: 2, Stderr: "not found"},
+			wantState: "post_start_disappeared",
+		},
+		{
+			name:      "invalid output",
+			show:      RunResult{ExitCode: 0, Stdout: "not JSON"},
+			wantState: "post_start_output_unparseable",
+		},
+		{
+			name:      "id mismatch",
+			show:      RunResult{ExitCode: 0, Stdout: `{"id":"session-other","title":"coder-123","status":"waiting","path":"/tmp"}`},
+			wantState: "post_start_output_unparseable",
+		},
+		{
+			name:      "still not ready",
+			show:      RunResult{ExitCode: 0, Stdout: `{"id":"session-1","title":"coder-123","status":"unknown","path":"/tmp"}`},
+			wantState: "post_start_not_ready",
+		},
+		{
+			name:      "workdir mismatch",
+			show:      RunResult{ExitCode: 0, Stdout: `{"id":"session-1","title":"coder-123","status":"waiting","path":` + jsonString(t, otherWorkdir) + `}`},
+			wantState: "post_start_path_mismatch",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			commandRunner := &fakeRunner{t: t, handler: func(args []string, input string) (RunResult, error) {
+				switch {
+				case reflect.DeepEqual(args, []string{"agent-deck", "session", "show", "coder-ref", "--json"}):
+					return RunResult{ExitCode: 0, Stdout: `{"id":"session-1","title":"coder-123","status":"stopped","path":"/tmp"}`}, nil
+				case reflect.DeepEqual(args, []string{"agent-deck", "session", "start", "--json", "session-1"}):
+					return RunResult{ExitCode: 0}, nil
+				case reflect.DeepEqual(args, []string{"agent-deck", "session", "show", "session-1", "--json"}):
+					return test.show, test.showErr
+				default:
+					t.Fatalf("unexpected command args: %v", args)
+					return RunResult{}, nil
+				}
+			}}
+			service := newService(Options{
+				WaypostServiceFactory: fakeWaypostServiceFactory{service: &fakeWaypostService{t: t}},
+				CommandRunner:         commandRunner,
+			})
+			service.state.autoBindAttempted = true
+
+			output := callServiceTool(t, service, "agent_deck_require_session", map[string]any{
+				"session_ref": "coder-ref",
+				"workdir":     "/tmp",
+			})
+			if output["status"] != "ready_unverified" || output["started_session"] != true || output["recovery_required"] != true {
+				t.Fatalf("post-start recovery output = %v", output)
+			}
+			if output["session_id"] != "session-1" || output["session_status"] != "stopped" || output["notify_needed"] != false || output["startup_instruction_status"] != "started" {
+				t.Fatalf("post-start recovery retained state = %v", output)
+			}
+			verification, ok := output["verification"].(map[string]any)
+			if !ok || verification["state"] != test.wantState {
+				t.Fatalf("post-start verification = %v, want state %q", output["verification"], test.wantState)
+			}
+			if calls := commandRunner.Calls(); len(calls) != 3 {
+				t.Fatalf("post-start command calls = %v, want lookup + one start + one readback", calls)
+			}
+		})
+	}
+}
+
+func TestAgentDeckRequireSessionBatchKeepsConfirmedStartRecoveryAndContinues(t *testing.T) {
+	commandRunner := &fakeRunner{t: t, handler: func(args []string, input string) (RunResult, error) {
+		switch {
+		case reflect.DeepEqual(args, []string{"agent-deck", "session", "show", "stopped-ref", "--json"}):
+			return RunResult{ExitCode: 0, Stdout: `{"id":"stopped-1","title":"stopped","status":"stopped","path":"/tmp"}`}, nil
+		case reflect.DeepEqual(args, []string{"agent-deck", "session", "start", "--json", "stopped-1"}):
+			return RunResult{ExitCode: 0}, nil
+		case reflect.DeepEqual(args, []string{"agent-deck", "session", "show", "stopped-1", "--json"}):
+			return RunResult{ExitCode: 2, Stderr: "not found"}, nil
+		case reflect.DeepEqual(args, []string{"agent-deck", "session", "show", "active-ref", "--json"}):
+			return RunResult{ExitCode: 0, Stdout: `{"id":"active-1","title":"active","status":"waiting","path":"/tmp"}`}, nil
+		default:
+			t.Fatalf("unexpected command args: %v", args)
+			return RunResult{}, nil
+		}
+	}}
+	service := newService(Options{
+		WaypostServiceFactory: fakeWaypostServiceFactory{service: &fakeWaypostService{t: t}},
+		CommandRunner:         commandRunner,
+	})
+	service.state.autoBindAttempted = true
+
+	output := callServiceTool(t, service, "agent_deck_require_session", map[string]any{
+		"sessions": []string{"stopped-ref", "active-ref"},
+		"workdir":  "/tmp",
+	})
+	results, ok := output["results"].([]any)
+	if !ok || len(results) != 2 {
+		t.Fatalf("batch require results = %v", output["results"])
+	}
+	recovery := results[0].(map[string]any)
+	if recovery["status"] != "ready_unverified" || recovery["started_session"] != true || recovery["recovery_required"] != true {
+		t.Fatalf("batch recovery result = %v", recovery)
+	}
+	if verification := recovery["verification"].(map[string]any); verification["state"] != "post_start_disappeared" {
+		t.Fatalf("batch recovery verification = %v", verification)
+	}
+	ready := results[1].(map[string]any)
+	if ready["status"] != "ready" || ready["started_session"] != false {
+		t.Fatalf("continued batch result = %v", ready)
+	}
+	if calls := commandRunner.Calls(); len(calls) != 4 {
+		t.Fatalf("batch command calls = %v, want recovery item followed by active lookup", calls)
+	}
+}
+
 func TestAgentDeckRequireSessionBatchReturnsOrderedIndependentResults(t *testing.T) {
 	commandRunner := &fakeRunner{t: t, handler: func(args []string, input string) (RunResult, error) {
 		switch strings.Join(args, "\x00") {
