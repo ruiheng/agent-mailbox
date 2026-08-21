@@ -323,7 +323,7 @@ const (
 )
 
 func (m *notificationManager) notifyRouteWithRetry(ctx context.Context, event notificationEvent) notificationOutcome {
-	probe := m.probeRouteWithRetry(ctx, event.Route)
+	probe := m.probeRouteForSendWithRetry(ctx, event.Route)
 	if probe.Wakeable {
 		// Notify is a non-idempotent side effect. Once it has been attempted,
 		// its error is ambiguous: the target may already have received the
@@ -338,9 +338,17 @@ func (m *notificationManager) notifyRouteWithRetry(ctx context.Context, event no
 }
 
 func (m *notificationManager) probeRouteWithRetry(ctx context.Context, route notificationRoute) notificationProbe {
+	return m.probeRouteWithRetryWhen(ctx, route, notificationProbeRetryable)
+}
+
+func (m *notificationManager) probeRouteForSendWithRetry(ctx context.Context, route notificationRoute) notificationProbe {
+	return m.probeRouteWithRetryWhen(ctx, route, notificationSendProbeRetryable)
+}
+
+func (m *notificationManager) probeRouteWithRetryWhen(ctx context.Context, route notificationRoute, retryable func(notificationProbe) bool) notificationProbe {
 	for attempt := 0; ; attempt++ {
 		probe := m.probeRoute(ctx, route)
-		if probe.Wakeable || !notificationProbeRetryable(probe) || attempt == len(notificationRetryDelays) {
+		if probe.Wakeable || !retryable(probe) || attempt == len(notificationRetryDelays) {
 			return probe
 		}
 		delay := notificationRetryDelays[attempt]
@@ -351,6 +359,25 @@ func (m *notificationManager) probeRouteWithRetry(ctx context.Context, route not
 		if err := wait(ctx, delay); err != nil {
 			return probe
 		}
+	}
+}
+
+func notificationSendProbeRetryable(probe notificationProbe) bool {
+	if notificationProbeRetryable(probe) {
+		return true
+	}
+	if probe.Scheme != "agent-deck" {
+		return false
+	}
+	switch probe.Status {
+	case "not_found", "target_queued":
+		// Fresh Agent Deck sessions can spend a short time absent from the
+		// session list or queued before they become wakeable. Neither outcome
+		// has attempted the non-idempotent nudge yet, so bounded send-time
+		// probe retries are safe.
+		return true
+	default:
+		return false
 	}
 }
 

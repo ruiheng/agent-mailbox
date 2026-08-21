@@ -439,6 +439,93 @@ func TestWaypostSendBatchKeepsReceiptsForNotificationOutcomes(t *testing.T) {
 	}
 }
 
+func TestWaypostSendBatchRetriesNewAgentDeckTargetsBeforeNudging(t *testing.T) {
+	waypostService := &fakeWaypostService{t: t}
+	var callMu sync.Mutex
+	sendCounts := map[string]int{}
+	probeCounts := map[string]int{}
+	nudgeCounts := map[string]int{}
+	waypostService.sendFunc = func(_ context.Context, params waypost.SendParams) (waypost.SendResult, error) {
+		callMu.Lock()
+		sendCounts[params.ToAddress]++
+		callMu.Unlock()
+		return waypost.SendResult{DeliveryID: "dlv_" + strings.TrimPrefix(params.ToAddress, "agent-deck/")}, nil
+	}
+
+	commandRunner := &fakeRunner{t: t, handler: func(args []string, input string) (RunResult, error) {
+		switch {
+		case len(args) == 5 && args[0] == "agent-deck" && args[1] == "session" && args[2] == "show" && args[4] == "--json":
+			target := args[3]
+			if target != "first" && target != "second" {
+				t.Fatalf("probe target = %q, want first or second", target)
+			}
+			callMu.Lock()
+			probeCounts[target]++
+			attempt := probeCounts[target]
+			callMu.Unlock()
+			switch attempt {
+			case 1:
+				return RunResult{ExitCode: 2, Stderr: "not found"}, nil
+			case 2:
+				return RunResult{ExitCode: 0, Stdout: `{"id":"` + target + `","status":"queued"}`}, nil
+			default:
+				return RunResult{ExitCode: 0, Stdout: `{"id":"` + target + `","status":"running"}`}, nil
+			}
+		case isAgentDeckDeferredSend(args):
+			target := args[8]
+			callMu.Lock()
+			nudgeCounts[target]++
+			callMu.Unlock()
+			return RunResult{ExitCode: 0}, nil
+		default:
+			t.Fatalf("unexpected command call: %v", args)
+			return RunResult{}, nil
+		}
+	}}
+	service := newService(Options{
+		WaypostServiceFactory: fakeWaypostServiceFactory{service: waypostService},
+		CommandRunner:         commandRunner,
+		NotifyDelay:           -1,
+		DisableWakeScheduler:  true,
+		DisableLeaseRenewLoop: true,
+	})
+	defer service.Close()
+	service.state.boundAddresses = []string{"agent-deck/self"}
+	service.state.defaultSender = "agent-deck/self"
+	service.state.manualBinding = true
+	service.state.autoBindAttempted = true
+	service.notifications.retryWait = func(context.Context, time.Duration) error { return nil }
+
+	output := callServiceTool(t, service, "waypost_send", map[string]any{
+		"to_addresses": []string{"agent-deck/first", "agent-deck/second"},
+		"subject":      "new targets",
+		"body":         "body",
+	})
+
+	if output["status"] != "sent" || output["sent_count"] != float64(2) || output["failed_count"] != float64(0) {
+		t.Fatalf("batch output = %v, want durable success", output)
+	}
+	results, ok := output["results"].([]any)
+	if !ok || len(results) != 2 {
+		t.Fatalf("batch results = %#v, want two items", output["results"])
+	}
+	for _, raw := range results {
+		result := raw.(map[string]any)
+		if result["notify_status"] != "sent" {
+			t.Fatalf("batch notification result = %v, want sent", result)
+		}
+	}
+
+	callMu.Lock()
+	defer callMu.Unlock()
+	for _, target := range []string{"first", "second"} {
+		address := "agent-deck/" + target
+		if sendCounts[address] != 1 || probeCounts[target] != 3 || nudgeCounts[target] != 1 {
+			t.Fatalf("%s counts: sends=%d probes=%d nudges=%d, want 1, 3, 1", target, sendCounts[address], probeCounts[target], nudgeCounts[target])
+		}
+	}
+}
+
 func TestWaypostSendBatchCancellationStopsBeforeNextRecipient(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -1435,16 +1522,29 @@ func TestAgentDeckNotifyBoundsDeferredSendPhases(t *testing.T) {
 	}
 }
 
-func TestAgentDeckNotifyDoesNotWakeQueuedTarget(t *testing.T) {
+func TestAgentDeckNotifyRetriesQueuedTargetBeforeNudging(t *testing.T) {
+	probeAttempts := 0
+	nudgeAttempts := 0
 	commandRunner := &fakeRunner{t: t, handler: func(args []string, input string) (RunResult, error) {
-		if !reflect.DeepEqual(args, []string{"agent-deck", "session", "show", "target", "--json"}) {
+		switch {
+		case reflect.DeepEqual(args, []string{"agent-deck", "session", "show", "target", "--json"}):
+			probeAttempts++
+			if probeAttempts < 3 {
+				return RunResult{ExitCode: 0, Stdout: `{"id":"target","status":"queued"}`}, nil
+			}
+			return RunResult{ExitCode: 0, Stdout: `{"id":"target","status":"running"}`}, nil
+		case reflect.DeepEqual(args, agentDeckDeferredSendArgs("target", defaultNotifyMessage)):
+			nudgeAttempts++
+			return RunResult{ExitCode: 0}, nil
+		default:
 			t.Fatalf("unexpected command args: %v", args)
+			return RunResult{}, nil
 		}
-		return RunResult{ExitCode: 0, Stdout: `{"id":"target","status":"queued"}`}, nil
 	}}
 	manager := newNotificationManager(commandRunner, newSessionManager(commandRunner, &serverState{}))
-	manager.retryWait = func(context.Context, time.Duration) error {
-		t.Fatal("queued target should not use short probe retries")
+	retryDelays := []time.Duration{}
+	manager.retryWait = func(_ context.Context, delay time.Duration) error {
+		retryDelays = append(retryDelays, delay)
 		return nil
 	}
 
@@ -1456,11 +1556,73 @@ func TestAgentDeckNotifyDoesNotWakeQueuedTarget(t *testing.T) {
 		},
 	})
 
-	if outcome.Status != "target_queued" || outcome.Scheme != "agent-deck" || outcome.Err != nil {
-		t.Fatalf("outcome = %+v, want non-wakeable target_queued", outcome)
+	if outcome.Status != "sent" || outcome.Scheme != "agent-deck" || outcome.Err != nil {
+		t.Fatalf("outcome = %+v, want sent agent-deck notification", outcome)
 	}
-	if calls := commandRunner.Calls(); len(calls) != 1 {
-		t.Fatalf("command calls = %v, want queued probe only", calls)
+	if probeAttempts != 3 || nudgeAttempts != 1 {
+		t.Fatalf("probe attempts = %d, nudge attempts = %d, want 3 and 1", probeAttempts, nudgeAttempts)
+	}
+	if want := []time.Duration{500 * time.Millisecond, time.Second}; !reflect.DeepEqual(retryDelays, want) {
+		t.Fatalf("retry delays = %v, want %v", retryDelays, want)
+	}
+}
+
+func TestAgentDeckNotifyStopsAfterExhaustingNewTargetProbeRetries(t *testing.T) {
+	tests := []struct {
+		name       string
+		exitCode   int
+		stdout     string
+		wantStatus string
+	}{
+		{
+			name:       "not found",
+			exitCode:   2,
+			wantStatus: "not_found",
+		},
+		{
+			name:       "queued",
+			exitCode:   0,
+			stdout:     `{"id":"target","status":"queued"}`,
+			wantStatus: "target_queued",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			probeAttempts := 0
+			commandRunner := &fakeRunner{t: t, handler: func(args []string, input string) (RunResult, error) {
+				if !reflect.DeepEqual(args, []string{"agent-deck", "session", "show", "target", "--json"}) {
+					t.Fatalf("unexpected command args: %v", args)
+				}
+				probeAttempts++
+				return RunResult{ExitCode: test.exitCode, Stdout: test.stdout}, nil
+			}}
+			manager := newNotificationManager(commandRunner, newSessionManager(commandRunner, &serverState{}))
+			retryDelays := []time.Duration{}
+			manager.retryWait = func(_ context.Context, delay time.Duration) error {
+				retryDelays = append(retryDelays, delay)
+				return nil
+			}
+
+			outcome := manager.notifyRouteWithRetry(context.Background(), notificationEvent{
+				Kind: notificationDelivery,
+				Route: notificationRoute{
+					Manager: "agent-deck",
+					Target:  "target",
+				},
+			})
+
+			if outcome.Status != test.wantStatus || outcome.Scheme != "agent-deck" || outcome.Err != nil {
+				t.Fatalf("outcome = %+v, want exhausted %s", outcome, test.wantStatus)
+			}
+			if probeAttempts != 4 {
+				t.Fatalf("probe attempts = %d, want 4", probeAttempts)
+			}
+			wantDelays := []time.Duration{500 * time.Millisecond, time.Second, 2 * time.Second}
+			if !reflect.DeepEqual(retryDelays, wantDelays) {
+				t.Fatalf("retry delays = %v, want %v", retryDelays, wantDelays)
+			}
+		})
 	}
 }
 
@@ -1552,11 +1714,22 @@ func TestAgentDeckNotifyRetriesStoppedAndErrorTargets(t *testing.T) {
 
 func TestCLINotifyWaypostSendUsesMCPNotificationPath(t *testing.T) {
 	waypostService := &fakeWaypostService{t: t}
+	probeAttempts := 0
+	nudgeAttempts := 0
 	commandRunner := &fakeRunner{t: t, handler: func(args []string, input string) (RunResult, error) {
 		switch {
 		case strings.Join(args, "\x00") == strings.Join([]string{"agent-deck", "session", "show", "coder", "--json"}, "\x00"):
-			return RunResult{ExitCode: 0, Stdout: `{"id":"coder","status":"waiting"}`}, nil
+			probeAttempts++
+			switch probeAttempts {
+			case 1:
+				return RunResult{ExitCode: 2, Stderr: "not found"}, nil
+			case 2:
+				return RunResult{ExitCode: 0, Stdout: `{"id":"coder","status":"queued"}`}, nil
+			default:
+				return RunResult{ExitCode: 0, Stdout: `{"id":"coder","status":"waiting"}`}, nil
+			}
 		case reflect.DeepEqual(args, agentDeckDeferredSendArgs("coder", defaultNotifyMessage)):
+			nudgeAttempts++
 			return RunResult{ExitCode: 0}, nil
 		default:
 			t.Fatalf("unexpected command args: %v", args)
@@ -1579,6 +1752,9 @@ func TestCLINotifyWaypostSendUsesMCPNotificationPath(t *testing.T) {
 
 	if outcome.Status != "sent" || outcome.Scheme != "agent-deck" || outcome.Err != nil {
 		t.Fatalf("CLI notify outcome = %+v, want sent agent-deck outcome", outcome)
+	}
+	if probeAttempts != 3 || nudgeAttempts != 1 {
+		t.Fatalf("probe attempts = %d, nudge attempts = %d, want 3 and 1", probeAttempts, nudgeAttempts)
 	}
 }
 
@@ -1710,6 +1886,80 @@ func TestWaypostSendRetriesUnknownWakeProbeWithoutResendingDelivery(t *testing.T
 		t.Fatalf("nudge attempts = %d, want 1", nudgeAttempts)
 	}
 	if want := []time.Duration{500 * time.Millisecond}; !reflect.DeepEqual(retryDelays, want) {
+		t.Fatalf("retry delays = %v, want %v", retryDelays, want)
+	}
+}
+
+func TestWaypostSendRetriesNewAgentDeckTargetWithoutResendingDelivery(t *testing.T) {
+	waypostService := &fakeWaypostService{t: t}
+	sendCount := 0
+	waypostService.sendFunc = func(_ context.Context, params waypost.SendParams) (waypost.SendResult, error) {
+		sendCount++
+		if params.ToAddress != "agent-deck/target" || params.FromAddress != "agent-deck/self" {
+			t.Fatalf("send params = %+v", params)
+		}
+		return waypost.SendResult{DeliveryID: "dlv_new_target"}, nil
+	}
+
+	probeAttempts := 0
+	nudgeAttempts := 0
+	commandRunner := &fakeRunner{t: t, handler: func(args []string, input string) (RunResult, error) {
+		switch {
+		case reflect.DeepEqual(args, []string{"agent-deck", "session", "show", "target", "--json"}):
+			probeAttempts++
+			switch probeAttempts {
+			case 1:
+				return RunResult{ExitCode: 2, Stderr: "not found"}, nil
+			case 2:
+				return RunResult{ExitCode: 0, Stdout: `{"id":"target","status":"queued"}`}, nil
+			default:
+				return RunResult{ExitCode: 0, Stdout: `{"id":"target","status":"running"}`}, nil
+			}
+		case reflect.DeepEqual(args, agentDeckDeferredSendArgs("target", defaultNotifyMessage)):
+			nudgeAttempts++
+			return RunResult{ExitCode: 0}, nil
+		default:
+			t.Fatalf("unexpected command args: %v", args)
+			return RunResult{}, nil
+		}
+	}}
+
+	service := newService(Options{
+		WaypostServiceFactory: fakeWaypostServiceFactory{service: waypostService},
+		CommandRunner:         commandRunner,
+		NotifyDelay:           -1,
+	})
+	service.state.boundAddresses = []string{"agent-deck/self"}
+	service.state.defaultSender = "agent-deck/self"
+	service.state.autoBindAttempted = true
+	retryDelays := []time.Duration{}
+	service.notifications.retryWait = func(_ context.Context, delay time.Duration) error {
+		retryDelays = append(retryDelays, delay)
+		return nil
+	}
+
+	output := callServiceTool(t, service, "waypost_send", map[string]any{
+		"to_address": "agent-deck/target",
+		"subject":    "delegate",
+		"body":       "body",
+	})
+
+	if got := output["status"]; got != "sent" {
+		t.Fatalf("status = %v, want sent", got)
+	}
+	if got := output["delivery_id"]; got != "dlv_new_target" {
+		t.Fatalf("delivery_id = %v, want dlv_new_target", got)
+	}
+	if got := output["notify_status"]; got != "sent" {
+		t.Fatalf("notify_status = %v, want sent", got)
+	}
+	if sendCount != 1 {
+		t.Fatalf("durable sends = %d, want 1", sendCount)
+	}
+	if probeAttempts != 3 || nudgeAttempts != 1 {
+		t.Fatalf("probe attempts = %d, nudge attempts = %d, want 3 and 1", probeAttempts, nudgeAttempts)
+	}
+	if want := []time.Duration{500 * time.Millisecond, time.Second}; !reflect.DeepEqual(retryDelays, want) {
 		t.Fatalf("retry delays = %v, want %v", retryDelays, want)
 	}
 }
