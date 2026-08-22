@@ -1495,11 +1495,11 @@ func TestAgentDeckNotifyBoundsDeferredSendPhases(t *testing.T) {
 				t.Fatal("deferred send context has no deadline")
 			}
 			remaining := time.Until(deadline)
-			if remaining <= agentDeckNotifyCommandTimeout-2*time.Second || remaining > agentDeckNotifyCommandTimeout {
-				t.Fatalf("deferred send deadline remaining = %v, want approximately %v", remaining, agentDeckNotifyCommandTimeout)
+			if remaining <= syncCmdTimeout-2*time.Second || remaining > syncCmdTimeout {
+				t.Fatalf("deferred send deadline remaining = %v, want approximately %v", remaining, syncCmdTimeout)
 			}
-			if remaining >= syncCmdTimeout {
-				t.Fatalf("deferred send deadline remaining = %v, want less than generic timeout %v", remaining, syncCmdTimeout)
+			if remaining <= agentDeckNotifyDeferTimeout+agentDeckNotifyReadyTimeout {
+				t.Fatalf("deferred send deadline remaining = %v, want greater than the internal phase total", remaining)
 			}
 			return RunResult{ExitCode: 0}, nil
 		default:
@@ -1567,6 +1567,65 @@ func TestAgentDeckNotifyRetriesQueuedTargetBeforeNudging(t *testing.T) {
 	}
 }
 
+func TestAgentDeckNotifyRetriesUnreadyTargetBeforeNudging(t *testing.T) {
+	tests := []struct {
+		name          string
+		initialStatus string
+	}{
+		{name: "unknown", initialStatus: "unknown"},
+		{name: "empty", initialStatus: ""},
+		{name: "unrecognized", initialStatus: "starting"},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			probeAttempts := 0
+			nudgeAttempts := 0
+			commandRunner := &fakeRunner{t: t, handler: func(args []string, input string) (RunResult, error) {
+				switch {
+				case reflect.DeepEqual(args, []string{"agent-deck", "session", "show", "target", "--json"}):
+					probeAttempts++
+					status := test.initialStatus
+					if probeAttempts > 1 {
+						status = "running"
+					}
+					return RunResult{ExitCode: 0, Stdout: fmt.Sprintf(`{"id":"target","status":%q}`, status)}, nil
+				case reflect.DeepEqual(args, agentDeckDeferredSendArgs("target", defaultNotifyMessage)):
+					nudgeAttempts++
+					return RunResult{ExitCode: 0}, nil
+				default:
+					t.Fatalf("unexpected command args: %v", args)
+					return RunResult{}, nil
+				}
+			}}
+			manager := newNotificationManager(commandRunner, newSessionManager(commandRunner, &serverState{}))
+			retryDelays := []time.Duration{}
+			manager.retryWait = func(_ context.Context, delay time.Duration) error {
+				retryDelays = append(retryDelays, delay)
+				return nil
+			}
+
+			outcome := manager.notifyRouteWithRetry(context.Background(), notificationEvent{
+				Kind: notificationDelivery,
+				Route: notificationRoute{
+					Manager: "agent-deck",
+					Target:  "target",
+				},
+			})
+
+			if outcome.Status != "sent" || outcome.Scheme != "agent-deck" || outcome.Err != nil {
+				t.Fatalf("outcome = %+v, want sent agent-deck notification", outcome)
+			}
+			if probeAttempts != 2 || nudgeAttempts != 1 {
+				t.Fatalf("probe attempts = %d, nudge attempts = %d, want 2 and 1", probeAttempts, nudgeAttempts)
+			}
+			if want := []time.Duration{500 * time.Millisecond}; !reflect.DeepEqual(retryDelays, want) {
+				t.Fatalf("retry delays = %v, want %v", retryDelays, want)
+			}
+		})
+	}
+}
+
 func TestAgentDeckNotifyStopsAfterExhaustingNewTargetProbeRetries(t *testing.T) {
 	tests := []struct {
 		name       string
@@ -1584,6 +1643,24 @@ func TestAgentDeckNotifyStopsAfterExhaustingNewTargetProbeRetries(t *testing.T) 
 			exitCode:   0,
 			stdout:     `{"id":"target","status":"queued"}`,
 			wantStatus: "target_queued",
+		},
+		{
+			name:       "unknown",
+			exitCode:   0,
+			stdout:     `{"id":"target","status":"unknown"}`,
+			wantStatus: "target_not_ready",
+		},
+		{
+			name:       "empty",
+			exitCode:   0,
+			stdout:     `{"id":"target","status":""}`,
+			wantStatus: "target_not_ready",
+		},
+		{
+			name:       "unrecognized",
+			exitCode:   0,
+			stdout:     `{"id":"target","status":"starting"}`,
+			wantStatus: "target_not_ready",
 		},
 	}
 

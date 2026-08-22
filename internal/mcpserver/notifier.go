@@ -315,11 +315,10 @@ var notificationRetryDelays = [...]time.Duration{
 }
 
 const (
-	groupNotifyFanoutTimeout      = 15 * time.Second
-	groupNotifyFanoutConcurrency  = 4
-	agentDeckNotifyDeferTimeout   = 5 * time.Second
-	agentDeckNotifyReadyTimeout   = 5 * time.Second
-	agentDeckNotifyCommandTimeout = agentDeckNotifyDeferTimeout + agentDeckNotifyReadyTimeout + time.Second
+	groupNotifyFanoutTimeout     = 15 * time.Second
+	groupNotifyFanoutConcurrency = 4
+	agentDeckNotifyDeferTimeout  = 5 * time.Second
+	agentDeckNotifyReadyTimeout  = 5 * time.Second
 )
 
 func (m *notificationManager) notifyRouteWithRetry(ctx context.Context, event notificationEvent) notificationOutcome {
@@ -370,11 +369,11 @@ func notificationSendProbeRetryable(probe notificationProbe) bool {
 		return false
 	}
 	switch probe.Status {
-	case "not_found", "target_queued":
+	case "not_found", "target_queued", "target_not_ready":
 		// Fresh Agent Deck sessions can spend a short time absent from the
-		// session list or queued before they become wakeable. Neither outcome
-		// has attempted the non-idempotent nudge yet, so bounded send-time
-		// probe retries are safe.
+		// session list, queued, or reporting an unready status before they
+		// become wakeable. Neither outcome has attempted the non-idempotent
+		// nudge yet, so bounded send-time probe retries are safe.
 		return true
 	default:
 		return false
@@ -466,12 +465,17 @@ func (n agentDeckNotifier) Probe(ctx context.Context, route notificationRoute) n
 			Scheme: n.Name(),
 			Err:    errors.New("agent-deck target session is " + status),
 		}
-	default:
+	}
+	if activeSessionStatuses[status] {
 		return notificationProbe{
 			Status:   "wakeable",
 			Scheme:   n.Name(),
 			Wakeable: true,
 		}
+	}
+	return notificationProbe{
+		Status: "target_not_ready",
+		Scheme: n.Name(),
 	}
 }
 
@@ -502,7 +506,7 @@ func (n agentDeckNotifier) Notify(ctx context.Context, event notificationEvent) 
 		"-defer-timeout", agentDeckNotifyDeferTimeout.String(),
 		"-timeout", agentDeckNotifyReadyTimeout.String(),
 		event.Route.Target, notifyMessage,
-	}, runOptions{timeout: agentDeckNotifyCommandTimeout})
+	}, runOptions{timeout: syncCmdTimeout})
 	if err != nil {
 		return notificationOutcome{
 			Status: "failed",
