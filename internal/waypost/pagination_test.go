@@ -50,6 +50,48 @@ func TestPersonalListPageUsesBoundedKeysetCursor(t *testing.T) {
 	}
 }
 
+func TestPersonalListPageRejectsInvalidState(t *testing.T) {
+	t.Parallel()
+
+	runtime, store := newLeaseTestStore(t)
+	defer runtime.Close()
+
+	_, err := store.ListPage(context.Background(), ListParams{
+		Address: "workflow/invalid-state",
+		State:   "unknown",
+		Limit:   1,
+	})
+	if !errors.Is(err, ErrInvalidArgument) {
+		t.Fatalf("ListPage(invalid state) error = %v, want ErrInvalidArgument", err)
+	}
+	if !strings.Contains(err.Error(), "must be one of queued, leased, claimed, acked, dead_letter") {
+		t.Fatalf("ListPage(invalid state) error = %q, want allowed delivery states", err)
+	}
+}
+
+func TestPersonalListTreatsClaimedStateAsLeased(t *testing.T) {
+	t.Parallel()
+
+	runtime, store := newLeaseTestStore(t)
+	defer runtime.Close()
+
+	sent := mustSendMessage(t, store, "workflow/claimed-alias", "agent/sender", "claimed alias", "body")
+	if _, err := store.Receive(context.Background(), ReceiveParams{Address: "workflow/claimed-alias"}); err != nil {
+		t.Fatalf("Receive() error = %v", err)
+	}
+
+	deliveries, err := store.List(context.Background(), ListParams{
+		Address: "workflow/claimed-alias",
+		State:   "claimed",
+	})
+	if err != nil {
+		t.Fatalf("List(claimed) error = %v", err)
+	}
+	if len(deliveries) != 1 || deliveries[0].DeliveryID != sent.DeliveryID || deliveries[0].State != "leased" {
+		t.Fatalf("List(claimed) = %+v, want leased delivery %q", deliveries, sent.DeliveryID)
+	}
+}
+
 func TestLatestStatePageUsesVisibilityOrderAndCursor(t *testing.T) {
 	t.Parallel()
 

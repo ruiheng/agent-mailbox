@@ -39,6 +39,10 @@ func (a *App) prepareListCommand(args []string) (preparedCommand, error) {
 	if err != nil {
 		return nil, err
 	}
+	state, err = normalizeDeliveryStateFilter(state)
+	if err != nil {
+		return nil, err
+	}
 
 	params := ListParams{
 		Address:     address,
@@ -51,7 +55,7 @@ func (a *App) prepareListCommand(args []string) (preparedCommand, error) {
 		return nil, err
 	}
 	person = strings.TrimSpace(person)
-	if person != "" && strings.TrimSpace(state) != "" {
+	if person != "" && state != "" {
 		return nil, errors.New("--state is not supported with --as")
 	}
 
@@ -616,7 +620,7 @@ func (a *App) writeListHelp() {
 		"  --for ADDRESS      Recipient address",
 		"  --from ADDRESS     Filter by sender address",
 		"  --as PERSON        Group reader identity",
-		"  --state STATE      Filter by delivery state (queued, leased, acked, dead_letter)",
+		"  --state STATE      Filter by delivery state (queued, leased/claimed, acked, dead_letter)",
 		fmt.Sprintf("  --limit N          Page size (default %d, maximum %d)", DefaultPageSize, MaxPageSize),
 		"  --cursor CURSOR    Continue from a prior next_cursor",
 		"  --json             Emit JSON",

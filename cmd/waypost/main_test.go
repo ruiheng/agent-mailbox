@@ -1958,9 +1958,9 @@ func TestCLIHelpExitsZeroAndPrintsUsage(t *testing.T) {
 			wantContains: "Usage:\n  waypost watch --for ADDRESS [--for ADDRESS ...] [--state STATE] [--timeout DURATION] [--json | --yaml]",
 		},
 		{
-			name:         "list help mentions acked state",
+			name:         "list help mentions delivery states",
 			args:         []string{"list", "--help"},
-			wantContains: "  --state STATE      Filter by delivery state (queued, leased, acked, dead_letter)",
+			wantContains: "  --state STATE      Filter by delivery state (queued, leased/claimed, acked, dead_letter)",
 		},
 		{
 			name:         "wait help",

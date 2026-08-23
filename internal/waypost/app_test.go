@@ -1274,6 +1274,10 @@ func TestInvalidCLIPathsDoNotCreateRuntimeState(t *testing.T) {
 			args: []string{"list", "--for", "workflow/reviewer/task-123", "--json", "--yaml"},
 		},
 		{
+			name: "list invalid state",
+			args: []string{"list", "--for", "workflow/reviewer/task-123", "--state", "unknown"},
+		},
+		{
 			name: "stale missing for",
 			args: []string{"stale", "--older-than", "5m", "--json"},
 		},
@@ -1582,9 +1586,9 @@ func TestHelpCLIPathsDoNotCreateRuntimeState(t *testing.T) {
 			wantContains: "Usage:\n  waypost watch --for ADDRESS [--for ADDRESS ...] [--state STATE] [--timeout DURATION] [--json | --yaml]",
 		},
 		{
-			name:         "list help mentions acked state",
+			name:         "list help mentions delivery states",
 			args:         []string{"list", "--help"},
-			wantContains: "  --state STATE      Filter by delivery state (queued, leased, acked, dead_letter)",
+			wantContains: "  --state STATE      Filter by delivery state (queued, leased/claimed, acked, dead_letter)",
 		},
 		{
 			name:         "wait help",

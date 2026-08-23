@@ -1044,7 +1044,10 @@ func (s *Store) ListPage(ctx context.Context, params ListParams) (Page[ListedDel
 		}
 		return Page[ListedDelivery]{}, err
 	}
-	state := strings.TrimSpace(params.State)
+	state, err := normalizeDeliveryStateFilter(params.State)
+	if err != nil {
+		return Page[ListedDelivery]{}, err
+	}
 	senderAddress, err := normalizeSenderAddress(params.FromAddress)
 	if err != nil {
 		return Page[ListedDelivery]{}, err
