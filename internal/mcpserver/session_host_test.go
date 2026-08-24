@@ -1449,7 +1449,7 @@ func TestWaypostGroupSubscribersReportHostNeutralNotificationScheme(t *testing.T
 				DisableLeaseRenewLoop: true,
 			})
 			output := callServiceTool(t, service, "waypost_send", map[string]any{
-				"to_address":   "group/review",
+				"to":           "group/review",
 				"from_address": "agent-deck/expert",
 				"subject":      "group update",
 				"body":         "body",
@@ -1494,7 +1494,7 @@ func TestThurboxWakeFollowsDurableSendAndFailureKeepsDelivery(t *testing.T) {
 	originalFactory := service.waypostServices
 	service.waypostServices = durableFlagFactory{delegate: originalFactory, stored: &durableStored}
 	output := callServiceTool(t, service, "waypost_send", map[string]any{
-		"to_address":  "thurbox/" + thurboxAuthorID,
+		"to":          "thurbox/" + thurboxAuthorID,
 		"subject":     "delegate",
 		"body":        "full workflow body must stay in Waypost",
 		"diagnostics": true,

@@ -285,15 +285,14 @@ address it would produce. Its broader debug environment diagnostics also include
 chain for those same allowlisted variables so callers can tell whether a tool
 omitted a variable or failed to pass it into the MCP process.
 
-`waypost_send` accepts exactly one recipient selector: the existing
-`to_address` string for the legacy single-recipient contract, or a
-`to_addresses` array with 1-10 raw values for a batch. The plural form
-normalizes and deduplicates recipients in first-seen order, sends them
+`waypost_send` requires a single `to` field. A string selects the
+single-recipient contract; an array of 1-10 strings selects a batch. The array
+form normalizes and deduplicates recipients in first-seen order, sends them
 sequentially, and always returns a batch envelope with `to_addresses`,
 `recipient_count`, `sent_count`, `failed_count`, and ordered `results`.
 Ordinary per-recipient durable failures appear as `failed` result items without
 stopping later recipients; retry only those failed addresses to avoid duplicate
-messages. The singular form and its output remain unchanged.
+messages. The string form returns the existing single-send output.
 
 `waypost_send` always uses the fixed wakeup text for supported remote notify
 paths. Set `disable_notify_message = true` to skip only that immediate send-time

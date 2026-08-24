@@ -30,18 +30,44 @@ type waypostStatusInput struct {
 
 type waypostDebugInput struct{}
 
+type waypostSendTarget struct {
+	Addresses []string
+	Batch     bool
+}
+
+func (target *waypostSendTarget) UnmarshalJSON(data []byte) error {
+	var address string
+	if err := json.Unmarshal(data, &address); err == nil {
+		target.Addresses = []string{address}
+		target.Batch = false
+		return nil
+	}
+
+	var addresses []string
+	if err := json.Unmarshal(data, &addresses); err != nil {
+		return errors.New("to must be a string or an array of strings")
+	}
+	if len(addresses) == 0 {
+		return errors.New("to must contain at least one recipient")
+	}
+	target.Addresses = addresses
+	target.Batch = true
+	return nil
+}
+
 type waypostSendInput struct {
-	ToAddress            string   `json:"to_address,omitempty"`
-	ToAddresses          []string `json:"to_addresses,omitempty"`
-	FromAddress          string   `json:"from_address,omitempty"`
-	AsPerson             string   `json:"as_person,omitempty"`
-	Subject              string   `json:"subject"`
-	Body                 string   `json:"body"`
-	ContentType          string   `json:"content_type,omitempty"`
-	SchemaVersion        string   `json:"schema_version,omitempty"`
-	DisableNotifyMessage *bool    `json:"disable_notify_message,omitempty"`
-	Group                bool     `json:"group,omitempty"`
-	Diagnostics          bool     `json:"diagnostics,omitempty"`
+	To                   waypostSendTarget `json:"to"`
+	FromAddress          string            `json:"from_address,omitempty"`
+	AsPerson             string            `json:"as_person,omitempty"`
+	Subject              string            `json:"subject"`
+	Body                 string            `json:"body"`
+	ContentType          string            `json:"content_type,omitempty"`
+	SchemaVersion        string            `json:"schema_version,omitempty"`
+	DisableNotifyMessage *bool             `json:"disable_notify_message,omitempty"`
+	Group                bool              `json:"group,omitempty"`
+	Diagnostics          bool              `json:"diagnostics,omitempty"`
+	ToAddress            string            `json:"-"`
+	ToAddresses          []string          `json:"-"`
 	forwardedMessageID   string
 	forwardedFromAddress string
 }
@@ -51,21 +77,18 @@ func waypostSendInputSchema() *jsonschema.Schema {
 	if err != nil {
 		panic(fmt.Errorf("build waypost_send input schema: %w", err))
 	}
-	toAddresses, ok := schema.Properties["to_addresses"]
-	if !ok {
-		panic("build waypost_send input schema: missing to_addresses")
+	schema.Properties["to"] = &jsonschema.Schema{
+		Types:       []string{"string", "array"},
+		Items:       &jsonschema.Schema{Type: "string"},
+		MinItems:    jsonschema.Ptr(1),
+		MaxItems:    jsonschema.Ptr(waypost.MaxSendRecipients),
+		Description: "One recipient address, or an array of 1-10 recipient addresses for a batch send.",
 	}
-	toAddresses.MinItems = jsonschema.Ptr(1)
-	toAddresses.MaxItems = jsonschema.Ptr(waypost.MaxSendRecipients)
 	diagnostics, ok := schema.Properties["diagnostics"]
 	if !ok {
 		panic("build waypost_send input schema: missing diagnostics")
 	}
 	diagnostics.Description = "Unnecessary for normal send."
-	schema.OneOf = []*jsonschema.Schema{
-		{Required: []string{"to_address"}},
-		{Required: []string{"to_addresses"}},
-	}
 	return schema
 }
 
@@ -210,7 +233,7 @@ func (s *Service) registerWaypostTools(server *mcp.Server) {
 	}
 	addToolRequiringWaypostStatus(server, s, &mcp.Tool{
 		Name:        "waypost_send",
-		Description: "Send a Waypost message to exactly one selector: to_address for the legacy single-recipient form, or to_addresses for a 1-10 recipient batch. Push-notify a non-local target when supported. Set disable_notify_message=true to skip notification.",
+		Description: "Send a Waypost message. Set `to` to one recipient address for a single send, or an array of 1-10 recipient addresses for a batch. Push-notify a non-local target when supported. Set disable_notify_message=true to skip notification.",
 		InputSchema: waypostSendInputSchema(),
 	}, s.waypostSend)
 	addToolRequiringWaypostStatus(server, s, &mcp.Tool{
@@ -420,24 +443,27 @@ func waypostSendResultMap(input waypostSendInput, fromAddress string, sendResult
 	return out
 }
 
-func validateWaypostSendSelector(req *mcp.CallToolRequest, input waypostSendInput) (bool, error) {
+func prepareWaypostSendTarget(req *mcp.CallToolRequest, input *waypostSendInput) (bool, error) {
 	if req == nil || len(req.Params.Arguments) == 0 {
-		return false, errors.New("waypost_send requires exactly one of to_address or to_addresses")
+		return false, errors.New("waypost_send requires to")
 	}
 
 	var rawArgs map[string]json.RawMessage
 	if err := json.Unmarshal(req.Params.Arguments, &rawArgs); err != nil {
 		return false, fmt.Errorf("invalid tool arguments: %w", err)
 	}
-	_, hasToAddress := rawArgs["to_address"]
-	_, hasToAddresses := rawArgs["to_addresses"]
-	if hasToAddress == hasToAddresses {
-		return false, errors.New("waypost_send requires exactly one of to_address or to_addresses")
+	if _, ok := rawArgs["to"]; !ok {
+		return false, errors.New("waypost_send requires to")
 	}
-	if hasToAddresses && len(input.ToAddresses) == 0 {
-		return false, errors.New("waypost_send to_addresses must contain at least one recipient")
+	if input.To.Batch {
+		input.ToAddresses = input.To.Addresses
+		return true, nil
 	}
-	return hasToAddresses, nil
+	if len(input.To.Addresses) != 1 {
+		return false, errors.New("waypost_send to must be a recipient address or an array of recipient addresses")
+	}
+	input.ToAddress = input.To.Addresses[0]
+	return false, nil
 }
 
 func (s *Service) sendWaypostBatchMessage(ctx context.Context, input waypostSendInput) (map[string]any, error) {
@@ -602,7 +628,7 @@ func (s *Service) deliveryStillQueued(ctx context.Context, service any, delivery
 }
 
 func (s *Service) waypostSend(ctx context.Context, req *mcp.CallToolRequest, input waypostSendInput) (*mcp.CallToolResult, map[string]any, error) {
-	batch, err := validateWaypostSendSelector(req, input)
+	batch, err := prepareWaypostSendTarget(req, &input)
 	if err != nil {
 		return nil, nil, err
 	}

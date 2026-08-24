@@ -109,9 +109,9 @@ func TestWaypostStatusReportsActiveLeaseTokens(t *testing.T) {
 	service.state.autoBindAttempted = true
 
 	sent := callServiceTool(t, service, "waypost_send", map[string]any{
-		"to_address": "agent-deck/self",
-		"subject":    "status lease",
-		"body":       "body",
+		"to":      "agent-deck/self",
+		"subject": "status lease",
+		"body":    "body",
 	})
 	deliveryID := sent["delivery_id"].(string)
 	received := callServiceTool(t, service, "waypost_recv", map[string]any{
@@ -226,7 +226,7 @@ func TestWaypostStatusCLIReplacementForward(t *testing.T) {
 	}
 
 	sent := callServiceTool(t, service, "waypost_send", map[string]any{
-		"to_address":   "workflow/source",
+		"to":           "workflow/source",
 		"from_address": "agent/sender",
 		"subject":      "source",
 		"body":         "body",
@@ -310,9 +310,9 @@ func TestExternalDurableFailReconcilesMCPLeaseHistoryAndStatus(t *testing.T) {
 	service.state.autoBindAttempted = true
 
 	sent := callServiceTool(t, service, "waypost_send", map[string]any{
-		"to_address": "agent-deck/self",
-		"subject":    "external fail",
-		"body":       "body",
+		"to":      "agent-deck/self",
+		"subject": "external fail",
+		"body":    "body",
 	})
 	deliveryID := sent["delivery_id"].(string)
 	received := callServiceTool(t, service, "waypost_recv", map[string]any{
@@ -438,7 +438,7 @@ func TestInvalidStatusPaginationDoesNotOpenStatusGate(t *testing.T) {
 
 	err = callServiceToolExpectErrorWithoutStatusBootstrap(t, service, "waypost_send", map[string]any{
 		"from_address": "codex/source",
-		"to_address":   "codex/target",
+		"to":           "codex/target",
 		"subject":      "hello",
 		"body":         "body",
 	})

@@ -114,7 +114,7 @@ func TestAgentDeckRequireSessionSchemaOmitsCreateOnlyFields(t *testing.T) {
 	}
 }
 
-func TestWaypostSendSchemaExposesExclusiveRecipientSelectors(t *testing.T) {
+func TestWaypostSendSchemaExposesSingleOrBatchTarget(t *testing.T) {
 	schema := waypostSendInputSchema()
 	if _, ok := schema.Properties["group"]; !ok {
 		t.Fatalf("schema.Properties missing group: %v", schema.Properties)
@@ -132,15 +132,24 @@ func TestWaypostSendSchemaExposesExclusiveRecipientSelectors(t *testing.T) {
 	if got, want := diagnostics.Description, "Unnecessary for normal send."; got != want {
 		t.Fatalf("diagnostics description = %q, want %q", got, want)
 	}
-	if slices.Contains(schema.Required, "to_address") {
-		t.Fatalf("required fields = %v, do not want to_address", schema.Required)
+	if !slices.Contains(schema.Required, "to") {
+		t.Fatalf("required fields = %v, want to", schema.Required)
 	}
-	if len(schema.OneOf) != 2 || !slices.Contains(schema.OneOf[0].Required, "to_address") || !slices.Contains(schema.OneOf[1].Required, "to_addresses") {
-		t.Fatalf("oneOf = %#v, want exclusive to_address/to_addresses selectors", schema.OneOf)
+	if len(schema.OneOf) != 0 {
+		t.Fatalf("oneOf = %#v, want no top-level alternatives", schema.OneOf)
 	}
-	toAddresses := schema.Properties["to_addresses"]
-	if toAddresses.MinItems == nil || *toAddresses.MinItems != 1 || toAddresses.MaxItems == nil || *toAddresses.MaxItems != waypost.MaxSendRecipients {
-		t.Fatalf("to_addresses schema = %#v, want 1-%d items", toAddresses, waypost.MaxSendRecipients)
+	to := schema.Properties["to"]
+	if to == nil || !slices.Equal(to.Types, []string{"string", "array"}) || to.Items == nil || to.Items.Type != "string" {
+		t.Fatalf("to schema = %#v, want string or string array", to)
+	}
+	if to.MinItems == nil || *to.MinItems != 1 || to.MaxItems == nil || *to.MaxItems != waypost.MaxSendRecipients {
+		t.Fatalf("to schema = %#v, want array length 1-%d", to, waypost.MaxSendRecipients)
+	}
+	if _, ok := schema.Properties["to_address"]; ok {
+		t.Fatalf("schema.Properties unexpectedly contains to_address: %v", schema.Properties)
+	}
+	if _, ok := schema.Properties["to_addresses"]; ok {
+		t.Fatalf("schema.Properties unexpectedly contains to_addresses: %v", schema.Properties)
 	}
 }
 
@@ -167,7 +176,7 @@ func TestWaypostSendBatchReturnsOrderedPartialResults(t *testing.T) {
 	defer service.Close()
 
 	output := callServiceTool(t, service, "waypost_send", map[string]any{
-		"to_addresses":           []string{" workflow/one ", "workflow/two", "workflow/one", "workflow/three"},
+		"to":                     []string{" workflow/one ", "workflow/two", "workflow/one", "workflow/three"},
 		"from_address":           "agent/sender",
 		"subject":                " batch subject ",
 		"body":                   "body",
@@ -233,7 +242,7 @@ func TestWaypostSendBatchPluralOneUsesEnvelope(t *testing.T) {
 	defer service.Close()
 
 	output := callServiceTool(t, service, "waypost_send", map[string]any{
-		"to_addresses": []string{"group/review"},
+		"to":           []string{"group/review"},
 		"from_address": "agent/sender",
 		"subject":      "single batch item",
 		"body":         "body",
@@ -303,10 +312,10 @@ func TestWaypostSendBatchResolvesEffectiveSenderAndOpensOnce(t *testing.T) {
 	service.state.detectedToolSessions = toolSessionIDs{"claude": "aaaaaaaaaaaaaaaa"}
 
 	output := callServiceTool(t, service, "waypost_send", map[string]any{
-		"to_addresses": []string{"group/one", "group/two"},
-		"subject":      "resolved sender batch",
-		"body":         "body",
-		"group":        true,
+		"to":      []string{"group/one", "group/two"},
+		"subject": "resolved sender batch",
+		"body":    "body",
+		"group":   true,
 	})
 
 	if output["status"] != "sent" || output["sent_count"] != float64(2) {
@@ -344,7 +353,7 @@ func TestWaypostSendBatchAllFailedReturnsEnvelope(t *testing.T) {
 	defer service.Close()
 
 	output := callServiceTool(t, service, "waypost_send", map[string]any{
-		"to_addresses":           []string{"workflow/one", "workflow/two"},
+		"to":                     []string{"workflow/one", "workflow/two"},
 		"from_address":           "agent/sender",
 		"subject":                "all fail",
 		"body":                   "body",
@@ -414,9 +423,9 @@ func TestWaypostSendBatchKeepsReceiptsForNotificationOutcomes(t *testing.T) {
 	service.notifications.retryWait = func(context.Context, time.Duration) error { return nil }
 
 	output := callServiceTool(t, service, "waypost_send", map[string]any{
-		"to_addresses": []string{"agent-deck/target", "agent-deck/self"},
-		"subject":      "notification outcomes",
-		"body":         "body",
+		"to":      []string{"agent-deck/target", "agent-deck/self"},
+		"subject": "notification outcomes",
+		"body":    "body",
 	})
 
 	if output["status"] != "sent" || output["sent_count"] != float64(2) || output["failed_count"] != float64(0) {
@@ -497,9 +506,9 @@ func TestWaypostSendBatchRetriesNewAgentDeckTargetsBeforeNudging(t *testing.T) {
 	service.notifications.retryWait = func(context.Context, time.Duration) error { return nil }
 
 	output := callServiceTool(t, service, "waypost_send", map[string]any{
-		"to_addresses": []string{"agent-deck/first", "agent-deck/second"},
-		"subject":      "new targets",
-		"body":         "body",
+		"to":      []string{"agent-deck/first", "agent-deck/second"},
+		"subject": "new targets",
+		"body":    "body",
 	})
 
 	if output["status"] != "sent" || output["sent_count"] != float64(2) || output["failed_count"] != float64(0) {
@@ -594,7 +603,11 @@ func TestWaypostSendBatchRejectsInvalidSelectorsBeforeSending(t *testing.T) {
 
 	for _, arguments := range []map[string]any{
 		{
-			"to_address":   "workflow/one",
+			"to_address": "workflow/one",
+			"subject":    "subject",
+			"body":       "body",
+		},
+		{
 			"to_addresses": []string{"workflow/two"},
 			"subject":      "subject",
 			"body":         "body",
@@ -604,9 +617,14 @@ func TestWaypostSendBatchRejectsInvalidSelectorsBeforeSending(t *testing.T) {
 			"body":    "body",
 		},
 		{
-			"to_addresses": makeMCPRecipientAddresses(waypost.MaxSendRecipients + 1),
-			"subject":      "subject",
-			"body":         "body",
+			"to":      makeMCPRecipientAddresses(waypost.MaxSendRecipients + 1),
+			"subject": "subject",
+			"body":    "body",
+		},
+		{
+			"to":      []string{},
+			"subject": "subject",
+			"body":    "body",
 		},
 	} {
 		if err := callServiceToolExpectError(t, service, "waypost_send", arguments); err == nil {
@@ -638,7 +656,7 @@ func TestWaypostSendBatchGroupUsesSharedGroupMetadata(t *testing.T) {
 	defer service.Close()
 
 	output := callServiceTool(t, service, "waypost_send", map[string]any{
-		"to_addresses": []string{"group/one", "group/two"},
+		"to":           []string{"group/one", "group/two"},
 		"from_address": "agent/sender",
 		"as_person":    " alice ",
 		"subject":      "group batch",
@@ -1531,7 +1549,7 @@ func TestWaypostSendNotifiesWorkerTarget(t *testing.T) {
 	service.state.autoBindAttempted = true
 
 	output := callServiceTool(t, service, "waypost_send", map[string]any{
-		"to_address":  "agent-deck/target",
+		"to":          "agent-deck/target",
 		"subject":     "delegate",
 		"body":        "body",
 		"diagnostics": true,
@@ -1975,9 +1993,9 @@ func TestWaypostSendDoesNotRetryFailedNudge(t *testing.T) {
 	}
 
 	output := callServiceTool(t, service, "waypost_send", map[string]any{
-		"to_address": "agent-deck/target",
-		"subject":    "delegate",
-		"body":       "body",
+		"to":      "agent-deck/target",
+		"subject": "delegate",
+		"body":    "body",
 	})
 
 	if got := output["status"]; got != "sent" {
@@ -2042,9 +2060,9 @@ func TestWaypostSendRetriesUnknownWakeProbeWithoutResendingDelivery(t *testing.T
 	}
 
 	output := callServiceTool(t, service, "waypost_send", map[string]any{
-		"to_address": "agent-deck/target",
-		"subject":    "delegate",
-		"body":       "body",
+		"to":      "agent-deck/target",
+		"subject": "delegate",
+		"body":    "body",
 	})
 
 	if got := output["notify_status"]; got != "sent" {
@@ -2113,9 +2131,9 @@ func TestWaypostSendRetriesNewAgentDeckTargetWithoutResendingDelivery(t *testing
 	}
 
 	output := callServiceTool(t, service, "waypost_send", map[string]any{
-		"to_address": "agent-deck/target",
-		"subject":    "delegate",
-		"body":       "body",
+		"to":      "agent-deck/target",
+		"subject": "delegate",
+		"body":    "body",
 	})
 
 	if got := output["status"]; got != "sent" {
@@ -2176,9 +2194,9 @@ func TestWaypostSendStopsAfterExhaustingWakeProbeRetries(t *testing.T) {
 	}
 
 	output := callServiceTool(t, service, "waypost_send", map[string]any{
-		"to_address": "agent-deck/target",
-		"subject":    "delegate",
-		"body":       "body",
+		"to":      "agent-deck/target",
+		"subject": "delegate",
+		"body":    "body",
 	})
 
 	if got := output["status"]; got != "sent" {
@@ -2241,9 +2259,9 @@ func TestWaypostSendDoesNotRetryAmbiguousNudgeTimeout(t *testing.T) {
 	}
 
 	output := callServiceTool(t, service, "waypost_send", map[string]any{
-		"to_address": "agent-deck/target",
-		"subject":    "delegate",
-		"body":       "body",
+		"to":      "agent-deck/target",
+		"subject": "delegate",
+		"body":    "body",
 	})
 
 	if got := output["notify_status"]; got != "failed" {
@@ -2293,7 +2311,7 @@ func TestWaypostSendSkipsNotifyWhenDeliveryAlreadyClaimed(t *testing.T) {
 	service.state.autoBindAttempted = true
 
 	output := callServiceTool(t, service, "waypost_send", map[string]any{
-		"to_address":  "agent-deck/target",
+		"to":          "agent-deck/target",
 		"subject":     "delegate",
 		"body":        "body",
 		"diagnostics": true,
@@ -2395,7 +2413,7 @@ func TestWaypostSendAllowsAgentDeckNotifyDisable(t *testing.T) {
 	service.state.autoBindAttempted = true
 
 	output := callServiceTool(t, service, "waypost_send", map[string]any{
-		"to_address":             "agent-deck/target",
+		"to":                     "agent-deck/target",
 		"subject":                "delegate",
 		"body":                   "body",
 		"disable_notify_message": true,
@@ -2434,7 +2452,7 @@ func TestWaypostSendUsesExplicitFromAddressWithoutBoundState(t *testing.T) {
 	})
 
 	output := callServiceTool(t, service, "waypost_send", map[string]any{
-		"to_address":   "workflow/target",
+		"to":           "workflow/target",
 		"from_address": "agent/sender",
 		"subject":      "delegate",
 		"body":         "body",
@@ -2476,7 +2494,7 @@ func TestWaypostSendGroupModeUsesGroupSendParams(t *testing.T) {
 	})
 
 	output := callServiceTool(t, service, "waypost_send", map[string]any{
-		"to_address":   "group/review",
+		"to":           "group/review",
 		"from_address": "agent/sender",
 		"subject":      "group update",
 		"body":         "body",
@@ -2553,7 +2571,7 @@ func TestWaypostSendGroupModeNotifiesSubscriber(t *testing.T) {
 	})
 
 	output := callServiceTool(t, service, "waypost_send", map[string]any{
-		"to_address":   "group/review",
+		"to":           "group/review",
 		"from_address": "agent-deck/expert",
 		"subject":      "expert post",
 		"body":         "body",
@@ -2611,7 +2629,7 @@ func TestWaypostSendGroupModeReportsNoSubscribersWhenSendQueuesNoNotifications(t
 	})
 
 	output := callServiceTool(t, service, "waypost_send", map[string]any{
-		"to_address":   "group/review",
+		"to":           "group/review",
 		"from_address": "agent-deck/moderator",
 		"subject":      "moderator post",
 		"body":         "body",
@@ -2657,7 +2675,7 @@ func TestWaypostSendGroupModeReportsNoSubscribersForResolvedDefaultSender(t *tes
 	service.state.autoBindAttempted = true
 
 	output := callServiceTool(t, service, "waypost_send", map[string]any{
-		"to_address":  "group/review",
+		"to":          "group/review",
 		"subject":     "moderator post",
 		"body":        "body",
 		"group":       true,
@@ -2709,7 +2727,7 @@ func TestWaypostSendGroupModeKeepsReceiptWhenSubscriberNotifyFails(t *testing.T)
 	service.notifications.retryWait = func(context.Context, time.Duration) error { return nil }
 
 	output := callServiceTool(t, service, "waypost_send", map[string]any{
-		"to_address":   "group/review",
+		"to":           "group/review",
 		"from_address": "agent-deck/expert",
 		"subject":      "expert post",
 		"body":         "body",
@@ -2770,7 +2788,7 @@ func TestWaypostSendGroupModeReportsPartialNotifyFailureDetail(t *testing.T) {
 	service.notifications.retryWait = func(context.Context, time.Duration) error { return nil }
 
 	output := callServiceTool(t, service, "waypost_send", map[string]any{
-		"to_address":   "group/review",
+		"to":           "group/review",
 		"from_address": "agent-deck/expert",
 		"subject":      "expert post",
 		"body":         "body",
@@ -3003,7 +3021,7 @@ func TestWaypostForwardByMessageIDPreservesPayloadAndPrefixesSubject(t *testing.
 
 	output := callServiceTool(t, service, "waypost_forward", map[string]any{
 		"message_id":   "msg_1",
-		"to_address":   "workflow/target",
+		"to":           "workflow/target",
 		"from_address": "agent/sender",
 	})
 
@@ -3062,7 +3080,7 @@ func TestWaypostForwardByDeliveryIDAllowsSubjectOverride(t *testing.T) {
 
 	output := callServiceTool(t, service, "waypost_forward", map[string]any{
 		"delivery_id":  "dlv_1",
-		"to_address":   "workflow/target",
+		"to":           "workflow/target",
 		"from_address": "agent/sender",
 		"subject":      "Custom forward subject",
 	})
@@ -3124,7 +3142,7 @@ func TestWaypostForwardToGroupInboxPreservesGroupMode(t *testing.T) {
 
 	output := callServiceTool(t, service, "waypost_forward", map[string]any{
 		"message_id":   "msg_1",
-		"to_address":   "group/review",
+		"to":           "group/review",
 		"from_address": "agent/sender",
 		"group":        true,
 	})
@@ -3164,7 +3182,7 @@ func TestWaypostForwardRequiresExactlyOneSourceID(t *testing.T) {
 	err := callServiceToolExpectError(t, service, "waypost_forward", map[string]any{
 		"message_id":  "msg_1",
 		"delivery_id": "dlv_1",
-		"to_address":  "workflow/target",
+		"to":          "workflow/target",
 	})
 	if err == nil || !strings.Contains(err.Error(), "requires exactly one of message_id or delivery_id") {
 		t.Fatalf("waypost_forward error = %v, want source id validation", err)
@@ -3204,7 +3222,7 @@ func TestWaypostSendUsesFixedWakeTextWhenDisableFlagUnset(t *testing.T) {
 	service.state.autoBindAttempted = true
 
 	output := callServiceTool(t, service, "waypost_send", map[string]any{
-		"to_address":             "agent-deck/target",
+		"to":                     "agent-deck/target",
 		"subject":                "delegate",
 		"body":                   "body",
 		"disable_notify_message": false,
@@ -3247,7 +3265,7 @@ func TestWaypostSendPreservesWaypostDefaultsWhenMetadataOmitted(t *testing.T) {
 	service.state.autoBindAttempted = true
 
 	output := callServiceTool(t, service, "waypost_send", map[string]any{
-		"to_address":   "agent-deck/self",
+		"to":           "agent-deck/self",
 		"subject":      "delegate",
 		"body":         "body",
 		"from_address": "agent-deck/self",
@@ -3288,7 +3306,7 @@ func TestWaypostSendReturnsReceiptWhenNotifyFails(t *testing.T) {
 	service.notifications.retryWait = func(context.Context, time.Duration) error { return nil }
 
 	output := callServiceTool(t, service, "waypost_send", map[string]any{
-		"to_address":  "agent-deck/target",
+		"to":          "agent-deck/target",
 		"subject":     "delegate",
 		"body":        "body",
 		"diagnostics": true,
@@ -3439,7 +3457,7 @@ func TestWaypostSendRejectsInvalidOverrideSender(t *testing.T) {
 	service.state.autoBindAttempted = true
 
 	err := callServiceToolExpectError(t, service, "waypost_send", map[string]any{
-		"to_address":   "agent-deck/target",
+		"to":           "agent-deck/target",
 		"from_address": "agent-deck",
 		"subject":      "delegate",
 		"body":         "body",
@@ -3460,9 +3478,9 @@ func TestWaypostSendRejectsInvalidRecipientAddress(t *testing.T) {
 	service.state.autoBindAttempted = true
 
 	err := callServiceToolExpectError(t, service, "waypost_send", map[string]any{
-		"to_address": "agent-deck",
-		"subject":    "delegate",
-		"body":       "body",
+		"to":      "agent-deck",
+		"subject": "delegate",
+		"body":    "body",
 	})
 	if err == nil || !strings.Contains(err.Error(), `invalid address`) || !strings.Contains(err.Error(), `agent-deck`) {
 		t.Fatalf("waypost_send error = %v, want invalid recipient address", err)
@@ -5514,9 +5532,9 @@ func TestWaypostServiceUsesConfiguredStateDir(t *testing.T) {
 	service.state.autoBindAttempted = true
 
 	output := callServiceTool(t, service, "waypost_send", map[string]any{
-		"to_address": "agent-deck/self",
-		"subject":    "delegate",
-		"body":       "body",
+		"to":      "agent-deck/self",
+		"subject": "delegate",
+		"body":    "body",
 	})
 	if got := output["delivery_id"]; got == nil || got == "" {
 		t.Fatalf("delivery_id = %v, want non-empty", got)
@@ -5611,9 +5629,9 @@ func TestWaypostLifecycleToolsUseDirectWaypostService(t *testing.T) {
 	service.state.autoBindAttempted = true
 
 	send := callServiceTool(t, service, "waypost_send", map[string]any{
-		"to_address": "agent-deck/self",
-		"subject":    "delegate",
-		"body":       "body",
+		"to":      "agent-deck/self",
+		"subject": "delegate",
+		"body":    "body",
 	})
 	deliveryID := send["delivery_id"].(string)
 	if deliveryID == "" {
@@ -5741,9 +5759,9 @@ func TestWaypostRecvDoesNotWaitForLaterMessage(t *testing.T) {
 	}
 
 	send := callServiceTool(t, service, "waypost_send", map[string]any{
-		"to_address": "agent-deck/self",
-		"subject":    "nonblocking recv",
-		"body":       "body",
+		"to":      "agent-deck/self",
+		"subject": "nonblocking recv",
+		"body":    "body",
 	})
 	deliveryID := send["delivery_id"].(string)
 
@@ -5783,9 +5801,9 @@ func TestWaypostRecvReportsActiveLeaseImmediately(t *testing.T) {
 	service.state.autoBindAttempted = true
 
 	send := callServiceTool(t, service, "waypost_send", map[string]any{
-		"to_address": "agent-deck/self",
-		"subject":    "active lease",
-		"body":       "body",
+		"to":      "agent-deck/self",
+		"subject": "active lease",
+		"body":    "body",
 	})
 	deliveryID := send["delivery_id"].(string)
 	firstRecv := callServiceTool(t, service, "waypost_recv", map[string]any{
@@ -5864,9 +5882,9 @@ func TestWaypostRecvKnownDeliveryIDsSuppressActiveLeaseReport(t *testing.T) {
 	service.state.autoBindAttempted = true
 
 	send := callServiceTool(t, service, "waypost_send", map[string]any{
-		"to_address": "agent-deck/self",
-		"subject":    "known active lease",
-		"body":       "body",
+		"to":      "agent-deck/self",
+		"subject": "known active lease",
+		"body":    "body",
 	})
 	deliveryID := send["delivery_id"].(string)
 	callServiceTool(t, service, "waypost_recv", map[string]any{
@@ -6067,10 +6085,10 @@ func TestWaypostGroupMCPRuntimeFlow(t *testing.T) {
 	})
 
 	send := callServiceTool(t, service, "waypost_send", map[string]any{
-		"to_address": "group/review",
-		"subject":    "group update",
-		"body":       "group body",
-		"group":      true,
+		"to":      "group/review",
+		"subject": "group update",
+		"body":    "group body",
+		"group":   true,
 	})
 	if got := send["mode"]; got != waypost.SendModeGroup {
 		t.Fatalf("send mode = %v, want group", got)
@@ -6184,7 +6202,7 @@ func TestWaypostGroupSendRuntimeKeepsMessageWhenSubscriberNotifyFails(t *testing
 	})
 
 	send := callServiceTool(t, service, "waypost_send", map[string]any{
-		"to_address":   "group/review",
+		"to":           "group/review",
 		"from_address": "agent-deck/expert",
 		"subject":      "expert post",
 		"body":         "group body",
@@ -7161,9 +7179,9 @@ func TestWaypostReleaseDeferAndFailUseDirectWaypostService(t *testing.T) {
 	service.state.autoBindAttempted = true
 
 	firstSend := callServiceTool(t, service, "waypost_send", map[string]any{
-		"to_address": "agent-deck/self",
-		"subject":    "release-defer",
-		"body":       "body",
+		"to":      "agent-deck/self",
+		"subject": "release-defer",
+		"body":    "body",
 	})
 	firstRecv := callServiceTool(t, service, "waypost_recv", map[string]any{
 		"addresses": []string{"agent-deck/self"},
@@ -7228,9 +7246,9 @@ func TestWaypostReleaseDeferAndFailUseDirectWaypostService(t *testing.T) {
 	})
 
 	secondSend := callServiceTool(t, service, "waypost_send", map[string]any{
-		"to_address": "agent-deck/self",
-		"subject":    "fail",
-		"body":       "body-2",
+		"to":      "agent-deck/self",
+		"subject": "fail",
+		"body":    "body-2",
 	})
 	failRecv := callServiceTool(t, service, "waypost_recv", map[string]any{
 		"addresses": []string{"agent-deck/self"},
@@ -7259,7 +7277,7 @@ func TestWriteToolRequiresWaypostStatusFirst(t *testing.T) {
 
 	err := callServiceToolExpectErrorWithoutStatusBootstrap(t, service, "waypost_send", map[string]any{
 		"from_address": "codex/source",
-		"to_address":   "codex/target",
+		"to":           "codex/target",
 		"subject":      "hello",
 		"body":         "body",
 	})

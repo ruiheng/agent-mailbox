@@ -2,6 +2,11 @@
 
 This design covers CLI `send` and MCP `waypost_send` only.
 
+> The MCP input shape described below has been superseded by a hard cut to one
+> required `to` field: a string selects a single send and an array of 1-10
+> strings selects a batch. The CLI design and the send/output semantics remain
+> current.
+
 ## Summary
 
 Add an opt-in batch form at the two existing send coordination boundaries while
