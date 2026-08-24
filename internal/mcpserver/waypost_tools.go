@@ -112,6 +112,20 @@ type waypostClaimHistoryInput struct {
 	RecoverLeaseToken bool   `json:"recover_lease_token,omitempty"`
 	Limit             *int   `json:"limit,omitempty"`
 	Cursor            string `json:"cursor,omitempty"`
+	Diagnostics       bool   `json:"diagnostics,omitempty"`
+}
+
+func waypostClaimHistoryInputSchema() *jsonschema.Schema {
+	schema, err := jsonschema.For[waypostClaimHistoryInput](nil)
+	if err != nil {
+		panic(fmt.Errorf("build waypost_claim_history input schema: %w", err))
+	}
+	diagnostics, ok := schema.Properties["diagnostics"]
+	if !ok {
+		panic("build waypost_claim_history input schema: missing diagnostics")
+	}
+	diagnostics.Description = "Unnecessary for normal claim listing or lease-token recovery."
+	return schema
 }
 
 type waypostListInput struct {
@@ -206,7 +220,8 @@ func (s *Service) registerWaypostTools(server *mcp.Server) {
 	}, s.waypostRecv)
 	addToolRequiringWaypostStatus(server, s, &mcp.Tool{
 		Name:        "waypost_claim_history",
-		Description: "List deliveries claimed by this MCP process. By default, returns active claims without tokens; set delivery_id and recover_lease_token=true to recover a lost token.",
+		Description: "List deliveries claimed by this MCP process. By default, returns compact active claims without tokens; set delivery_id and recover_lease_token=true to recover a lost token, or diagnostics=true for claim timing and content-type detail.",
+		InputSchema: waypostClaimHistoryInputSchema(),
 	}, s.waypostClaimHistory)
 	addToolRequiringWaypostStatus(server, s, &mcp.Tool{
 		Name:        "waypost_ack",
@@ -967,17 +982,7 @@ func (s *Service) waypostClaimHistory(ctx context.Context, _ *mcp.CallToolReques
 		if deliveryID == "" && len(items) == pageSize {
 			break
 		}
-		item := map[string]any{
-			"delivery_id":       lease.DeliveryID,
-			"recipient_address": lease.RecipientAddress,
-			"lease_expires_at":  lease.LeaseExpiresAt,
-			"subject":           lease.Subject,
-			"content_type":      lease.ContentType,
-			"claimed_at":        lease.ClaimedAt,
-			"last_renewed_at":   nilIfEmpty(lease.LastRenewedAt),
-			"status":            lease.Status,
-			"terminal_at":       nilIfEmpty(lease.TerminalAt),
-		}
+		item := compactWaypostClaimHistoryItem(lease, input.Diagnostics)
 		if input.RecoverLeaseToken && lease.LeaseToken != "" {
 			item["lease_token"] = lease.LeaseToken
 		}
@@ -987,21 +992,11 @@ func (s *Service) waypostClaimHistory(ctx context.Context, _ *mcp.CallToolReques
 		return s.waypostToolResult(ctx, map[string]any{
 			"status":      "not_found",
 			"delivery_id": deliveryID,
-			"items":       items,
 		})
 	}
 	out := map[string]any{
-		"status":                 "listed",
-		"items":                  items,
-		"include_terminal":       input.IncludeTerminal,
-		"lease_tokens_included":  input.RecoverLeaseToken,
-		"lease_token_hint":       "Pass delivery_id and recover_lease_token=true only when recovering a token this MCP process previously returned.",
-		"current_process_only":   true,
-		"claimed_delivery_count": len(leases),
-		"returned_claim_count":   len(items),
-	}
-	if deliveryID != "" {
-		out["claimed_delivery_count"] = len(items)
+		"status": "listed",
+		"items":  items,
 	}
 	if deliveryID == "" && len(items) == pageSize {
 		lastID := items[len(items)-1]["delivery_id"].(string)
@@ -1017,6 +1012,33 @@ func (s *Service) waypostClaimHistory(ctx context.Context, _ *mcp.CallToolReques
 		}
 	}
 	return s.waypostToolResult(ctx, out)
+}
+
+func compactWaypostClaimHistoryItem(lease activeLease, diagnostics bool) map[string]any {
+	item := map[string]any{
+		"delivery_id":       lease.DeliveryID,
+		"recipient_address": lease.RecipientAddress,
+		"subject":           lease.Subject,
+		"status":            lease.Status,
+	}
+	if lease.Status == "active" && lease.LeaseExpiresAt != "" {
+		item["lease_expires_at"] = lease.LeaseExpiresAt
+	}
+	if lease.Status != "active" && lease.TerminalAt != "" {
+		item["terminal_at"] = lease.TerminalAt
+	}
+	if diagnostics {
+		if lease.ContentType != "" {
+			item["content_type"] = lease.ContentType
+		}
+		if lease.ClaimedAt != "" {
+			item["claimed_at"] = lease.ClaimedAt
+		}
+		if lease.LastRenewedAt != "" {
+			item["last_renewed_at"] = lease.LastRenewedAt
+		}
+	}
+	return item
 }
 
 func (s *Service) waypostRecvGroup(ctx context.Context, addresses []string, person string, includeDetails bool) (*mcp.CallToolResult, map[string]any, error) {

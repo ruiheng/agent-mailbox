@@ -701,6 +701,66 @@ func TestCompactWaypostSendResultKeepsOnlyActionableFields(t *testing.T) {
 	}
 }
 
+func TestCompactWaypostClaimHistoryItemSeparatesOperationalAndDiagnosticFields(t *testing.T) {
+	lease := activeLease{
+		DeliveryID:       "dlv_1",
+		RecipientAddress: "agent-deck/self",
+		LeaseExpiresAt:   "2026-08-24T12:00:00Z",
+		Subject:          "review",
+		ContentType:      "text/plain",
+		ClaimedAt:        "2026-08-24T11:00:00Z",
+		LastRenewedAt:    "2026-08-24T11:30:00Z",
+		Status:           "active",
+	}
+	compact := compactWaypostClaimHistoryItem(lease, false)
+	wantCompact := map[string]any{
+		"delivery_id":       "dlv_1",
+		"recipient_address": "agent-deck/self",
+		"subject":           "review",
+		"status":            "active",
+		"lease_expires_at":  "2026-08-24T12:00:00Z",
+	}
+	if !reflect.DeepEqual(compact, wantCompact) {
+		t.Fatalf("compact claim history item = %v, want %v", compact, wantCompact)
+	}
+
+	detailed := compactWaypostClaimHistoryItem(lease, true)
+	wantDetailed := map[string]any{
+		"delivery_id":       "dlv_1",
+		"recipient_address": "agent-deck/self",
+		"subject":           "review",
+		"status":            "active",
+		"lease_expires_at":  "2026-08-24T12:00:00Z",
+		"content_type":      "text/plain",
+		"claimed_at":        "2026-08-24T11:00:00Z",
+		"last_renewed_at":   "2026-08-24T11:30:00Z",
+	}
+	if !reflect.DeepEqual(detailed, wantDetailed) {
+		t.Fatalf("diagnostic claim history item = %v, want %v", detailed, wantDetailed)
+	}
+}
+
+func TestCompactWaypostClaimHistoryItemUsesSparseTerminalFields(t *testing.T) {
+	item := compactWaypostClaimHistoryItem(activeLease{
+		DeliveryID:       "dlv_1",
+		RecipientAddress: "agent-deck/self",
+		LeaseExpiresAt:   "2026-08-24T12:00:00Z",
+		Subject:          "review",
+		Status:           "acked",
+		TerminalAt:       "2026-08-24T11:45:00Z",
+	}, false)
+	want := map[string]any{
+		"delivery_id":       "dlv_1",
+		"recipient_address": "agent-deck/self",
+		"subject":           "review",
+		"status":            "acked",
+		"terminal_at":       "2026-08-24T11:45:00Z",
+	}
+	if !reflect.DeepEqual(item, want) {
+		t.Fatalf("terminal claim history item = %v, want %v", item, want)
+	}
+}
+
 func TestCompactWaypostGroupReceivedMessageOmitsReadMetadata(t *testing.T) {
 	message := waypost.GroupReceivedMessage{
 		MessageID:        "msg_1",
@@ -855,21 +915,21 @@ func TestWaypostRecvReturnsPaginatedActiveLeaseHint(t *testing.T) {
 }
 
 func TestWaypostClaimHistorySchemaExposesRecoveryFields(t *testing.T) {
-	schema, err := jsonschema.For[waypostClaimHistoryInput](nil)
-	if err != nil {
-		t.Fatalf("jsonschema.For() error = %v", err)
-	}
-	for _, field := range []string{"delivery_id", "include_terminal", "recover_lease_token"} {
+	schema := waypostClaimHistoryInputSchema()
+	for _, field := range []string{"delivery_id", "include_terminal", "recover_lease_token", "diagnostics"} {
 		if _, ok := schema.Properties[field]; !ok {
 			t.Fatalf("schema.Properties missing %s: %v", field, schema.Properties)
 		}
+	}
+	if got, want := schema.Properties["diagnostics"].Description, "Unnecessary for normal claim listing or lease-token recovery."; got != want {
+		t.Fatalf("diagnostics description = %q, want %q", got, want)
 	}
 	if _, ok := schema.Properties["include_lease_token"]; ok {
 		t.Fatalf("schema.Properties unexpectedly includes include_lease_token: %v", schema.Properties)
 	}
 }
 
-func TestWaypostClaimHistoryReportsTotalAndReturnedCounts(t *testing.T) {
+func TestWaypostClaimHistoryReturnsCompactPaginatedResults(t *testing.T) {
 	fake := &fakeWaypostService{t: t}
 	service := newService(Options{
 		WaypostServiceFactory: fakeWaypostServiceFactory{service: fake},
@@ -884,22 +944,59 @@ func TestWaypostClaimHistoryReportsTotalAndReturnedCounts(t *testing.T) {
 			DeliveryID:       fmt.Sprintf("dlv_history_%03d", index),
 			LeaseToken:       fmt.Sprintf("lease_history_%03d", index),
 			RecipientAddress: "agent-deck/self",
+			LeaseExpiresAt:   "2026-08-24T12:00:00Z",
+			Subject:          "history subject",
 		})
 	}
 	fake.recordLeases(messages)
 	service.activeLeases.trackReceive(waypost.ReceiveResult{Messages: messages}, time.Now().UTC().Format(time.RFC3339Nano))
 
 	first := callServiceTool(t, service, "waypost_claim_history", map[string]any{})
-	if first["claimed_delivery_count"] != float64(waypost.DefaultPageSize+1) || first["returned_claim_count"] != float64(waypost.DefaultPageSize) {
-		t.Fatalf("first claim history counts = total %v returned %v", first["claimed_delivery_count"], first["returned_claim_count"])
+	if len(first) != 3 || first["status"] != "listed" {
+		t.Fatalf("first compact claim history = %v, want status, items, and next_cursor only", first)
+	}
+	items := first["items"].([]any)
+	if len(items) != waypost.DefaultPageSize {
+		t.Fatalf("first claim history items = %d, want %d", len(items), waypost.DefaultPageSize)
+	}
+	firstItem := items[0].(map[string]any)
+	if len(firstItem) != 5 || firstItem["delivery_id"] != "dlv_history_000" || firstItem["status"] != "active" {
+		t.Fatalf("first compact claim history item = %v", firstItem)
+	}
+	for _, field := range []string{"content_type", "claimed_at", "last_renewed_at", "terminal_at", "lease_token"} {
+		if _, ok := firstItem[field]; ok {
+			t.Fatalf("compact claim history item unexpectedly includes %q: %v", field, firstItem)
+		}
 	}
 	cursor, ok := first["next_cursor"].(string)
 	if !ok || cursor == "" {
 		t.Fatalf("first claim history next_cursor = %v", first["next_cursor"])
 	}
 	second := callServiceTool(t, service, "waypost_claim_history", map[string]any{"cursor": cursor})
-	if second["claimed_delivery_count"] != float64(waypost.DefaultPageSize+1) || second["returned_claim_count"] != float64(1) {
-		t.Fatalf("second claim history counts = total %v returned %v", second["claimed_delivery_count"], second["returned_claim_count"])
+	if len(second) != 2 || second["status"] != "listed" {
+		t.Fatalf("second compact claim history = %v, want status and items only", second)
+	}
+	if items := second["items"].([]any); len(items) != 1 {
+		t.Fatalf("second claim history items = %d, want 1", len(items))
+	}
+}
+
+func TestWaypostClaimHistoryEmptyAndNotFoundResultsAreCompact(t *testing.T) {
+	service := newService(Options{
+		WaypostServiceFactory: fakeWaypostServiceFactory{service: &fakeWaypostService{t: t}},
+		CommandRunner:         &fakeRunner{t: t},
+		DisableWakeScheduler:  true,
+		DisableLeaseRenewLoop: true,
+	})
+	service.state.autoBindAttempted = true
+
+	empty := callServiceTool(t, service, "waypost_claim_history", map[string]any{})
+	if want := map[string]any{"status": "listed", "items": []any{}}; !reflect.DeepEqual(empty, want) {
+		t.Fatalf("empty claim history = %#v, want %#v", empty, want)
+	}
+	notFound := callServiceTool(t, service, "waypost_claim_history", map[string]any{"delivery_id": "dlv_missing"})
+	if want := map[string]any{"status": "not_found", "delivery_id": "dlv_missing"}; !reflect.DeepEqual(notFound, want) {
+		t.Fatalf("missing claim history = %#v, want %#v", notFound, want)
 	}
 }
 
@@ -5728,6 +5825,9 @@ func TestWaypostRecvReportsActiveLeaseImmediately(t *testing.T) {
 		"delivery_id":         deliveryID,
 		"recover_lease_token": true,
 	})
+	if len(history) != 2 || history["status"] != "listed" {
+		t.Fatalf("targeted claim history = %v, want status and items only", history)
+	}
 	items := history["items"].([]any)
 	if len(items) != 1 {
 		t.Fatalf("claim history items = %d, want 1", len(items))
@@ -5738,6 +5838,11 @@ func TestWaypostRecvReportsActiveLeaseImmediately(t *testing.T) {
 	}
 	if _, ok := item["body"]; ok {
 		t.Fatalf("claim history unexpectedly included body")
+	}
+	for _, field := range []string{"content_type", "claimed_at", "last_renewed_at"} {
+		if _, ok := item[field]; ok {
+			t.Fatalf("compact token recovery unexpectedly included %q: %v", field, item)
+		}
 	}
 }
 
