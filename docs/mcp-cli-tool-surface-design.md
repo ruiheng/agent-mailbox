@@ -21,10 +21,6 @@ thirteenth, explicitly opt-in diagnostic tool enabled only by `waypost mcp
 --include-debug-tool`; there is no legacy tool set, capability manifest, or
 runtime capability registry.
 
-The hard-cut condition is simple: every removed MCP operation must already have
-a complete structured CLI path and concise `waypost doc` guidance. Once that
-condition is met, the old MCP registrations are deleted.
-
 CLI completeness is the functional replacement. Existing MCP response shapes
 and removed MCP tool names are not preserved.
 
@@ -599,51 +595,10 @@ Topic responsibilities:
 - `groups`: membership and subscriber management with explicit identities
 - `diagnostics`: address inspection and live MCP binding versus durable state
 
-## Verification
-
-Automated checks cover:
-
-- MCP exposes exactly the twelve default tool names and adds `waypost_debug`
-  only with `--include-debug-tool`
-- every deleted MCP tool is absent
-- every deleted tool's CLI route satisfies the operation matrix
-- status, bind, and debug bootstrap/repair behavior
-- send, recv, claim history, and `ack`/`release`/`defer` through MCP
-- Agent Deck create/require behavior remains covered
-- Agent Deck create/require can run before `waypost_status`
-- MCP server instructions identify `waypost doc --list` and the one-or-more-topic
-  `waypost doc TOPIC...` form as the complete CLI guidance entry points and require
-  the binary and state directory reported by `waypost_status`
-- one end-to-end replacement test calls `waypost_status`, invokes its reported
-  executable with its reported state directory, and completes a removed
-  operation
-- CLI JSON error codes, retryability, exit codes, stdout, and stderr
-- `recv` never emits `has_more`
-- `remaining_by_state` is sparse and excludes returned and acked deliveries
-- deferred queued deliveries are counted but never described as claimable now
-- group receive never returns remaining counts
-- complete count-failure rollback returns no hidden lease
-- incomplete rollback returns every unreleased id/token and MCP tracks exactly
-  those claims
-- CLI `fail` followed by MCP reconciliation is not renewed, is removed from the
-  active set, and cannot cause a stale `active_leases` receive result
-- CLI `fail` immediately followed by default or targeted claim history never
-  reports the delivery as active and never returns its old token
-- `include_terminal` claim history reports the exact observed durable state and
-  a defined terminal timestamp for externally transitioned deliveries
-- renewal never proceeds when durable-state inspection fails or reports a
-  non-leased delivery or changed token
-- concurrent and batch claims retain existing correctness
-- `read.has_more` appears only when true
-- every prompt stays within its word budget and contains no forbidden material
-- bare `waypost doc` returns the overall workflow prompt rather than usage help
-- `docs/cli.md` remains outside embedded prompt resources
-- the count query passes query-plan and benchmark checks
-
 ## Risks
 
-- An MCP tool could be removed before its CLI path is complete. The hard-cut
-  test matrix makes that impossible to merge.
+- An MCP tool could be removed before its CLI path is complete. Registration
+  and CLI replacement tests guard that boundary.
 - Prompt text can drift from CLI mechanics. Embedding prompts in the binary and
   testing their commands keeps them version-matched.
 - Remaining-state counting adds receive-path work. The index, query-plan test,
@@ -687,18 +642,3 @@ Rejected because it hides the same broad surface behind weaker validation.
 
 Rejected because it mixes operator setup, every command, multiple output modes,
 and human-oriented detail.
-
-## Implementation Order
-
-1. complete missing subscriber, `undefer --json`, and `fail --json` CLI paths
-2. add the stable CLI JSON error contract and operation-matrix tests
-3. add executable and resolved state directory to `waypost_status`
-4. add the status-to-CLI end-to-end replacement test
-5. add concise embedded `waypost doc` topics and prompt tests
-6. add one durable-state reconciliation path shared by renewal, the
-   `active_leases` receive gate, and claim history
-7. hard-cut MCP registration to the twelve default typed tools, with an
-   explicit opt-in diagnostic tool
-8. delete `recv.has_more` and add exact personal/group receive results
-9. add remaining-state counts and post-claim rollback/recovery
-10. run the full CLI, MCP, concurrency, prompt, query-plan, and benchmark suite

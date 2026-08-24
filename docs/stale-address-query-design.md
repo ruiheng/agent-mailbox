@@ -251,11 +251,3 @@ leases would under-report receivable work.
 - The result only describes current receivable state. A caller that needs
   message metadata, send age, or explicit failure reasons is asking for a
   different query.
-
-## Open Questions
-
-- Should the CLI subcommand be named `stale`, `stale-addresses`, or
-  `list-stale-addresses`? `stale` is concise, but `stale-addresses` is more
-  explicit.
-- Should a future version accept `--max` to cap how many stale addresses are
-  returned, or is caller-side filtering enough?

@@ -1,7 +1,6 @@
 # Multi-recipient `send`
 
-Status: round-1 draft for independent review  
-Scope: CLI `send` and MCP `waypost_send` only
+This design covers CLI `send` and MCP `waypost_send` only.
 
 ## Summary
 
@@ -402,68 +401,6 @@ Because no idempotency key exists, blindly retrying a partial batch can duplicat
 already successful sends. Documentation must tell callers to retry only failed
 addresses after inspecting `results`.
 
-## Code changes
-
-### New shared coordination
-
-- Add `internal/waypost/send_batch.go` with
-  `NormalizeSendRecipients`, `SendBatchItem`, `SendBatchResult`, the aggregate
-  status/count logic, and `ExecuteSendBatch`.
-- Add `internal/waypost/send_batch_test.go` with fake-sender and fake-notifier
-  tests for order, continued execution, notification eligibility, and counts.
-
-### CLI
-
-- `internal/waypost/command_send.go`
-  - replace the single `toAddress` flag binding with repeatable
-    `stringListFlag`;
-  - retain the current branch for one raw value;
-  - prepare and execute the batch branch for multiple raw values;
-  - update usage/help and document that `--to` is repeatable.
-- `internal/waypost/cli_payloads.go`
-  - add batch output structs and projections for compact/full and optional
-    notification fields; do not change existing single structs.
-- `internal/waypost/output_modes.go` and `internal/waypost/output.go`
-  - add structured and text batch writers; continue using existing single
-    receipt formatters for each successful item.
-- `internal/waypost/app_test.go`
-  - cover preparation, notifier calls, projections, invalid-before-write, and
-    direct `App` batch-incomplete errors.
-- `cmd/waypost/main_test.go`
-  - cover end-to-end stdout/stderr/exit behavior and durable records.
-
-No special case is required in `cmd/waypost/main.go`; the returned
-batch-incomplete error already produces exit 1 and a stderr summary after the
-command has written its result envelope.
-
-### MCP
-
-- `internal/mcpserver/waypost_tools.go`
-  - add `ToAddresses`;
-  - register the exact-one schema and expanded tool description;
-  - branch in `waypostSend` between the unchanged legacy helper and a batch
-    helper;
-  - open the Waypost service and resolve the sender once for the batch;
-  - adapt the existing notifier to `SendBatchNotifier`;
-  - extract the current successful-send map construction so legacy and batch
-    items share it;
-  - return a mutation result for completed batches even when an item failed so
-    overview updates still occur.
-- `internal/mcpserver/server_test.go`
-  - extend schema, routing, output, partial failure, and notification coverage.
-
-`internal/mcpserver/notifier.go` needs no behavior change. It is called once per
-successful batch item and retains its current personal and group behavior.
-
-### Documentation
-
-- `docs/cli.md`: repeatable syntax, no comma splitting, dedup/order, limit,
-  output examples, partial exit behavior, group batches, and retry warning.
-- `README.md`: MCP exact-one input forms and batch envelope; update CLI quick
-  start notes without replacing the single example.
-- Update `writeSendHelp` in code; there is no database or configuration
-  migration document.
-
 ## Compatibility and migration
 
 - Database/schema migration: none.
@@ -477,94 +414,7 @@ successful batch item and retains its current personal and group behavior.
 - Internal forwarding: unchanged and remains single-recipient.
 - Error compatibility: legacy single errors retain their current MCP/CLI path.
   New partial-result behavior exists only in the opt-in batch forms.
-- No feature flag or staged data rollout is needed. Documentation and code must
-  land together because callers need to understand partial retry behavior.
-
-## Implementation sequence
-
-1. Add and unit-test recipient preparation and sequential batch execution in
-   `internal/waypost`.
-2. Add batch projection/output types and text/JSON/YAML writers without touching
-   legacy single projections.
-3. Convert CLI `--to` to a repeatable flag, retain the explicit single branch,
-   and add end-to-end CLI tests.
-4. Add the MCP `to_addresses` schema and exact-one validation.
-5. Extract the existing MCP single-result mapper, add the plural orchestration
-   branch, and test persistence/notification/error behavior with the fake
-   Waypost service.
-6. Update help, `docs/cli.md`, and `README.md`.
-7. Run focused tests, then the full Go test suite and formatting/static checks.
-
-## Test matrix
-
-### Shared orchestration
-
-- preserves normalized first-seen order;
-- rejects zero and more than 10 raw recipients;
-- deduplicates exact and whitespace-normalized duplicates;
-- rejects any invalid address before the fake sender is called;
-- enforces all-personal or all-group mode before the first call;
-- calls the sender sequentially with identical base metadata and a different
-  `ToAddress`;
-- continues to item three when item two fails;
-- cancellation before the first target makes no sender call;
-- cancellation between targets preserves accumulated results internally, stops
-  before the next sender call, and returns the context error without creating
-  synthetic failed items;
-- cancellation observed when a sender returns an error stops the batch rather
-  than treating that error as an ordinary per-recipient failure;
-- calls the notifier only for successful durable items and immediately after
-  each success;
-- notification failure does not alter sent/failed counts.
-
-### CLI
-
-- one `--to` retains exact current compact/full text, JSON, YAML, notification,
-  personal, and group outputs;
-- repeated `--to` creates one distinct personal message/delivery per unique
-  recipient and preserves result order;
-- batch text has ordered item lines and an aggregate line;
-- JSON and YAML have the specified single-envelope shape in compact/full modes;
-- raw duplicates select batch mode but produce only one durable send/result;
-- a comma-containing single value is never split into multiple targets;
-- an invalid later recipient, empty body, invalid sender, mixed group/personal
-  list, or 11 raw flags creates no durable records;
-- two existing groups each get an independent group message;
-- an existing group, a missing group, and another existing group demonstrate a
-  mid-batch store failure, continued execution, ordered results, retained first
-  and third messages, stdout envelope, and exit 1;
-- `--notify` calls once per durable success, reports each outcome, and remains
-  exit 0 when only notification fails;
-- a canceled direct `App` context propagates the context error, writes no normal
-  batch envelope, and performs no sender call after cancellation is observed.
-
-### MCP
-
-- schema exposes both selectors with exact-one semantics and array bounds;
-- legacy `to_address` success/error output is unchanged;
-- both selectors, neither selector, an empty array, or more than 10 items fail
-  before opening/calling the sender;
-- `to_addresses` with one item still returns a batch envelope;
-- sender resolution and Waypost service open occur once per batch;
-- duplicate normalized targets produce one sender/notification call;
-- ordered distinct targets produce ordered independent receipts;
-- fake failure at the middle target does not prevent the final call and returns
-  `partial_failed` with the failed item's error;
-- all durable failures return outer `failed` as a successful MCP batch result;
-- request cancellation between targets returns a canceled tool call/error,
-  preserves earlier durable sends, and makes no later sender call;
-- notification failure, disabled notification, local target, unsupported target,
-  already-claimed delivery, and group subscriber fan-out preserve current
-  per-send outcomes;
-- every call in group mode receives `Group: true` and the same `AsPerson`;
-- `waypost_forward` remains on the legacy single helper and its tests do not
-  change contract.
-
-### Verification
-
-Run `gofmt` on changed Go files, focused package tests for
-`./internal/waypost`, `./internal/mcpserver`, and `./cmd/waypost`, followed by
-`go test ./...` and the repository's existing vet/static-check command.
+- No feature flag or staged data rollout is needed.
 
 ## Risks and mitigations
 
@@ -602,12 +452,3 @@ Run `gofmt` on changed Go files, focused package tests for
 - **Add `Store.SendBatch` or one cross-recipient transaction:** misstates the
   requested aggregation as a new storage primitive and complicates personal and
   group semantics without benefit.
-
-## Acceptance criteria
-
-The feature is complete when one CLI invocation or one MCP call can target up
-to 10 raw recipient values, returns ordered outcomes for unique normalized
-targets, preserves each successful send and notification's current semantics,
-exposes partial durable failures without stopping later targets, stops before a
-new target when request cancellation is observed, and leaves all legacy
-single-recipient contracts and unrelated operations unchanged.

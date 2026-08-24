@@ -555,33 +555,7 @@ The design should support later garbage collection for:
 The first implementation may leave GC as a manual or later command, but the data
 model should not assume permanent unbounded growth.
 
-## 12. Recommended First Iteration
-
-Build the smallest complete slice:
-
-1. SQLite schema for `endpoints`, `endpoint_addresses`, `messages`,
-   `deliveries`, and `events`
-2. implicit address ensure and lookup
-3. `send`
-4. `recv`
-5. `wait`
-6. `watch`
-7. `ack`
-8. `release`
-9. `defer`
-10. `undefer`
-11. `fail`
-12. `list`
-
-Skip for now:
-
-- topics
-- consumer groups
-- adapter daemons
-- remote networking
-- blob deduplication
- 
-## 13. Implementation Choice
+## 12. Implementation Choice
 
 The first implementation should be Go.
 
@@ -591,10 +565,3 @@ Reasons:
 - SQLite support is mature without requiring a daemon
 - concurrency and cancellation fit blocking CLI operations well
 - deployment is simpler than a Python toolchain-based CLI
-
-## 14. Open Questions
-
-- Should `fail` in a future version support scheduled retry backoff in addition
-  to immediate requeue?
-- Should observability-only consumer session tracking be added in v1.1, or wait
-  until adapter work begins?

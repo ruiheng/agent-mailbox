@@ -453,34 +453,3 @@ operation updates the one field that matters.
 
 These are manageable. They are better tradeoffs than forcing every caller to
 guess a total runtime.
-
-The first rollout therefore should explicitly test:
-
-- scheduler pauses longer than one renewal cadence
-- SQLite contention during renew and terminal transitions
-- MCP shutdown during in-flight renewal
-- local completion after lease loss
-
-## Open Questions
-
-- Should `renew` accept an absolute `--until` in addition to relative `--for`,
-  or is relative-only simpler and good enough?
-- Should later MCP cleanup work collapse raw `{delivery_id, lease_token}` into
-  a single session-scoped claim handle?
-- After the MCP-only path is proven under failure testing, is there any reason
-  left to keep the legacy `5m` default for non-MCP callers?
-
-## Suggested Rollout
-
-1. add core `Renew` store method and CLI `renew`
-2. add tests for successful renewal, expired-lease rejection, and stale-token
-   rejection
-3. add `delivery_lease_renewed` event coverage
-4. factor claim logic so MCP can use a short-TTL receive policy without
-   changing legacy `recv` semantics
-5. update waypost MCP to track active leases and renew them automatically
-6. run failure testing under scheduler pause, SQLite contention, and MCP
-   shutdown races
-7. only after evidence, consider tightening MCP TTL below the initial `30s`
-
-This sequencing keeps the root fix small and testable.

@@ -47,12 +47,6 @@ For a previous custom location, provide both paths explicitly:
 waypost --state-dir /new/waypost-state migrate --from /old/legacy-state
 ```
 
-## Status
-
-The Go CLI now implements the MVP described in
-[`docs/initial-design.md`](docs/initial-design.md). The focus is correctness and
-operational clarity, not transport integrations or extra routing models.
-
 ## Requirements
 
 To build the CLI from source you need:
@@ -634,21 +628,7 @@ The waypost state directory contains:
 The event log is append-only audit history. Current-state tables remain the
 source of truth for delivery behavior.
 
-## MVP Boundaries
-
-What this repository does today:
-
-- durable direct waypost delivery
-- lazy recovery of expired leases without a daemon
-- fixed retry behavior for `fail`
-- local auditability through the `events` table
-
-What it does not do yet:
-
-- topic routing or consumer groups
-- remote networking
-- transport adapters such as `agent-deck`
-- background garbage collection
+## Durability Boundaries
 
 `send` now makes the blob durable before it starts the SQLite write transaction:
 it writes a temp file in `blobs/`, fsyncs that file, renames it into place, and

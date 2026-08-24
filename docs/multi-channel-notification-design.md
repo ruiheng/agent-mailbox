@@ -738,39 +738,3 @@ design should say that directly.
 
 These are acceptable tradeoffs if the waypost remains authoritative and the
 scheduler logic stays centralized.
-
-## Open Questions
-
-- Should `agent_deck.initial_delay` start at `3m` or `5m` in the first
-  rollout?
-- Should the waypost overview resource later split into one resource per bound
-  address, or is one summary resource enough?
-- Should direct notify expose attempted-channel summaries in tool output in
-  addition to required structured logs?
-- Should a future wake-scope resolver support explicit cross-manager aliasing
-  between waypost addresses and wake targets?
-- If remote MCP-to-MCP wake is ever needed, what component should own discovery
-  and delivery to another session's MCP server instance?
-- If future local hint emitters other than `mcp_resource_updated` appear,
-  should they share one local-emitter interface or split by transport family?
-- If a future MCP server instance can bind unrelated queue groups, should local
-  scheduler scope membership stay "all bound addresses" or become explicitly
-  partitioned?
-
-## Suggested Rollout
-
-1. cache one long-lived MCP server instance inside `Service`
-2. add `waypost://bound/overview` resource registration
-3. ensure initialize advertises `resources.listChanged = true`
-4. optionally add MCP subscribe support and resource-updated hints
-5. refactor immediate send-time notify into a direct-notify coordinator
-6. introduce wake-scope resolution and key scheduler runtime by wake scope
-7. refactor stale unread loop into a generic wake scheduler
-8. wire first local hint-emitter stage to `mcp_resource_updated`
-9. wire later targeted wake stage to `agent-deck`
-10. add tests for stage timing, inter-channel gap, wake-scope ownership, and
-   fallback after direct
-   notify
-
-This keeps the root boundary clean: waypost truth first, notification hints
-second.
