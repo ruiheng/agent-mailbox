@@ -380,6 +380,36 @@ func TestCLIJSONErrorsAndEmbeddedDocs(t *testing.T) {
 		})
 	}
 
+	aliases := map[string]string{
+		"ack":           "# MCP/CLI boundary",
+		"bind":          "# MCP/CLI boundary",
+		"defer":         "# MCP/CLI boundary",
+		"forward":       "# MCP/CLI boundary",
+		"read":          "# Inspect Waypost history",
+		"list":          "# Inspect Waypost history",
+		"send":          "# MCP/CLI boundary",
+		"recv":          "# MCP/CLI boundary",
+		"receive":       "# MCP/CLI boundary",
+		"receiver":      "# MCP/CLI boundary",
+		"claim-history": "# MCP/CLI boundary",
+		"address":       "# Diagnose an address",
+		"addresses":     "# Diagnose an address",
+		"group":         "# Manage group membership and subscribers",
+		"fail":          "# Recover persisted input",
+		"release":       "# MCP/CLI boundary",
+		"status":        "# MCP/CLI boundary",
+		"undefer":       "# Recover persisted input",
+		"wait":          "# MCP/CLI boundary",
+	}
+	for alias, heading := range aliases {
+		t.Run("alias/"+alias, func(t *testing.T) {
+			prompt := runCLI(t, "", "doc", alias)
+			if prompt.exitCode != 0 || prompt.stderr != "" || !strings.Contains(prompt.stdout, heading) {
+				t.Fatalf("doc alias %q result = %+v, want heading %q", alias, prompt, heading)
+			}
+		})
+	}
+
 	multiple := runCLI(t, "", "doc", "recovery", "diagnostics")
 	if multiple.exitCode != 0 || multiple.stderr != "" {
 		t.Fatalf("doc multiple topics result = %+v, want combined prompt on stdout", multiple)
@@ -398,9 +428,23 @@ func TestCLIJSONErrorsAndEmbeddedDocs(t *testing.T) {
 		t.Fatalf("doc multiple topics = %q, topics are not in requested order", multiple.stdout)
 	}
 
+	aliasedMultiple := runCLI(t, "", "doc", "read", "list", "address")
+	if aliasedMultiple.exitCode != 0 || aliasedMultiple.stderr != "" {
+		t.Fatalf("doc aliased multiple topics result = %+v, want combined prompt on stdout", aliasedMultiple)
+	}
+	if strings.Count(aliasedMultiple.stdout, "waypost: history") != 1 ||
+		strings.Count(aliasedMultiple.stdout, "waypost: diagnostics") != 1 {
+		t.Fatalf("doc aliased multiple topics = %q, want canonical topics once each", aliasedMultiple.stdout)
+	}
+
 	unknownMultiple := runCLI(t, "", "doc", "recovery", "missing", "diagnostics")
 	if unknownMultiple.exitCode != 1 || unknownMultiple.stdout != "" || !strings.Contains(unknownMultiple.stderr, `unknown doc topic "missing"`) {
 		t.Fatalf("doc multiple topics with unknown topic result = %+v, want atomic failure", unknownMultiple)
+	}
+	for _, topic := range []string{"diagnostics", "groups", "history", "mcp-cli-boundary", "recovery"} {
+		if !strings.Contains(unknownMultiple.stderr, topic) {
+			t.Fatalf("doc unknown topic error = %q, missing available topic %q", unknownMultiple.stderr, topic)
+		}
 	}
 }
 

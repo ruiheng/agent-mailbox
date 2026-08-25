@@ -148,6 +148,28 @@ Use when: an address may be unbound, endpoint-owned, or group-owned.
 `,
 }
 
+var cliDocTopicAliases = map[string]string{
+	"ack":           "mcp-cli-boundary",
+	"address":       "diagnostics",
+	"addresses":     "diagnostics",
+	"bind":          "mcp-cli-boundary",
+	"claim-history": "mcp-cli-boundary",
+	"defer":         "mcp-cli-boundary",
+	"fail":          "recovery",
+	"forward":       "mcp-cli-boundary",
+	"group":         "groups",
+	"list":          "history",
+	"read":          "history",
+	"receive":       "mcp-cli-boundary",
+	"receiver":      "mcp-cli-boundary",
+	"recv":          "mcp-cli-boundary",
+	"release":       "mcp-cli-boundary",
+	"send":          "mcp-cli-boundary",
+	"status":        "mcp-cli-boundary",
+	"undefer":       "recovery",
+	"wait":          "mcp-cli-boundary",
+}
+
 func (a *App) runDocCommand(args []string) error {
 	fs := flag.NewFlagSet("waypost doc", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
@@ -176,9 +198,9 @@ func (a *App) runDocCommand(args []string) error {
 		return err
 	}
 	if len(remaining) == 1 {
-		topic, ok := cliDocTopics[remaining[0]]
+		_, topic, ok := resolveDocTopic(remaining[0])
 		if !ok {
-			return fmt.Errorf("unknown doc topic %q", remaining[0])
+			return unknownDocTopicError(remaining[0])
 		}
 		_, err := fmt.Fprint(a.stdout, topic)
 		return err
@@ -196,10 +218,10 @@ func formatDocTopicBlocks(topics []string) (string, error) {
 	var output strings.Builder
 	seen := make(map[string]struct{}, len(topics))
 	written := 0
-	for _, topicName := range topics {
-		topic, ok := cliDocTopics[topicName]
+	for _, requestedName := range topics {
+		topicName, topic, ok := resolveDocTopic(requestedName)
 		if !ok {
-			return "", fmt.Errorf("unknown doc topic %q", topicName)
+			return "", unknownDocTopicError(requestedName)
 		}
 		if _, exists := seen[topicName]; exists {
 			continue
@@ -219,13 +241,32 @@ func formatDocTopicBlocks(topics []string) (string, error) {
 	return output.String(), nil
 }
 
-func (a *App) writeDocTopics() error {
+func resolveDocTopic(name string) (string, string, bool) {
+	if topic, ok := cliDocTopics[name]; ok {
+		return name, topic, true
+	}
+	canonicalName, ok := cliDocTopicAliases[name]
+	if !ok {
+		return "", "", false
+	}
+	return canonicalName, cliDocTopics[canonicalName], true
+}
+
+func unknownDocTopicError(name string) error {
+	return fmt.Errorf("unknown doc topic %q; available topics: %s", name, strings.Join(docTopicNames(), ", "))
+}
+
+func docTopicNames() []string {
 	topics := make([]string, 0, len(cliDocTopics))
 	for topic := range cliDocTopics {
 		topics = append(topics, topic)
 	}
 	sort.Strings(topics)
-	for _, topic := range topics {
+	return topics
+}
+
+func (a *App) writeDocTopics() error {
+	for _, topic := range docTopicNames() {
 		if _, err := fmt.Fprintln(a.stdout, topic); err != nil {
 			return err
 		}

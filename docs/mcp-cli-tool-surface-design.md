@@ -523,6 +523,10 @@ Initial topics:
 - `groups`
 - `diagnostics`
 
+The doc command accepts explicit command-shaped aliases for these canonical
+topics and reports the canonical topic list with an unknown-topic error. It
+does not use edit-distance or other open-ended fuzzy matching.
+
 Bare `waypost doc` prints an overall prompt covering the basic MCP/CLI routing,
 personal receive-and-settle lifecycle, structured CLI result contract, topic
 discovery, and stop rules. It is the starting prompt, not another listed topic.
