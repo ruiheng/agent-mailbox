@@ -151,6 +151,143 @@ func TestWaypostSendSchemaExposesSingleOrBatchTarget(t *testing.T) {
 	if _, ok := schema.Properties["to_addresses"]; ok {
 		t.Fatalf("schema.Properties unexpectedly contains to_addresses: %v", schema.Properties)
 	}
+	for _, field := range []string{"body", "body_file"} {
+		property, ok := schema.Properties[field]
+		if !ok {
+			t.Fatalf("schema.Properties missing %s: %v", field, schema.Properties)
+		}
+		if slices.Contains(schema.Required, field) {
+			t.Fatalf("required fields = %v, want runtime choice between body and body_file", schema.Required)
+		}
+		if !strings.Contains(property.Description, "exactly one of body or body_file") {
+			t.Fatalf("%s description = %q, want mutual-exclusion guidance", field, property.Description)
+		}
+	}
+}
+
+func TestWaypostSendReadsBodyFile(t *testing.T) {
+	bodyFile := filepath.Join(t.TempDir(), " message.md ")
+	if err := os.WriteFile(bodyFile, []byte("review from file\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	waypostService := &fakeWaypostService{t: t}
+	waypostService.sendFunc = func(_ context.Context, params waypost.SendParams) (waypost.SendResult, error) {
+		if got, want := string(params.Body), "review from file\n"; got != want {
+			t.Fatalf("send body = %q, want %q", got, want)
+		}
+		return waypost.SendResult{DeliveryID: "dlv_file"}, nil
+	}
+	service := newService(Options{
+		WaypostServiceFactory: fakeWaypostServiceFactory{service: waypostService},
+		CommandRunner: &fakeRunner{t: t, handler: func(_ []string, _ string) (RunResult, error) {
+			return RunResult{ExitCode: 1}, nil
+		}},
+		DisableWakeScheduler:  true,
+		DisableLeaseRenewLoop: true,
+	})
+	defer service.Close()
+
+	output := callServiceTool(t, service, "waypost_send", map[string]any{
+		"to":                     "workflow/reviewer",
+		"from_address":           "agent/sender",
+		"subject":                "file body",
+		"body_file":              bodyFile,
+		"disable_notify_message": true,
+	})
+	if output["delivery_id"] != "dlv_file" {
+		t.Fatalf("delivery_id = %v, want dlv_file", output["delivery_id"])
+	}
+}
+
+func TestWaypostSendBodyFileBatchUsesOneSnapshot(t *testing.T) {
+	bodyFile := filepath.Join(t.TempDir(), "message.md")
+	if err := os.WriteFile(bodyFile, []byte("original body"), 0o600); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	waypostService := &fakeWaypostService{t: t}
+	var bodies []string
+	waypostService.sendFunc = func(_ context.Context, params waypost.SendParams) (waypost.SendResult, error) {
+		bodies = append(bodies, string(params.Body))
+		if len(bodies) == 1 {
+			if err := os.WriteFile(bodyFile, []byte("changed body"), 0o600); err != nil {
+				t.Fatalf("WriteFile(changed body) error = %v", err)
+			}
+		}
+		return waypost.SendResult{DeliveryID: "dlv_" + strings.TrimPrefix(params.ToAddress, "workflow/")}, nil
+	}
+	service := newService(Options{
+		WaypostServiceFactory: fakeWaypostServiceFactory{service: waypostService},
+		CommandRunner: &fakeRunner{t: t, handler: func(_ []string, _ string) (RunResult, error) {
+			return RunResult{ExitCode: 1}, nil
+		}},
+		DisableWakeScheduler:  true,
+		DisableLeaseRenewLoop: true,
+	})
+	defer service.Close()
+
+	output := callServiceTool(t, service, "waypost_send", map[string]any{
+		"to":                     []string{"workflow/one", "workflow/two"},
+		"from_address":           "agent/sender",
+		"subject":                "file snapshot",
+		"body_file":              bodyFile,
+		"disable_notify_message": true,
+	})
+	if output["status"] != "sent" {
+		t.Fatalf("status = %v, want sent", output["status"])
+	}
+	if want := []string{"original body", "original body"}; !reflect.DeepEqual(bodies, want) {
+		t.Fatalf("send bodies = %q, want one file snapshot %q", bodies, want)
+	}
+}
+
+func TestWaypostSendRejectsInvalidBodySourcesBeforeSending(t *testing.T) {
+	emptyFile := filepath.Join(t.TempDir(), "empty.md")
+	if err := os.WriteFile(emptyFile, nil, 0o600); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	missingFile := filepath.Join(t.TempDir(), "missing.md")
+
+	waypostService := &fakeWaypostService{t: t}
+	waypostService.sendFunc = func(_ context.Context, params waypost.SendParams) (waypost.SendResult, error) {
+		t.Fatalf("unexpected Send call: %+v", params)
+		return waypost.SendResult{}, nil
+	}
+	service := newService(Options{
+		WaypostServiceFactory: fakeWaypostServiceFactory{service: waypostService},
+		DisableWakeScheduler:  true,
+		DisableLeaseRenewLoop: true,
+	})
+	defer service.Close()
+
+	tests := []struct {
+		name        string
+		bodyArgs    map[string]any
+		wantMessage string
+	}{
+		{name: "missing source", bodyArgs: map[string]any{}, wantMessage: "requires body or body_file"},
+		{name: "both sources", bodyArgs: map[string]any{"body": "inline", "body_file": missingFile}, wantMessage: "exactly one of body or body_file"},
+		{name: "empty inline body", bodyArgs: map[string]any{"body": ""}, wantMessage: waypost.ErrEmptyBody.Error()},
+		{name: "empty file path", bodyArgs: map[string]any{"body_file": "  "}, wantMessage: "body_file must not be empty"},
+		{name: "empty file", bodyArgs: map[string]any{"body_file": emptyFile}, wantMessage: waypost.ErrEmptyBody.Error()},
+		{name: "missing file", bodyArgs: map[string]any{"body_file": missingFile}, wantMessage: "read waypost_send body_file"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			arguments := map[string]any{
+				"to":      "workflow/reviewer",
+				"subject": "invalid body source",
+			}
+			for key, value := range test.bodyArgs {
+				arguments[key] = value
+			}
+			err := callServiceToolExpectError(t, service, "waypost_send", arguments)
+			if err == nil || !strings.Contains(err.Error(), test.wantMessage) {
+				t.Fatalf("waypost_send error = %v, want containing %q", err, test.wantMessage)
+			}
+		})
+	}
 }
 
 func TestWaypostSendBatchReturnsOrderedPartialResults(t *testing.T) {

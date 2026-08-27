@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"sort"
 	"strings"
 	"time"
@@ -60,7 +61,8 @@ type waypostSendInput struct {
 	FromAddress          string            `json:"from_address,omitempty"`
 	AsPerson             string            `json:"as_person,omitempty"`
 	Subject              string            `json:"subject"`
-	Body                 string            `json:"body"`
+	Body                 string            `json:"body,omitempty"`
+	BodyFile             string            `json:"body_file,omitempty"`
 	ContentType          string            `json:"content_type,omitempty"`
 	SchemaVersion        string            `json:"schema_version,omitempty"`
 	DisableNotifyMessage *bool             `json:"disable_notify_message,omitempty"`
@@ -89,6 +91,16 @@ func waypostSendInputSchema() *jsonschema.Schema {
 		panic("build waypost_send input schema: missing diagnostics")
 	}
 	diagnostics.Description = "Unnecessary for normal send."
+	body, ok := schema.Properties["body"]
+	if !ok {
+		panic("build waypost_send input schema: missing body")
+	}
+	body.Description = "Inline message body. Supply exactly one of body or body_file."
+	bodyFile, ok := schema.Properties["body_file"]
+	if !ok {
+		panic("build waypost_send input schema: missing body_file")
+	}
+	bodyFile.Description = "Filesystem path read by the MCP server for the message body. Supply exactly one of body or body_file; prefer an absolute path."
 	return schema
 }
 
@@ -233,7 +245,7 @@ func (s *Service) registerWaypostTools(server *mcp.Server) {
 	}
 	addToolRequiringWaypostStatus(server, s, &mcp.Tool{
 		Name:        "waypost_send",
-		Description: "Send a Waypost message. Set `to` to one recipient address for a single send, or an array of 1-10 recipient addresses for a batch. Push-notify a non-local target when supported. Set disable_notify_message=true to skip notification.",
+		Description: "Send a Waypost message. Set `to` to one recipient address for a single send, or an array of 1-10 recipient addresses for a batch. Supply the content with exactly one of `body` or `body_file`; the latter is read by the MCP server. Push-notify a non-local target when supported. Set disable_notify_message=true to skip notification.",
 		InputSchema: waypostSendInputSchema(),
 	}, s.waypostSend)
 	addToolRequiringWaypostStatus(server, s, &mcp.Tool{
@@ -466,6 +478,46 @@ func prepareWaypostSendTarget(req *mcp.CallToolRequest, input *waypostSendInput)
 	return false, nil
 }
 
+func prepareWaypostSendBody(req *mcp.CallToolRequest, input *waypostSendInput) error {
+	if req == nil || len(req.Params.Arguments) == 0 {
+		return errors.New("waypost_send requires body or body_file")
+	}
+
+	var rawArgs map[string]json.RawMessage
+	if err := json.Unmarshal(req.Params.Arguments, &rawArgs); err != nil {
+		return fmt.Errorf("invalid tool arguments: %w", err)
+	}
+	_, hasBody := rawArgs["body"]
+	_, hasBodyFile := rawArgs["body_file"]
+	if hasBody && hasBodyFile {
+		return errors.New("waypost_send accepts exactly one of body or body_file")
+	}
+	if !hasBody && !hasBodyFile {
+		return errors.New("waypost_send requires body or body_file")
+	}
+	if hasBody {
+		if input.Body == "" {
+			return waypost.ErrEmptyBody
+		}
+		return nil
+	}
+
+	bodyFile := input.BodyFile
+	if strings.TrimSpace(bodyFile) == "" {
+		return errors.New("waypost_send body_file must not be empty")
+	}
+	body, err := os.ReadFile(bodyFile)
+	if err != nil {
+		return fmt.Errorf("read waypost_send body_file %q: %w", bodyFile, err)
+	}
+	if len(body) == 0 {
+		return waypost.ErrEmptyBody
+	}
+	input.Body = string(body)
+	input.BodyFile = bodyFile
+	return nil
+}
+
 func (s *Service) sendWaypostBatchMessage(ctx context.Context, input waypostSendInput) (map[string]any, error) {
 	recipients, err := waypost.NormalizeSendRecipients(input.ToAddresses, input.Group)
 	if err != nil {
@@ -630,6 +682,9 @@ func (s *Service) deliveryStillQueued(ctx context.Context, service any, delivery
 func (s *Service) waypostSend(ctx context.Context, req *mcp.CallToolRequest, input waypostSendInput) (*mcp.CallToolResult, map[string]any, error) {
 	batch, err := prepareWaypostSendTarget(req, &input)
 	if err != nil {
+		return nil, nil, err
+	}
+	if err := prepareWaypostSendBody(req, &input); err != nil {
 		return nil, nil, err
 	}
 	var out map[string]any
