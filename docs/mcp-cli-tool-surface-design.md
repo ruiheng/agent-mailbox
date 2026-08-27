@@ -527,77 +527,46 @@ The doc command accepts explicit command-shaped aliases for these canonical
 topics and reports the canonical topic list with an unknown-topic error. It
 does not use edit-distance or other open-ended fuzzy matching.
 
-Bare `waypost doc` prints an overall prompt covering the basic MCP/CLI routing,
-personal receive-and-settle lifecycle, structured CLI result contract, topic
-discovery, and stop rules. It is the starting prompt, not another listed topic.
+Bare `waypost doc` prints a minimal, client-neutral semantic overview. It
+explains durable state, personal leases, per-person group reads, and the
+separation between persistence and notification. It does not assume MCP is
+available, prescribe an output format, or duplicate the command catalog. It is
+the starting prompt, not another listed topic.
 
 Do not create one topic per command. Topics exist only when workflow guidance
 beyond `--help` is needed.
 
-### Audience
+### Content rules
 
-The audience is an agent performing a Waypost CLI task.
+The prompt is client-neutral. It explains Waypost semantics that cannot be
+recovered from command syntax alone:
 
-The prompt may explain:
+- state-directory isolation
+- personal delivery states, lease ownership, and state transitions
+- message identity versus delivery identity
+- group eligibility, per-person reads, and notification subscriptions
+- process-local MCP state, but only in the explicitly selected MCP/CLI topic
 
-- when a CLI-owned operation is appropriate
-- required explicit state directory and Waypost identity
-- the shortest safe JSON command sequence
-- fields that change the next action
-- Waypost-specific stop and recovery conditions
+It does not:
 
-It must not mention:
-
-- Agent Deck session creation, restart, hierarchy, or configuration
-- planner, reviewer, coder, browser-tester, or roundtable role policy
-- git branches, worktrees, commits, or review workflow
-- how an MCP host executes local processes
-- provider-specific addresses as authoritative examples
-- YAML, legacy payloads, migration history, Web UI, or demo setup
-
-It does not teach CLI `send`, `recv`, `ack`, `release`, or `defer` as the
-normal agent path because those operations remain direct MCP tools.
+- assume MCP exists or prescribe MCP as the normal path
+- prescribe JSON, YAML, or another output format
+- copy the command or flag catalog from `--help`
+- include role policy, repository workflow, or unrelated host configuration
 
 ### Prompt shape
 
-Each topic uses:
-
-```markdown
-# <task>
-Use when: <one sentence>
-
-## Required context
-- <values the command cannot infer safely>
-
-## Do
-1. <short command or decision>
-
-## Interpret
-- <fields that change the next action>
-
-## Stop
-- <conditions where the agent must not guess>
-```
-
-Rules:
-
-- one canonical JSON path
-- no flag catalog copied from `--help`
-- no fields that do not affect the next action
-- placeholders such as `ADDRESS` and `DELIVERY_ID`
-- branch on `error_code`; retry only when `retryable` is true
-- at most 300 words per initial topic
+Topics use short paragraphs without repeating the selected topic as a heading.
+Each topic is at most 100 words and contains no command examples unless syntax
+itself carries semantics unavailable from `--help`.
 
 Topic responsibilities:
 
-- `mcp-cli-boundary`: retained Waypost MCP operations, CLI-owned operation
-  groups, binary/state-directory mismatch stop rule, and the fact that CLI
-  forward is durable-only and provides no notification or wakeup guarantee
-- `recovery`: acknowledged-input recovery, empty items, sparse read
-  `has_more: true`
-- `history`: list/read history and message-id versus delivery-id
-- `groups`: membership and subscriber management with explicit identities
-- `diagnostics`: address inspection and live MCP binding versus durable state
+- `mcp-cli-boundary`: shared durable state versus process-local MCP state
+- `recovery`: lease expiry, token ownership, persisted context, and undefer
+- `history`: message identity, delivery identity, non-mutating reads, forwarding
+- `groups`: eligibility, per-person reads, membership, and notifications
+- `diagnostics`: durable address kind versus live MCP binding
 
 ## Risks
 

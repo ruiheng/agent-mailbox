@@ -9,142 +9,58 @@ import (
 	"strings"
 )
 
-const cliDocOverview = `# Waypost workflow
-Use when: you need to exchange durable messages or inspect or change Waypost state.
+const cliDocOverview = `Waypost state is isolated by state directory; clients using different state directories do not share a mailbox.
 
-## Required context
-- Call waypost_status before other waypost_* tools; with --include-debug-tool, waypost_debug may run first.
-- Status is compact; use include_diagnostics=true or include_active_leases=true for details, and paginate only lease details.
-- Use its executable and resolved state directory for every stateful CLI command.
-- Use exact ADDRESS, GROUP_ADDRESS, PERSON, ids, and tokens; do not infer them.
+Personal deliveries have four states:
+- queued: waiting to be claimed; claimable when visible_at is reached.
+- leased: claimed by one receiver; an expired lease may be reclaimed with a new lease token.
+- acked: completed successfully and retained for history.
+- dead_letter: reached the failure-attempt limit and is no longer claimable.
 
-## Do
-1. Use MCP for the common live flow: waypost_send, waypost_recv, waypost_claim_history, waypost_ack, waypost_release, and waypost_defer.
-2. After a personal recv, settle its lease exactly once: ack after success; release for immediate retry without recording failure; defer until a known time; or CLI fail for a processing failure that increments attempts and may dead-letter.
-3. Use CLI --json for wait, list, read, forward, fail, undefer, group, and address inspection. A successful CLI forward is durable-only; it does not guarantee notification or wakeup.
-4. Run WAYPOST doc --list, then WAYPOST doc TOPIC... for focused guidance.
+Receiving a personal delivery returns its delivery ID and lease token. While it is leased:
+- renew extends the lease without changing its state or token.
+- ack moves it to acked.
+- release moves it to queued immediately without recording a failure.
+- defer moves it to queued with a future visible_at.
+- fail increments attempt_count, then moves it to queued or dead_letter.
 
-## Interpret
-- CLI success: exit 0 and one JSON document on stdout.
-- MCP waypost_recv no message: successful result with status: "no_message".
-- CLI recv no message: exit 2 with status: "no_message" JSON on stdout.
-- CLI wait no message: exit 2 with no output.
-- Failure: exit 1 and one JSON error on stderr. Branch on error_code; retry only when retryable is true.
-- Personal recv returns a lease token and must be settled. Group recv marks one message read and has no lease lifecycle.
+Group messages track unread/read state per person and do not use personal delivery states or leases.
 
-## Stop
-- Do not use a different binary or state directory than waypost_status reports.
-- Do not settle a delivery without its message context.
-- Do not guess missing identities, delivery ids, or lease tokens.
+Persistence and recipient notification are separate outcomes.
+
+Use waypost COMMAND --help for command syntax. Use waypost doc --list for focused topics.
 `
 
 var cliDocTopics = map[string]string{
-	"mcp-cli-boundary": `# MCP/CLI boundary
-Use when: you need a Waypost operation that is not exposed as a common MCP tool.
+	"mcp-cli-boundary": `MCP is optional. When present, its process-local bindings, active-lease tracking, and automatic renewal are not shared with a separate CLI process.
 
-## Required context
-- The executable and resolved state directory reported by waypost_status.
-- Explicit ADDRESS, GROUP_ADDRESS, and PERSON values for the durable operation.
+MCP and CLI share durable messages and delivery state only when they use the same state directory. Use the executable and state directory reported by MCP status before mixing the two.
 
-## Do
-1. Run WAYPOST --state-dir STATE_DIR forward (--message ID | --delivery ID) --to ADDRESS --json for durable forwarding.
-2. Use wait, list, read, fail, undefer, group, or address inspect with --json for their durable-state work.
-3. Use MCP for its retained Waypost operations: waypost_status, waypost_bind, waypost_send, waypost_recv, waypost_claim_history, waypost_ack, waypost_release, and waypost_defer. waypost_debug is available only when the server starts with --include-debug-tool. Claim history is the token-recovery path for a delivery this MCP process already claimed.
-
-## Interpret
-- error_code decides the next action; retry only when retryable is true.
-- A successful CLI forward is durable-only. It does not guarantee notification or wakeup.
-
-## Stop
-- Stop if the executable or state directory is absent or differs from the reported values.
-- Do not guess an address, group, person, binary, or state directory.
+The current MCP server defines its tool surface. Use CLI for an operation it does not expose. MCP reconciles durable CLI transitions before later lease work.
 `,
-	"recovery": `# Recover persisted input
-Use when: message context was lost after a durable transition or a receive reports recovery work.
+	"recovery": `A delivery ID alone does not prove lease ownership. Lease-bound transitions require the current lease token.
 
-## Required context
-- The reported executable and resolved state directory.
-- ADDRESS for latest recovery, or the exact DELIVERY_ID or MESSAGE_ID.
+Lease expiry does not complete a delivery or immediately invalidate its token. It makes the delivery eligible for reclaim; reclaiming replaces the token.
 
-## Do
-1. Run WAYPOST --state-dir STATE_DIR read --latest --for ADDRESS --state acked --limit 1 --json to recover acknowledged input.
-2. Run WAYPOST --state-dir STATE_DIR undefer --delivery DELIVERY_ID --json only for a deferred delivery that must be visible now.
-3. Run WAYPOST --state-dir STATE_DIR fail --delivery DELIVERY_ID --lease-token TOKEN --reason TEXT --json for an exceptional processing failure.
+If message context is lost, read the persisted message or delivery before settling it. Acknowledged and dead-letter deliveries remain readable.
 
-## Interpret
-- items: [] means no matching persisted input.
-- has_more: true means another latest item matches beyond the limit.
-- next_cursor continues the same latest query without increasing the page size.
-- A receive recovery error lists every claim that must be settled before another receive.
-
-## Stop
-- Do not act on an empty read result.
-- Do not guess a missing id or lease token.
+Undefer only makes a future-visible queued delivery visible now. It does not restore a lease; receive it again to obtain a current token.
 `,
-	"history": `# Inspect Waypost history
-Use when: you need durable delivery history or a stored body.
+	"history": `Message IDs and delivery IDs identify different records. A message ID identifies stored content and message metadata; a delivery ID identifies one recipient's mutable delivery state.
 
-## Required context
-- The reported executable and resolved state directory.
-- ADDRESS for a queue query, optional FROM_ADDRESS for sender filtering, or exact MESSAGE_ID or DELIVERY_ID values.
+Acknowledgement and dead-lettering do not delete message content. Reading history does not claim a personal delivery or mark a group message read.
 
-## Do
-1. Run WAYPOST --state-dir STATE_DIR list --for ADDRESS --state acked --json for the first page of delivery summaries.
-2. Add --from FROM_ADDRESS to list or read --latest when only messages from one sender are relevant.
-3. Run WAYPOST --state-dir STATE_DIR read DELIVERY_ID --json for a delivery body.
-4. Run WAYPOST --state-dir STATE_DIR read MESSAGE_ID --json when the message identity, rather than one delivery, is known.
-
-## Interpret
-- Direct reads preserve the supplied id order.
-- Latest reads are newest first and expose has_more only when another matching item exists.
-- List results contain at most 100 items; pass next_cursor back with --cursor to continue the same query.
-- sender_address is the current sender or forwarder; forwarded_from_address preserves the original source.
-- not_found for a direct id is atomic: do not use a partial result.
-
-## Stop
-- Do not substitute a message id for a delivery id or vice versa.
-- Stop on an error unless retryable is true.
+Forwarding creates a new destination message, and a new delivery for a personal target, while preserving the source identity. The sender is the forwarder; forwarded_from_address records the original source.
 `,
-	"groups": `# Manage group membership and subscribers
-Use when: durable group membership or notification-subscriber state must change.
+	"groups": `A group address must be created explicitly. Active members at send time are recorded as eligible for that message.
 
-## Required context
-- The reported executable and resolved state directory.
-- Explicit GROUP_ADDRESS, PERSON, and NOTIFY_ADDRESS values.
+Group receive requires a person identity, returns that person's oldest unread message, and atomically records the first read. It does not create a lease.
 
-## Do
-1. Run WAYPOST --state-dir STATE_DIR group create --group GROUP_ADDRESS --json to create a group.
-2. Run WAYPOST --state-dir STATE_DIR group add-member --group GROUP_ADDRESS --person PERSON --json to add membership.
-3. Run WAYPOST --state-dir STATE_DIR group add-subscriber --group GROUP_ADDRESS --notify-address NOTIFY_ADDRESS --person PERSON --json to add a subscriber.
-4. Use the matching remove-member, remove-subscriber, members, or subscribers command with --json for the corresponding durable state.
-
-## Interpret
-- already_exists means the active record already exists.
-- invalid_state means the requested active record is absent or cannot transition.
-
-## Stop
-- Do not infer a person from an address.
-- Stop if the group is not found.
+Membership, per-person read state, and notification subscriptions are separate durable records. Notification delivery does not determine message eligibility or read state.
 `,
-	"diagnostics": `# Diagnose an address
-Use when: an address may be unbound, endpoint-owned, or group-owned.
+	"diagnostics": `An address has a durable kind in one state directory: endpoint, group, or unbound. Unbound is a valid inspection result, not an error.
 
-## Required context
-- The reported executable and resolved state directory.
-- One explicit ADDRESS.
-
-## Do
-1. Run WAYPOST --state-dir STATE_DIR address inspect --address ADDRESS --json.
-2. Use kind: "endpoint", kind: "group", or kind: "unbound" to choose the durable operation.
-3. Use waypost_status for live MCP binding information and address inspect for durable state.
-
-## Interpret
-- unbound is a successful inspection result, not an error.
-- invalid_argument means the address itself is malformed.
-
-## Stop
-- Do not treat live binding as proof of a durable endpoint or group record.
-- Do not create or target a different address to work around an inspection result.
+Durable address kind is separate from a live MCP binding. The group/ scheme is reserved for explicitly created groups; another valid unbound address can become endpoint-owned through personal delivery.
 `,
 }
 

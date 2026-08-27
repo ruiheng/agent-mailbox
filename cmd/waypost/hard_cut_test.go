@@ -299,36 +299,29 @@ func TestCLIJSONErrorsAndEmbeddedDocs(t *testing.T) {
 	if overview.exitCode != 0 || overview.stderr != "" {
 		t.Fatalf("doc overview result = %+v, want prompt on stdout", overview)
 	}
-	if len(strings.Fields(overview.stdout)) > 300 {
-		t.Fatalf("doc overview has %d words, want at most 300", len(strings.Fields(overview.stdout)))
-	}
-	for _, required := range []string{
-		"# Waypost workflow",
-		"waypost_status",
-		"waypost_recv",
-		"settle its lease exactly once",
-		"release for immediate retry without recording failure",
-		"CLI fail for a processing failure that increments attempts and may dead-letter",
-		`MCP waypost_recv no message: successful result with status: "no_message"`,
-		`CLI recv no message: exit 2 with status: "no_message" JSON on stdout`,
-		"CLI wait no message: exit 2 with no output",
-		"CLI --json",
-		"WAYPOST doc --list",
-		"include_diagnostics=true",
-		"include_active_leases=true",
-		"error_code",
-	} {
-		if !strings.Contains(overview.stdout, required) {
-			t.Fatalf("doc overview = %q, missing %q", overview.stdout, required)
-		}
-	}
-	if strings.Contains(overview.stdout, "Usage:") {
-		t.Fatalf("doc overview regressed to command help: %q", overview.stdout)
-	}
-	for _, forbidden := range []string{"Agent Deck", "planner", "reviewer", "coder", "YAML", "git branch"} {
-		if strings.Contains(overview.stdout, forbidden) {
-			t.Fatalf("doc overview contains forbidden %q: %q", forbidden, overview.stdout)
-		}
+	wantOverview := `Waypost state is isolated by state directory; clients using different state directories do not share a mailbox.
+
+Personal deliveries have four states:
+- queued: waiting to be claimed; claimable when visible_at is reached.
+- leased: claimed by one receiver; an expired lease may be reclaimed with a new lease token.
+- acked: completed successfully and retained for history.
+- dead_letter: reached the failure-attempt limit and is no longer claimable.
+
+Receiving a personal delivery returns its delivery ID and lease token. While it is leased:
+- renew extends the lease without changing its state or token.
+- ack moves it to acked.
+- release moves it to queued immediately without recording a failure.
+- defer moves it to queued with a future visible_at.
+- fail increments attempt_count, then moves it to queued or dead_letter.
+
+Group messages track unread/read state per person and do not use personal delivery states or leases.
+
+Persistence and recipient notification are separate outcomes.
+
+Use waypost COMMAND --help for command syntax. Use waypost doc --list for focused topics.
+`
+	if overview.stdout != wantOverview {
+		t.Fatalf("doc overview = %q, want %q", overview.stdout, wantOverview)
 	}
 
 	list := runCLI(t, "", "doc", "--list")
@@ -346,66 +339,56 @@ func TestCLIJSONErrorsAndEmbeddedDocs(t *testing.T) {
 			if prompt.exitCode != 0 {
 				t.Fatalf("doc topic exit code = %d, stderr = %q", prompt.exitCode, prompt.stderr)
 			}
-			if len(strings.Fields(prompt.stdout)) > 300 {
-				t.Fatalf("%s prompt has %d words, want at most 300", topic, len(strings.Fields(prompt.stdout)))
+			if len(strings.Fields(prompt.stdout)) > 100 {
+				t.Fatalf("%s prompt has %d words, want at most 100", topic, len(strings.Fields(prompt.stdout)))
 			}
-			for _, forbidden := range []string{"Agent Deck", "planner", "reviewer", "coder", "YAML", "git branch"} {
+			for _, forbidden := range []string{"# ", "##", "--json", "--yaml", "Run WAYPOST", "Use MCP for", "Agent Deck", "planner", "reviewer", "coder", "git branch"} {
 				if strings.Contains(prompt.stdout, forbidden) {
 					t.Fatalf("%s prompt contains forbidden %q: %q", topic, forbidden, prompt.stdout)
 				}
 			}
-			if topic == "mcp-cli-boundary" && !strings.Contains(prompt.stdout, "durable-only") {
-				t.Fatalf("mcp-cli-boundary prompt = %q, want durable-only forward guidance", prompt.stdout)
+			requiredByTopic := map[string][]string{
+				"mcp-cli-boundary": {"MCP is optional", "process-local bindings", "same state directory"},
+				"recovery":         {"does not complete a delivery or immediately invalidate its token", "reclaiming replaces the token", "Undefer only"},
+				"history":          {"Message IDs and delivery IDs identify different records", "does not claim a personal delivery", "forwarded_from_address"},
+				"groups":           {"Active members at send time", "oldest unread message", "does not create a lease"},
+				"diagnostics":      {"endpoint, group, or unbound", "Unbound is a valid inspection result", "separate from a live MCP binding"},
 			}
-			if topic == "mcp-cli-boundary" && !strings.Contains(prompt.stdout, "--include-debug-tool") {
-				t.Fatalf("mcp-cli-boundary prompt = %q, want debug tool opt-in guidance", prompt.stdout)
-			}
-			if topic == "mcp-cli-boundary" {
-				for _, operation := range []string{
-					"waypost_status",
-					"waypost_bind",
-					"waypost_debug",
-					"waypost_send",
-					"waypost_recv",
-					"waypost_claim_history",
-					"waypost_ack",
-					"waypost_release",
-					"waypost_defer",
-				} {
-					if !strings.Contains(prompt.stdout, operation) {
-						t.Fatalf("mcp-cli-boundary prompt = %q, missing retained MCP operation %q", prompt.stdout, operation)
-					}
+			for _, required := range requiredByTopic[topic] {
+				if !strings.Contains(prompt.stdout, required) {
+					t.Fatalf("%s prompt = %q, missing %q", topic, prompt.stdout, required)
 				}
 			}
 		})
 	}
 
 	aliases := map[string]string{
-		"ack":           "# MCP/CLI boundary",
-		"bind":          "# MCP/CLI boundary",
-		"defer":         "# MCP/CLI boundary",
-		"forward":       "# MCP/CLI boundary",
-		"read":          "# Inspect Waypost history",
-		"list":          "# Inspect Waypost history",
-		"send":          "# MCP/CLI boundary",
-		"recv":          "# MCP/CLI boundary",
-		"receive":       "# MCP/CLI boundary",
-		"receiver":      "# MCP/CLI boundary",
-		"claim-history": "# MCP/CLI boundary",
-		"address":       "# Diagnose an address",
-		"addresses":     "# Diagnose an address",
-		"group":         "# Manage group membership and subscribers",
-		"fail":          "# Recover persisted input",
-		"release":       "# MCP/CLI boundary",
-		"status":        "# MCP/CLI boundary",
-		"undefer":       "# Recover persisted input",
-		"wait":          "# MCP/CLI boundary",
+		"ack":           "mcp-cli-boundary",
+		"bind":          "mcp-cli-boundary",
+		"defer":         "mcp-cli-boundary",
+		"forward":       "mcp-cli-boundary",
+		"read":          "history",
+		"list":          "history",
+		"send":          "mcp-cli-boundary",
+		"recv":          "mcp-cli-boundary",
+		"receive":       "mcp-cli-boundary",
+		"receiver":      "mcp-cli-boundary",
+		"claim-history": "mcp-cli-boundary",
+		"address":       "diagnostics",
+		"addresses":     "diagnostics",
+		"group":         "groups",
+		"fail":          "recovery",
+		"release":       "mcp-cli-boundary",
+		"status":        "mcp-cli-boundary",
+		"undefer":       "recovery",
+		"wait":          "mcp-cli-boundary",
 	}
-	for alias, heading := range aliases {
+	for alias, canonical := range aliases {
 		t.Run("alias/"+alias, func(t *testing.T) {
 			prompt := runCLI(t, "", "doc", alias)
-			if prompt.exitCode != 0 || prompt.stderr != "" || !strings.Contains(prompt.stdout, heading) {
-				t.Fatalf("doc alias %q result = %+v, want heading %q", alias, prompt, heading)
+			canonicalPrompt := runCLI(t, "", "doc", canonical)
+			if prompt.exitCode != 0 || prompt.stderr != "" || prompt.stdout != canonicalPrompt.stdout {
+				t.Fatalf("doc alias %q result = %+v, want canonical topic %q output %q", alias, prompt, canonical, canonicalPrompt.stdout)
 			}
 		})
 	}
@@ -415,10 +398,8 @@ func TestCLIJSONErrorsAndEmbeddedDocs(t *testing.T) {
 		t.Fatalf("doc multiple topics result = %+v, want combined prompt on stdout", multiple)
 	}
 	for _, required := range []string{
-		"waypost: recovery\n  # Recover persisted input\n",
-		"\n\nwaypost: diagnostics\n  # Diagnose an address\n",
-		"  ## Required context\n",
-		"  ## Stop\n",
+		"waypost: recovery\n  A delivery ID alone does not prove lease ownership. Lease-bound transitions require the current lease token.\n",
+		"\n\nwaypost: diagnostics\n  An address has a durable kind in one state directory: endpoint, group, or unbound.",
 	} {
 		if !strings.Contains(multiple.stdout, required) {
 			t.Fatalf("doc multiple topics = %q, missing %q", multiple.stdout, required)
