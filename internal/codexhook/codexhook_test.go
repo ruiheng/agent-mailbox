@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -104,29 +105,110 @@ func TestRunCompactKeepsReceiveGuardWhenTranscriptIsUnavailable(t *testing.T) {
 	}
 }
 
-func TestRunUserPromptNudgeUsesActiveSessionWithoutCodexProbe(t *testing.T) {
-	t.Setenv("PATH", "")
+func TestRunUserPromptNudgeSelectsReceivePathFromCodexProbe(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name        string
+		available   bool
+		probeErr    error
+		wantContext string
+		wantText    string
+		rejectText  string
+	}{
+		{
+			name:        "MCP available",
+			available:   true,
+			wantContext: MCPNudgeContext,
+			wantText:    "waypost_recv MCP tool",
+			rejectText:  "Use the Waypost CLI receive workflow",
+		},
+		{
+			name:        "MCP unavailable",
+			wantContext: CLINudgeContext,
+			wantText:    "Use the Waypost CLI receive workflow",
+			rejectText:  "waypost_recv MCP tool",
+		},
+		{
+			name:        "probe failed",
+			probeErr:    errors.New("codex unavailable"),
+			wantContext: MCPProbeFailedNudgeContext,
+			wantText:    "Use the Waypost CLI receive workflow",
+			rejectText:  "waypost_recv MCP tool",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			probeCalls := 0
+			probe := func(context.Context) (bool, error) {
+				probeCalls++
+				return tc.available, tc.probeErr
+			}
+
+			input := strings.NewReader(`{
+  "hook_event_name": "UserPromptSubmit",
+  "prompt": "NOTICE: There might be new delivery in waypost."
+}`)
+			var output bytes.Buffer
+			if err := runWithMCPProbe(context.Background(), input, &output, probe); err != nil {
+				t.Fatalf("runWithMCPProbe(UserPromptSubmit) error = %v", err)
+			}
+			if probeCalls != 1 {
+				t.Fatalf("probe calls = %d, want 1", probeCalls)
+			}
+			var payload hookOutput
+			if err := json.Unmarshal(output.Bytes(), &payload); err != nil {
+				t.Fatalf("Unmarshal(output) error = %v", err)
+			}
+			specific := payload.HookSpecificOutput
+			if specific.HookEventName != "UserPromptSubmit" {
+				t.Fatalf("hookEventName = %q, want UserPromptSubmit", specific.HookEventName)
+			}
+			if specific.AdditionalContext != tc.wantContext {
+				t.Fatalf("additionalContext = %q, want %q", specific.AdditionalContext, tc.wantContext)
+			}
+			if !strings.Contains(specific.AdditionalContext, tc.wantText) {
+				t.Fatalf("additionalContext = %q, want %q", specific.AdditionalContext, tc.wantText)
+			}
+			if strings.Contains(specific.AdditionalContext, tc.rejectText) {
+				t.Fatalf("additionalContext = %q, reject %q", specific.AdditionalContext, tc.rejectText)
+			}
+		})
+	}
+}
+
+func TestRunUserPromptNudgeStartsCodexMCPProbe(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("test helper is a POSIX shell script")
+	}
+
+	binDir := t.TempDir()
+	codexPath := filepath.Join(binDir, "codex")
+	probe := `#!/bin/sh
+if [ "$1" != "mcp" ] || [ "$2" != "list" ] || [ "$3" != "--json" ]; then
+  exit 9
+fi
+printf '%s\n' '[{"name":"waypost","enabled":true}]'
+`
+	if err := os.WriteFile(codexPath, []byte(probe), 0o700); err != nil {
+		t.Fatalf("WriteFile(codex probe) error = %v", err)
+	}
+	t.Setenv("PATH", binDir)
 
 	input := strings.NewReader(`{
   "hook_event_name": "UserPromptSubmit",
   "prompt": "NOTICE: There might be new delivery in waypost."
 }`)
 	var output bytes.Buffer
-	err := run(context.Background(), input, &output)
-	if err != nil {
+	if err := run(context.Background(), input, &output); err != nil {
 		t.Fatalf("run(UserPromptSubmit) error = %v", err)
 	}
-	var payload map[string]any
+	var payload hookOutput
 	if err := json.Unmarshal(output.Bytes(), &payload); err != nil {
 		t.Fatalf("Unmarshal(output) error = %v", err)
 	}
-	specific := payload["hookSpecificOutput"].(map[string]any)
-	if got := specific["hookEventName"]; got != "UserPromptSubmit" {
-		t.Fatalf("hookEventName = %v, want UserPromptSubmit", got)
-	}
-	additionalContext, _ := specific["additionalContext"].(string)
-	if !strings.Contains(additionalContext, "waypost_recv") || !strings.Contains(additionalContext, "this Codex session") || !strings.Contains(additionalContext, "Do not start another Codex process") {
-		t.Fatalf("additionalContext = %q, want active-session waypost_recv instruction", additionalContext)
+	if payload.HookSpecificOutput.AdditionalContext != MCPNudgeContext {
+		t.Fatalf("additionalContext = %q, want %q", payload.HookSpecificOutput.AdditionalContext, MCPNudgeContext)
 	}
 }
 
@@ -138,7 +220,10 @@ func TestRunUserPromptSkipsOrdinaryWaypostDiscussion(t *testing.T) {
   "prompt": "Please explain how the Waypost nudge message works."
 	}`)
 	var output bytes.Buffer
-	err := run(context.Background(), input, &output)
+	err := runWithMCPProbe(context.Background(), input, &output, func(context.Context) (bool, error) {
+		t.Fatal("MCP probe called for an ordinary prompt")
+		return false, nil
+	})
 	if err != nil {
 		t.Fatalf("run(UserPromptSubmit) error = %v", err)
 	}
@@ -175,15 +260,98 @@ func TestRunPreToolUseWarnsBeforeWaypostWait(t *testing.T) {
 	}
 }
 
+func TestRunPreToolUseDeniesMCPPreferredWaypostCLICommands(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name       string
+		command    string
+		wantReason string
+	}{
+		{
+			name:       "status",
+			command:    "waypost status",
+			wantReason: "waypost_status is a Waypost MCP tool",
+		},
+		{
+			name:       "recv",
+			command:    "waypost recv --for workflow/reviewer",
+			wantReason: "Waypost MCP tool waypost_recv",
+		},
+		{
+			name:       "receive alias",
+			command:    "waypost receive --for workflow/reviewer",
+			wantReason: "Waypost MCP tool waypost_recv",
+		},
+		{
+			name:       "send",
+			command:    "waypost --state-dir /tmp/waypost send --to workflow/reviewer",
+			wantReason: "Waypost MCP tool waypost_send",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			probeCalls := 0
+			output, emitted := runPreToolHook(t, tc.command, func(context.Context) (bool, error) {
+				probeCalls++
+				return true, nil
+			})
+			if !emitted {
+				t.Fatal("PreToolUse output is empty, want deny")
+			}
+			if probeCalls != 1 {
+				t.Fatalf("probe calls = %d, want 1", probeCalls)
+			}
+			specific := output.HookSpecificOutput
+			if specific.HookEventName != "PreToolUse" || specific.PermissionDecision != "deny" {
+				t.Fatalf("hookSpecificOutput = %+v, want PreToolUse deny", specific)
+			}
+			if !strings.Contains(specific.PermissionDecisionReason, tc.wantReason) {
+				t.Fatalf("permissionDecisionReason = %q, want %q", specific.PermissionDecisionReason, tc.wantReason)
+			}
+			if specific.AdditionalContext != "" {
+				t.Fatalf("additionalContext = %q, want empty deny output", specific.AdditionalContext)
+			}
+		})
+	}
+}
+
+func TestRunPreToolUseAllowsMCPPreferredWaypostCLIWhenMCPIsNotKnownAvailable(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name      string
+		available bool
+		probeErr  error
+	}{
+		{name: "unavailable"},
+		{name: "probe failed", probeErr: errors.New("codex unavailable")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			_, emitted := runPreToolHook(t, "waypost recv --for workflow/reviewer", func(context.Context) (bool, error) {
+				return tc.available, tc.probeErr
+			})
+			if emitted {
+				t.Fatal("PreToolUse emitted output, want CLI command allowed")
+			}
+		})
+	}
+}
+
 func TestRunPreToolUseSkipsUnrelatedToolCalls(t *testing.T) {
 	t.Parallel()
 
 	for _, input := range []string{
-		`{"hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{"command":"waypost recv --for workflow/reviewer"}}`,
+		`{"hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{"command":"waypost read --latest --for workflow/reviewer"}}`,
+		`{"hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{"command":"echo waypost send"}}`,
 		`{"hook_event_name":"PreToolUse","tool_name":"apply_patch","tool_input":{"command":"waypost wait --for workflow/reviewer"}}`,
 	} {
 		var output bytes.Buffer
-		if err := run(context.Background(), strings.NewReader(input), &output); err != nil {
+		if err := runWithMCPProbe(context.Background(), strings.NewReader(input), &output, func(context.Context) (bool, error) {
+			t.Fatal("MCP probe called for an unrelated tool call")
+			return false, nil
+		}); err != nil {
 			t.Fatalf("run(PreToolUse) error = %v", err)
 		}
 		if output.Len() != 0 {
@@ -245,6 +413,36 @@ func TestLooksLikeWaypostWaitCommand(t *testing.T) {
 	} {
 		if LooksLikeWaypostWaitCommand(command) {
 			t.Errorf("LooksLikeWaypostWaitCommand(%q) = true, want false", command)
+		}
+	}
+}
+
+func TestWaypostMCPDenialReason(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		command  string
+		wantTool string
+	}{
+		{"waypost status", "waypost_status"},
+		{"/home/alice/.local/bin/waypost --state-dir /tmp/state recv", "waypost_recv"},
+		{`& "C:\Users\alice\.local\bin\waypost.exe" receive`, "waypost_recv"},
+		{"waypost --state-dir=/tmp/state send", "waypost_send"},
+	} {
+		reason, guarded := waypostMCPDenialReason(tc.command)
+		if !guarded || !strings.Contains(reason, tc.wantTool) {
+			t.Errorf("waypostMCPDenialReason(%q) = %q, %v; want tool %q", tc.command, reason, guarded, tc.wantTool)
+		}
+	}
+
+	for _, command := range []string{
+		"waypost wait --for workflow/reviewer",
+		"waypost read --latest",
+		"echo waypost send",
+		"cd /tmp && waypost recv",
+	} {
+		if reason, guarded := waypostMCPDenialReason(command); guarded {
+			t.Errorf("waypostMCPDenialReason(%q) = %q, true; want unguarded", command, reason)
 		}
 	}
 }
@@ -880,4 +1078,32 @@ func runCompactHook(t *testing.T, transcriptPath string) string {
 		t.Fatalf("Unmarshal(hook output) error = %v", err)
 	}
 	return payload.HookSpecificOutput.AdditionalContext
+}
+
+func runPreToolHook(t *testing.T, command string, probe waypostMCPProbe) (hookOutput, bool) {
+	t.Helper()
+	toolInput, err := json.Marshal(map[string]string{"command": command})
+	if err != nil {
+		t.Fatalf("Marshal(tool input) error = %v", err)
+	}
+	input, err := json.Marshal(hookInput{
+		HookEventName: "PreToolUse",
+		ToolName:      "Bash",
+		ToolInput:     toolInput,
+	})
+	if err != nil {
+		t.Fatalf("Marshal(hook input) error = %v", err)
+	}
+	var encoded bytes.Buffer
+	if err := runWithMCPProbe(context.Background(), bytes.NewReader(input), &encoded, probe); err != nil {
+		t.Fatalf("runWithMCPProbe(PreToolUse) error = %v", err)
+	}
+	if encoded.Len() == 0 {
+		return hookOutput{}, false
+	}
+	var output hookOutput
+	if err := json.Unmarshal(encoded.Bytes(), &output); err != nil {
+		t.Fatalf("Unmarshal(hook output) error = %v", err)
+	}
+	return output, true
 }

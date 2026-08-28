@@ -8,13 +8,11 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"reflect"
 	"regexp"
 	"runtime"
 	"strings"
-	"time"
 
 	"github.com/ruiheng/waypost/internal/launchpath"
 )
@@ -42,13 +40,29 @@ Resume the task that was active before compaction.`
 const CompactAfterNudgeContext = `COMPACTION CONTINUATION:
 Resume the task that was active before compaction.`
 
-const MCPNudgeContext = `The current user message appears to be a Waypost nudge.
-If the Waypost MCP tool waypost_recv is available in this Codex session, use it to receive the pending delivery.
-Otherwise use the normal Waypost CLI receive workflow. Do not start another Codex process to infer which MCP tools this session has.`
+const MCPNudgeContext = `WAYPOST RECEIVE:
+The Codex MCP probe reports Waypost available.
+Use the waypost_recv MCP tool to receive the pending delivery. Do not use the Waypost CLI for this receive.`
+
+const CLINudgeContext = `WAYPOST RECEIVE:
+The Codex MCP probe did not find Waypost available.
+Use the Waypost CLI receive workflow. Do not attempt to use waypost_recv.`
+
+const MCPProbeFailedNudgeContext = `WAYPOST RECEIVE:
+The Codex MCP probe failed, so Waypost MCP availability could not be confirmed.
+Use the Waypost CLI receive workflow.`
 
 const WaitPollingContext = `WAYPOST WAIT GUARD:
 Do not poll Waypost. After this wait returns, handle any delivery or continue other available work.
 If there is nothing else to do, stop completely instead of calling waypost wait again.`
+
+const MCPStatusDenialReason = `Waypost MCP is available. waypost_status is a Waypost MCP tool; use it instead of running waypost status.`
+
+var waypostMCPCommandBlacklist = map[string]string{
+	"recv":    "waypost_recv",
+	"receive": "waypost_recv",
+	"send":    "waypost_send",
+}
 
 type hookInput struct {
 	HookEventName  string          `json:"hook_event_name"`
@@ -64,8 +78,10 @@ type hookOutput struct {
 }
 
 type hookSpecificOutput struct {
-	HookEventName     string `json:"hookEventName"`
-	AdditionalContext string `json:"additionalContext"`
+	HookEventName            string `json:"hookEventName"`
+	AdditionalContext        string `json:"additionalContext,omitempty"`
+	PermissionDecision       string `json:"permissionDecision,omitempty"`
+	PermissionDecisionReason string `json:"permissionDecisionReason,omitempty"`
 }
 
 type InstallResult struct {
@@ -82,7 +98,11 @@ func Run(ctx context.Context, r io.Reader, w io.Writer) error {
 	return run(ctx, r, w)
 }
 
-func run(_ context.Context, r io.Reader, w io.Writer) error {
+func run(ctx context.Context, r io.Reader, w io.Writer) error {
+	return runWithMCPProbe(ctx, r, w, CurrentDirectoryWaypostMCPAvailable)
+}
+
+func runWithMCPProbe(ctx context.Context, r io.Reader, w io.Writer, probe waypostMCPProbe) error {
 	input, hasInput, err := readHookInput(r)
 	if err != nil {
 		return err
@@ -105,7 +125,14 @@ func run(_ context.Context, r io.Reader, w io.Writer) error {
 		if !LooksLikeWaypostNudge(input.Prompt) {
 			return nil
 		}
-		return writeOutput(w, "UserPromptSubmit", MCPNudgeContext)
+		switch detectWaypostMCP(ctx, probe) {
+		case waypostMCPUnknown:
+			return writeOutput(w, "UserPromptSubmit", MCPProbeFailedNudgeContext)
+		case waypostMCPAvailable:
+			return writeOutput(w, "UserPromptSubmit", MCPNudgeContext)
+		default:
+			return writeOutput(w, "UserPromptSubmit", CLINudgeContext)
+		}
 	case "PreToolUse":
 		if input.ToolName != "Bash" {
 			return nil
@@ -114,10 +141,14 @@ func run(_ context.Context, r io.Reader, w io.Writer) error {
 		if err != nil {
 			return err
 		}
-		if !LooksLikeWaypostWaitCommand(command) {
+		if LooksLikeWaypostWaitCommand(command) {
+			return writeOutput(w, "PreToolUse", WaitPollingContext)
+		}
+		denialReason, guarded := waypostMCPDenialReason(command)
+		if !guarded || detectWaypostMCP(ctx, probe) != waypostMCPAvailable {
 			return nil
 		}
-		return writeOutput(w, "PreToolUse", WaitPollingContext)
+		return writeDenyOutput(w, denialReason)
 	default:
 		return nil
 	}
@@ -132,6 +163,16 @@ func writeOutput(w io.Writer, eventName, additionalContext string) error {
 		HookSpecificOutput: hookSpecificOutput{
 			HookEventName:     eventName,
 			AdditionalContext: additionalContext,
+		},
+	})
+}
+
+func writeDenyOutput(w io.Writer, reason string) error {
+	return json.NewEncoder(w).Encode(hookOutput{
+		HookSpecificOutput: hookSpecificOutput{
+			HookEventName:            "PreToolUse",
+			PermissionDecision:       "deny",
+			PermissionDecisionReason: reason,
 		},
 	})
 }
@@ -225,38 +266,56 @@ func joinTranscriptText(content []struct {
 }
 
 func LooksLikeWaypostWaitCommand(command string) bool {
+	subcommand, ok := directWaypostCommand(command)
+	return ok && subcommand == "wait"
+}
+
+func waypostMCPDenialReason(command string) (string, bool) {
+	subcommand, ok := directWaypostCommand(command)
+	if !ok {
+		return "", false
+	}
+	if subcommand == "status" {
+		return MCPStatusDenialReason, true
+	}
+	tool, blocked := waypostMCPCommandBlacklist[subcommand]
+	if !blocked {
+		return "", false
+	}
+	return fmt.Sprintf("Waypost MCP is available. Use the Waypost MCP tool %s instead of the Waypost CLI.", tool), true
+}
+
+func directWaypostCommand(command string) (string, bool) {
 	rest := strings.TrimSpace(command)
 	executable, rest, ok := consumeCommandWord(rest)
 	if !ok {
-		return false
+		return "", false
 	}
 	if executable == "&" {
 		executable, rest, ok = consumeCommandWord(rest)
 		if !ok {
-			return false
+			return "", false
 		}
 	}
 	if !isWaypostExecutable(executable) {
-		return false
+		return "", false
 	}
 
 	for {
 		argument, remaining, ok := consumeCommandWord(rest)
 		if !ok {
-			return false
+			return "", false
 		}
 		switch {
-		case argument == "wait":
-			return true
 		case argument == "--state-dir":
 			_, rest, ok = consumeCommandWord(remaining)
 			if !ok {
-				return false
+				return "", false
 			}
 		case strings.HasPrefix(argument, "--state-dir=") && len(argument) > len("--state-dir="):
 			rest = remaining
 		default:
-			return false
+			return argument, true
 		}
 	}
 }
@@ -319,37 +378,6 @@ func isWaypostExecutable(executable string) bool {
 		base = normalized[separator+1:]
 	}
 	return strings.EqualFold(base, "waypost") || strings.EqualFold(base, "waypost.exe")
-}
-
-// CurrentDirectoryWaypostMCPAvailable reports whether Waypost is enabled in
-// the effective configuration visible to a new Codex process started in the
-// caller's current directory. Trusted project configuration may contribute to
-// the result. This is diagnostic only and must not be treated as the effective
-// MCP configuration of an already-running Codex session.
-func CurrentDirectoryWaypostMCPAvailable(ctx context.Context) (bool, error) {
-	probeCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
-	defer cancel()
-	output, err := exec.CommandContext(probeCtx, "codex", "mcp", "list", "--json").Output()
-	if err != nil {
-		return false, fmt.Errorf("run `codex mcp list --json`: %w", err)
-	}
-	return parseWaypostMCPAvailable(output)
-}
-
-func parseWaypostMCPAvailable(output []byte) (bool, error) {
-	var servers []struct {
-		Name    string `json:"name"`
-		Enabled bool   `json:"enabled"`
-	}
-	if err := json.Unmarshal(output, &servers); err != nil {
-		return false, fmt.Errorf("parse `codex mcp list --json`: %w", err)
-	}
-	for _, server := range servers {
-		if server.Name == "waypost" {
-			return server.Enabled, nil
-		}
-	}
-	return false, nil
 }
 
 func DefaultHome() (string, error) {

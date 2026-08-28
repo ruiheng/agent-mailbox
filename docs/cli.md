@@ -60,12 +60,16 @@ The installer merges three idempotent handlers into `$CODEX_HOME/hooks.json` (or
   message is the exact Waypost nudge, it omits that receive guard and only tells
   the agent to resume the task active before compaction
 - a `UserPromptSubmit` handler recognizes the narrow Waypost nudge form and
-  injects a conditional `waypost_recv` instruction that defers tool
-  availability to the active session instead of probing a second Codex process
-- a `PreToolUse` `Bash` handler recognizes a direct `waypost wait` invocation
-  and injects a model-visible warning to continue other work after the wait, or
-  stop completely when no work remains, instead of polling again; it does not
-  block or rewrite the command
+  runs `codex mcp list --json` from the session working directory; it injects
+  one explicit receive instruction: use `waypost_recv` when Waypost is enabled,
+  otherwise use the Waypost CLI (probe failures also fall back to the CLI)
+- a `PreToolUse` `Bash` handler recognizes direct Waypost CLI invocations. A
+  `waypost wait` call receives a model-visible warning to continue other work
+  after the wait, or stop completely when no work remains; it is not blocked.
+  When the MCP probe reports Waypost enabled, `waypost status` is denied in
+  favor of `waypost_status`, while the maintained `recv`, `receive`, and `send`
+  blacklist is denied in favor of `waypost_recv` or `waypost_send`. An
+  unavailable or failed MCP probe leaves those CLI commands untouched.
 
 Codex requires new or changed non-managed hooks to be reviewed and trusted
 before they run. After installation, open `/hooks` in Codex and trust the three
