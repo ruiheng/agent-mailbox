@@ -328,12 +328,12 @@ Use waypost COMMAND --help for command syntax. Use waypost doc --list for focuse
 	if list.exitCode != 0 {
 		t.Fatalf("doc --list exit code = %d, stderr = %q", list.exitCode, list.stderr)
 	}
-	for _, topic := range []string{"mcp-cli-boundary", "recovery", "history", "groups", "diagnostics"} {
+	for _, topic := range []string{"addresses", "mcp-cli-boundary", "recovery", "history", "groups", "diagnostics"} {
 		if !strings.Contains(list.stdout, topic+"\n") {
 			t.Fatalf("doc --list = %q, missing %q", list.stdout, topic)
 		}
 	}
-	for _, topic := range []string{"mcp-cli-boundary", "recovery", "history", "groups", "diagnostics"} {
+	for _, topic := range []string{"addresses", "mcp-cli-boundary", "recovery", "history", "groups", "diagnostics"} {
 		t.Run(topic, func(t *testing.T) {
 			prompt := runCLI(t, "", "doc", topic)
 			if prompt.exitCode != 0 {
@@ -348,6 +348,7 @@ Use waypost COMMAND --help for command syntax. Use waypost doc --list for focuse
 				}
 			}
 			requiredByTopic := map[string][]string{
+				"addresses":        {"Waypost does not assign a current address", "use its actual session identity", "Obtain the ID from the launcher or tool", "--from when sending and --for when receiving", "group/... is reserved"},
 				"mcp-cli-boundary": {"MCP is optional", "process-local bindings", "same state directory"},
 				"recovery":         {"does not complete a delivery or immediately invalidate its token", "reclaiming replaces the token", "Undefer only"},
 				"history":          {"Message IDs and delivery IDs identify different records", "does not claim a personal delivery", "forwarded_from_address"},
@@ -362,6 +363,13 @@ Use waypost COMMAND --help for command syntax. Use waypost doc --list for focuse
 		})
 	}
 
+	addressPrompt := runCLI(t, "", "doc", "addresses")
+	for _, forbidden := range []string{"waypost_status", "default_sender", "bound_addresses", "waypost_bind"} {
+		if strings.Contains(addressPrompt.stdout, forbidden) {
+			t.Fatalf("addresses prompt contains MCP-specific field or tool %q: %q", forbidden, addressPrompt.stdout)
+		}
+	}
+
 	aliases := map[string]string{
 		"ack":           "mcp-cli-boundary",
 		"bind":          "mcp-cli-boundary",
@@ -374,8 +382,7 @@ Use waypost COMMAND --help for command syntax. Use waypost doc --list for focuse
 		"receive":       "mcp-cli-boundary",
 		"receiver":      "mcp-cli-boundary",
 		"claim-history": "mcp-cli-boundary",
-		"address":       "diagnostics",
-		"addresses":     "diagnostics",
+		"address":       "addresses",
 		"group":         "groups",
 		"fail":          "recovery",
 		"release":       "mcp-cli-boundary",
@@ -414,7 +421,7 @@ Use waypost COMMAND --help for command syntax. Use waypost doc --list for focuse
 		t.Fatalf("doc aliased multiple topics result = %+v, want combined prompt on stdout", aliasedMultiple)
 	}
 	if strings.Count(aliasedMultiple.stdout, "waypost: history") != 1 ||
-		strings.Count(aliasedMultiple.stdout, "waypost: diagnostics") != 1 {
+		strings.Count(aliasedMultiple.stdout, "waypost: addresses") != 1 {
 		t.Fatalf("doc aliased multiple topics = %q, want canonical topics once each", aliasedMultiple.stdout)
 	}
 
@@ -422,7 +429,7 @@ Use waypost COMMAND --help for command syntax. Use waypost doc --list for focuse
 	if unknownMultiple.exitCode != 1 || unknownMultiple.stdout != "" || !strings.Contains(unknownMultiple.stderr, `unknown doc topic "missing"`) {
 		t.Fatalf("doc multiple topics with unknown topic result = %+v, want atomic failure", unknownMultiple)
 	}
-	for _, topic := range []string{"diagnostics", "groups", "history", "mcp-cli-boundary", "recovery"} {
+	for _, topic := range []string{"addresses", "diagnostics", "groups", "history", "mcp-cli-boundary", "recovery"} {
 		if !strings.Contains(unknownMultiple.stderr, topic) {
 			t.Fatalf("doc unknown topic error = %q, missing available topic %q", unknownMultiple.stderr, topic)
 		}

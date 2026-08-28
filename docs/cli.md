@@ -411,15 +411,15 @@ isolation, personal delivery states and transitions, per-person group reads,
 and the notification boundary. It does not assume MCP is available, prescribe
 an output format, or duplicate the command catalog. `--list` shows the available
 focused topics; initial topics are `mcp-cli-boundary`, `recovery`, `history`,
-`groups`, and `diagnostics`.
+`groups`, `addresses`, and `diagnostics`.
 One topic retains the plain prompt output. With multiple topics, each prompt is
 emitted in argument order as a `waypost: <topic>` block whose body is indented
 by two spaces. Command-shaped aliases are accepted when their routing is
 unambiguous: `read` and `list` select `history`; `group` selects `groups`;
-`address` and `addresses` select `diagnostics`; `fail` and `undefer` select
-`recovery`; and common-flow names such as `send`, `recv`, `receive`, and
-`claim-history` select `mcp-cli-boundary`. Unknown-topic errors include the
-canonical topic list so callers do not need a separate `doc --list` call.
+`address` selects `addresses`; `fail` and `undefer` select `recovery`; and
+common-flow names such as `send`, `recv`, `receive`, and `claim-history` select
+`mcp-cli-boundary`. Unknown-topic errors include the canonical topic list so
+callers do not need a separate `doc --list` call.
 
 ### `send`
 

@@ -32,6 +32,12 @@ Use waypost COMMAND --help for command syntax. Use waypost doc --list for focuse
 `
 
 var cliDocTopics = map[string]string{
+	"addresses": `A Waypost address is a public mailbox name within one state directory. It has the form scheme/id. Waypost does not assign a current address.
+
+For an agent session, use its actual session identity: agent-deck/<session-id> or thurbox/<session-id> for a hosted session; otherwise codex/<thread-id>, claude/<session-id>, gemini/<session-id>, or opencode/<session-id>. Obtain the ID from the launcher or tool. Never invent it from a role, task, or display name.
+
+Use the address as --from when sending and --for when receiving, and give it to peers as the return address. Personal addresses are created on first use. group/... is reserved for explicitly created groups.
+`,
 	"mcp-cli-boundary": `MCP is optional. When present, its process-local bindings, active-lease tracking, and automatic renewal are not shared with a separate CLI process.
 
 MCP and CLI share durable messages and delivery state only when they use the same state directory. Use the executable and state directory reported by MCP status before mixing the two.
@@ -66,8 +72,7 @@ Durable address kind is separate from a live MCP binding. The group/ scheme is r
 
 var cliDocTopicAliases = map[string]string{
 	"ack":           "mcp-cli-boundary",
-	"address":       "diagnostics",
-	"addresses":     "diagnostics",
+	"address":       "addresses",
 	"bind":          "mcp-cli-boundary",
 	"claim-history": "mcp-cli-boundary",
 	"defer":         "mcp-cli-boundary",
