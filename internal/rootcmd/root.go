@@ -9,6 +9,7 @@ import (
 	"os"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+	"github.com/ruiheng/waypost/internal/codexhook"
 	"github.com/ruiheng/waypost/internal/mcpserver"
 	"github.com/ruiheng/waypost/internal/version"
 	"github.com/ruiheng/waypost/internal/waypost"
@@ -16,12 +17,13 @@ import (
 )
 
 type App struct {
-	stdin             io.Reader
-	stdout            io.Writer
-	stderr            io.Writer
-	runMCP            func(context.Context, mcpserver.Options) error
-	runWeb            func(context.Context, webui.Options) error
-	notifyWaypostSend waypost.SendNotifier
+	stdin                               io.Reader
+	stdout                              io.Writer
+	stderr                              io.Writer
+	runMCP                              func(context.Context, mcpserver.Options) error
+	runWeb                              func(context.Context, webui.Options) error
+	currentDirectoryWaypostMCPAvailable func(context.Context) (bool, error)
+	notifyWaypostSend                   waypost.SendNotifier
 }
 
 func New(stdin io.Reader, stdout, stderr io.Writer) *App {
@@ -34,8 +36,9 @@ func New(stdin io.Reader, stdout, stderr io.Writer) *App {
 			defer service.Close()
 			return service.Server().Run(ctx, &mcp.StdioTransport{})
 		},
-		runWeb:            webui.Run,
-		notifyWaypostSend: mcpserver.NotifyWaypostSend,
+		runWeb:                              webui.Run,
+		currentDirectoryWaypostMCPAvailable: codexhook.CurrentDirectoryWaypostMCPAvailable,
+		notifyWaypostSend:                   mcpserver.NotifyWaypostSend,
 	}
 }
 
@@ -53,7 +56,16 @@ func (a *App) Run(ctx context.Context, args []string) error {
 		return err
 	}
 	if len(rest) == 0 {
-		return errors.New("expected a command: mcp, migrate, doc, send, forward, recv, wait, watch, read, ack, renew, release, defer, undefer, fail, list, stale, group, or address")
+		return errors.New("expected a command: mcp, codex-hook, install, doctor, migrate, doc, send, forward, recv, wait, watch, read, ack, renew, release, defer, undefer, fail, list, stale, group, or address")
+	}
+	if rest[0] == "codex-hook" {
+		return a.runCodexHookCommand(ctx, rest[1:])
+	}
+	if rest[0] == "install" {
+		return a.runInstallCommand(rest[1:])
+	}
+	if rest[0] == "doctor" {
+		return a.runDoctorCommand(ctx, rest[1:])
 	}
 	if rest[0] == "migrate" {
 		return a.runMigrateCommand(stateDir, rest[1:])
@@ -69,6 +81,92 @@ func (a *App) Run(ctx context.Context, args []string) error {
 	return waypost.NewAppWithOptions(a.stdin, a.stdout, a.stderr, waypost.AppOptions{
 		SendNotifier: a.notifyWaypostSend,
 	}).RunWithStateDir(ctx, stateDir, forwarded)
+}
+
+func (a *App) runCodexHookCommand(ctx context.Context, args []string) error {
+	if len(args) == 1 && isHelpArg(args[0]) {
+		a.writeCodexHookHelp()
+		return waypost.ErrHelpRequested
+	}
+	if len(args) != 0 {
+		return fmt.Errorf("codex-hook does not accept arguments")
+	}
+	return codexhook.Run(ctx, a.stdin, a.stdout)
+}
+
+func (a *App) runInstallCommand(args []string) error {
+	if len(args) == 0 || isHelpArg(args[0]) {
+		a.writeInstallHelp()
+		return waypost.ErrHelpRequested
+	}
+	if args[0] != "codex-hook" {
+		return fmt.Errorf("unknown install target %q; expected codex-hook", args[0])
+	}
+	if len(args) == 2 && isHelpArg(args[1]) {
+		a.writeInstallCodexHookHelp()
+		return waypost.ErrHelpRequested
+	}
+	if len(args) != 1 {
+		return fmt.Errorf("install codex-hook does not accept arguments")
+	}
+
+	home, err := codexhook.DefaultHome()
+	if err != nil {
+		return err
+	}
+	command, err := codexhook.CurrentCommand()
+	if err != nil {
+		return err
+	}
+	result, err := codexhook.Install(home, command)
+	if err != nil {
+		return err
+	}
+	status := "installed"
+	if !result.Changed {
+		status = "already installed"
+	}
+	_, err = fmt.Fprintf(a.stdout, "Codex hooks %s: %s\nCodex hook trust: review the Waypost hooks with `/hooks` in Codex before use\n", status, result.Path)
+	return err
+}
+
+func (a *App) runDoctorCommand(ctx context.Context, args []string) error {
+	if len(args) == 0 || isHelpArg(args[0]) {
+		a.writeDoctorHelp()
+		return waypost.ErrHelpRequested
+	}
+	if args[0] != "codex-hook" {
+		return fmt.Errorf("unknown doctor target %q; expected codex-hook", args[0])
+	}
+	if len(args) == 2 && isHelpArg(args[1]) {
+		a.writeDoctorCodexHookHelp()
+		return waypost.ErrHelpRequested
+	}
+	if len(args) != 1 {
+		return fmt.Errorf("doctor codex-hook does not accept arguments")
+	}
+
+	home, err := codexhook.DefaultHome()
+	if err != nil {
+		return err
+	}
+	command, err := codexhook.CurrentCommand()
+	if err != nil {
+		return err
+	}
+	result, err := codexhook.Doctor(home, command)
+	if err != nil {
+		return err
+	}
+	mcpStatus := "not available to a new Codex process in the current directory (an already-running session, profile, or `-c` override may differ)"
+	available, probeErr := a.currentDirectoryWaypostMCPAvailable(ctx)
+	if probeErr != nil {
+		mcpStatus = fmt.Sprintf("availability to a new Codex process in the current directory is unknown: %v (an already-running session, profile, or `-c` override may differ)", probeErr)
+	} else if available {
+		mcpStatus = "available to a new Codex process in the current directory (an already-running session, profile, or `-c` override may differ)"
+	}
+	_, err = fmt.Fprintf(a.stdout, "Codex compact hook: configured\nCodex nudge hook: configured\nCodex hook trust: not checked; verify with `/hooks` in Codex\nWaypost MCP: %s\nHooks file: %s\nCommand: %s\n", mcpStatus, result.Path, result.Command)
+	return err
 }
 
 func parseGlobalArgs(args []string) (string, []string, bool, bool, error) {
@@ -203,6 +301,9 @@ func (a *App) writeRootHelp() {
 		"",
 		"Commands:",
 		"  mcp                 Run the built-in stdio MCP server",
+		"  codex-hook          Emit Codex Waypost hook context",
+		"  install             Install an optional integration",
+		"  doctor              Diagnose an optional integration",
 		"  migrate             Move state from the previous default directory",
 		"  doc                 Show concise agent workflow guidance",
 		"  send                Send a message to an address",
@@ -228,6 +329,56 @@ func (a *App) writeRootHelp() {
 		"  --help              Show help",
 		"",
 		"Use \"waypost <command> --help\" for command-specific details.",
+	})
+}
+
+func (a *App) writeCodexHookHelp() {
+	writeHelp(a.stdout, []string{
+		"Usage:",
+		"  waypost codex-hook",
+		"",
+		"Emit the SessionStart hookSpecificOutput used after Codex compaction.",
+		"For UserPromptSubmit, emit a conditional waypost_recv hint only for a",
+		"Waypost nudge. Tool availability is resolved by the active Codex session.",
+	})
+}
+
+func (a *App) writeInstallHelp() {
+	writeHelp(a.stdout, []string{
+		"Usage:",
+		"  waypost install codex-hook",
+		"",
+		"Install optional Waypost integrations.",
+	})
+}
+
+func (a *App) writeInstallCodexHookHelp() {
+	writeHelp(a.stdout, []string{
+		"Usage:",
+		"  waypost install codex-hook",
+		"",
+		"Merge SessionStart compact and UserPromptSubmit hooks into $CODEX_HOME/hooks.json.",
+		"The command is idempotent and preserves unrelated hooks.",
+		"Review new or changed non-managed hooks with `/hooks` in Codex before use.",
+	})
+}
+
+func (a *App) writeDoctorHelp() {
+	writeHelp(a.stdout, []string{
+		"Usage:",
+		"  waypost doctor codex-hook",
+		"",
+		"Diagnose optional Waypost integrations.",
+	})
+}
+
+func (a *App) writeDoctorCodexHookHelp() {
+	writeHelp(a.stdout, []string{
+		"Usage:",
+		"  waypost doctor codex-hook",
+		"",
+		"Verify both Codex hook definitions and report MCP availability for a new Codex process in the current directory.",
+		"Codex hook trust must be verified interactively with `/hooks`.",
 	})
 }
 

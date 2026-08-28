@@ -8,6 +8,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+
+	"github.com/ruiheng/waypost/internal/launchpath"
 )
 
 const manifestRelativePath = "lib/waypost/active-version.json"
@@ -45,7 +47,10 @@ func run(args []string) error {
 		executable = filepath.Join(filepath.Dir(manifestPath), executable)
 	}
 
-	cmd := exec.Command(executable, args...)
+	cmd, err := newChildCommand(executable, args)
+	if err != nil {
+		return err
+	}
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
@@ -57,6 +62,20 @@ func run(args []string) error {
 		return fmt.Errorf("launch %q: %w", executable, err)
 	}
 	return nil
+}
+
+func newChildCommand(executable string, args []string) (*exec.Cmd, error) {
+	launcherExecutable, err := os.Executable()
+	if err != nil {
+		return nil, fmt.Errorf("resolve launcher executable path: %w", err)
+	}
+	launcherExecutable, err = filepath.Abs(launcherExecutable)
+	if err != nil {
+		return nil, fmt.Errorf("resolve absolute launcher executable path: %w", err)
+	}
+	cmd := exec.Command(executable, args...)
+	cmd.Env = append(os.Environ(), launchpath.StableExecutableEnv+"="+launcherExecutable)
+	return cmd, nil
 }
 
 func defaultManifestPath() (string, error) {

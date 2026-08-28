@@ -43,6 +43,52 @@ The CLI version is the same value advertised by the built-in MCP server during
 initialization. For the optional diagnostic `server_version` status field, call
 `waypost_status` with `include_diagnostics: true`.
 
+## Codex Hooks
+
+Install a Codex `SessionStart` hook that runs after compaction:
+
+```bash
+waypost install codex-hook
+```
+
+The installer merges two idempotent handlers into `$CODEX_HOME/hooks.json` (or
+`~/.codex/hooks.json` when `CODEX_HOME` is unset) and preserves unrelated hooks:
+
+- a `SessionStart` `compact` handler explains that compaction is not a new
+  Waypost notice, so historical notices or future conditional receive steps do
+  not trigger a mailbox check on their own
+- a `UserPromptSubmit` handler recognizes the narrow Waypost nudge form and
+  injects a conditional `waypost_recv` instruction that defers tool
+  availability to the active session instead of probing a second Codex process
+
+Codex requires new or changed non-managed hooks to be reviewed and trusted
+before they run. After installation, open `/hooks` in Codex and trust the two
+Waypost handlers. Waypost does not modify Codex's private hook-trust state.
+
+Verify the installation:
+
+```bash
+waypost doctor codex-hook
+```
+
+The doctor verifies both handler definitions and reports whether
+`codex mcp list --json` sees Waypost for a new Codex process started in the
+current directory. This includes trusted project configuration. The MCP result
+is diagnostic only: an already-running session, profile, or `-c` override may
+differ. Codex does not expose hook trust through a documented noninteractive
+interface, so the doctor directs you to `/hooks` instead of claiming that
+configured hooks are trusted or active.
+
+Codex invokes the machine-facing entry point automatically:
+
+```bash
+waypost codex-hook
+```
+
+It reads the Codex hook event from stdin and emits the matching
+`hookSpecificOutput` JSON contract. It does not read or modify Waypost message
+state.
+
 ### Migrate previous local state
 
 Stop all previous-version processes, then move the previous default state

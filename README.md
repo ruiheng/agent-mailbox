@@ -148,9 +148,11 @@ and stores the real CLI under `%USERPROFILE%\.local\lib\waypost\versions`:
 ./make.ps1 install
 ```
 
-This avoids replacing a running `waypost.exe`; existing processes keep
-using their version, while new processes go through the launcher to the active
-version recorded in `lib\waypost\active-version.json`.
+Windows upgrades are a hard cut. Stop running Waypost processes and Codex
+sessions that use Waypost before installing. If the stable launcher is locked,
+the install fails without activating the new version; rerun it after those
+processes exit. Successful installs route new processes through the launcher to
+the active version recorded in `lib\waypost\active-version.json`.
 
 Install into a user-local prefix without needing root:
 

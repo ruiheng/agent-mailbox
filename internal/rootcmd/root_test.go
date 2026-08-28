@@ -36,6 +36,131 @@ func TestRunRootHelpIncludesMCP(t *testing.T) {
 	}
 }
 
+func TestRunRootHelpIncludesCodexHookCommands(t *testing.T) {
+	t.Parallel()
+
+	var stdout bytes.Buffer
+	app := New(strings.NewReader(""), &stdout, &bytes.Buffer{})
+
+	err := app.Run(context.Background(), []string{"--help"})
+	if !errors.Is(err, waypost.ErrHelpRequested) {
+		t.Fatalf("Run(--help) error = %v, want ErrHelpRequested", err)
+	}
+	for _, command := range []string{"codex-hook", "install", "doctor"} {
+		if !strings.Contains(stdout.String(), command) {
+			t.Fatalf("root help = %q, want %q command", stdout.String(), command)
+		}
+	}
+}
+
+func TestRunCodexHookEmitsHookSpecificOutput(t *testing.T) {
+	t.Parallel()
+
+	var stdout bytes.Buffer
+	app := New(strings.NewReader(""), &stdout, &bytes.Buffer{})
+
+	if err := app.Run(context.Background(), []string{"codex-hook"}); err != nil {
+		t.Fatalf("Run(codex-hook) error = %v", err)
+	}
+	if !strings.Contains(stdout.String(), `"hookEventName":"SessionStart"`) {
+		t.Fatalf("codex-hook output = %q, want SessionStart hook output", stdout.String())
+	}
+	if !strings.Contains(stdout.String(), "not a new Waypost notice") {
+		t.Fatalf("codex-hook output = %q, want notice guard", stdout.String())
+	}
+}
+
+func TestRunInstallAndDoctorCodexHook(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("CODEX_HOME", home)
+
+	var installOutput bytes.Buffer
+	installApp := New(strings.NewReader(""), &installOutput, &bytes.Buffer{})
+	if err := installApp.Run(context.Background(), []string{"install", "codex-hook"}); err != nil {
+		t.Fatalf("Run(install codex-hook) error = %v", err)
+	}
+	if !strings.Contains(installOutput.String(), "Codex hooks installed") {
+		t.Fatalf("install output = %q, want installed status", installOutput.String())
+	}
+	if !strings.Contains(installOutput.String(), "/hooks") {
+		t.Fatalf("install output = %q, want Codex trust review instruction", installOutput.String())
+	}
+	if _, err := os.Stat(filepath.Join(home, "hooks.json")); err != nil {
+		t.Fatalf("installed hooks.json = %v", err)
+	}
+
+	var secondInstallOutput bytes.Buffer
+	secondInstallApp := New(strings.NewReader(""), &secondInstallOutput, &bytes.Buffer{})
+	if err := secondInstallApp.Run(context.Background(), []string{"install", "codex-hook"}); err != nil {
+		t.Fatalf("Run(second install codex-hook) error = %v", err)
+	}
+	if !strings.Contains(secondInstallOutput.String(), "already installed") {
+		t.Fatalf("second install output = %q, want already installed", secondInstallOutput.String())
+	}
+
+	var doctorOutput bytes.Buffer
+	doctorApp := New(strings.NewReader(""), &doctorOutput, &bytes.Buffer{})
+	doctorApp.currentDirectoryWaypostMCPAvailable = func(context.Context) (bool, error) {
+		return true, nil
+	}
+	if err := doctorApp.Run(context.Background(), []string{"doctor", "codex-hook"}); err != nil {
+		t.Fatalf("Run(doctor codex-hook) error = %v", err)
+	}
+	if !strings.Contains(doctorOutput.String(), "Codex compact hook: configured") {
+		t.Fatalf("doctor output = %q, want configured status", doctorOutput.String())
+	}
+	if !strings.Contains(doctorOutput.String(), "Codex nudge hook: configured") || !strings.Contains(doctorOutput.String(), "Waypost MCP: available to a new Codex process in the current directory") {
+		t.Fatalf("doctor output = %q, want nudge hook and MCP status", doctorOutput.String())
+	}
+	if !strings.Contains(doctorOutput.String(), "trust: not checked; verify with `/hooks`") {
+		t.Fatalf("doctor output = %q, want explicit unverified trust status", doctorOutput.String())
+	}
+}
+
+func TestRunDoctorCodexHookReportsUnavailableCurrentDirectoryMCPWithoutFailing(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("CODEX_HOME", home)
+
+	installApp := New(strings.NewReader(""), &bytes.Buffer{}, &bytes.Buffer{})
+	if err := installApp.Run(context.Background(), []string{"install", "codex-hook"}); err != nil {
+		t.Fatalf("Run(install codex-hook) error = %v", err)
+	}
+
+	var doctorOutput bytes.Buffer
+	doctorApp := New(strings.NewReader(""), &doctorOutput, &bytes.Buffer{})
+	doctorApp.currentDirectoryWaypostMCPAvailable = func(context.Context) (bool, error) {
+		return false, nil
+	}
+	if err := doctorApp.Run(context.Background(), []string{"doctor", "codex-hook"}); err != nil {
+		t.Fatalf("Run(doctor codex-hook) error = %v", err)
+	}
+	if !strings.Contains(doctorOutput.String(), "not available to a new Codex process in the current directory") || !strings.Contains(doctorOutput.String(), "already-running session, profile, or `-c` override may differ") {
+		t.Fatalf("doctor output = %q, want scoped current-directory MCP status", doctorOutput.String())
+	}
+}
+
+func TestRunDoctorCodexHookReportsCurrentDirectoryMCPProbeErrorWithoutFailing(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("CODEX_HOME", home)
+
+	installApp := New(strings.NewReader(""), &bytes.Buffer{}, &bytes.Buffer{})
+	if err := installApp.Run(context.Background(), []string{"install", "codex-hook"}); err != nil {
+		t.Fatalf("Run(install codex-hook) error = %v", err)
+	}
+
+	var doctorOutput bytes.Buffer
+	doctorApp := New(strings.NewReader(""), &doctorOutput, &bytes.Buffer{})
+	doctorApp.currentDirectoryWaypostMCPAvailable = func(context.Context) (bool, error) {
+		return false, errors.New("codex unavailable")
+	}
+	if err := doctorApp.Run(context.Background(), []string{"doctor", "codex-hook"}); err != nil {
+		t.Fatalf("Run(doctor codex-hook) error = %v", err)
+	}
+	if !strings.Contains(doctorOutput.String(), "availability to a new Codex process in the current directory is unknown: codex unavailable") {
+		t.Fatalf("doctor output = %q, want nonfatal current-directory probe error", doctorOutput.String())
+	}
+}
+
 func TestRunVersion(t *testing.T) {
 	t.Parallel()
 

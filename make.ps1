@@ -275,8 +275,7 @@ function Write-ActiveVersionManifest {
 function Install-Launcher {
     param(
         [string]$LauncherOutput,
-        [string]$Destination,
-        [bool]$ExistingLauncherCanContinue
+        [string]$Destination
     )
 
     if (-not (Test-Path -LiteralPath $Destination)) {
@@ -284,14 +283,12 @@ function Install-Launcher {
         return
     }
 
+    # Windows upgrades are a hard cut. Activating a new child behind an older,
+    # locked launcher would mix launcher and child protocols.
     try {
         Copy-Item -LiteralPath $LauncherOutput -Destination $Destination -Force -ErrorAction Stop
     } catch {
-        if ($ExistingLauncherCanContinue) {
-            Write-Warning "Could not replace locked launcher '$Destination'; leaving existing launcher in place."
-            return
-        }
-        throw "Could not replace existing '$Destination'. If it is a running pre-launcher binary, stop that process once and rerun install. Original error: $($_.Exception.Message)"
+        throw "Could not replace locked launcher '$Destination'. Stop running Waypost and Codex processes, then rerun install. No new version was activated. Original error: $($_.Exception.Message)"
     }
 }
 
@@ -369,6 +366,7 @@ function Show-Help {
         "  ./make.ps1 run -- <args>      Run the CLI with go run and pass args through"
         "  ./make.ps1 run-mcp            Run the built-in stdio MCP server with go run"
         "  ./make.ps1 install            Install launcher into $installDir and versioned CLI into $appRoot"
+        "                                 Stop running Waypost and Codex processes first"
         "  ./make.ps1 clean              Remove local build output"
     ) | ForEach-Object { Write-Output $_ }
 }
@@ -420,8 +418,6 @@ switch ($Target) {
         $launcherBuildOutput = Join-Path $binDir "waypost-launcher.exe"
         $cliBuildOutput = Join-Path $binDir "waypost-install-$PID.exe"
         $manifestExecutable = Join-Path (Join-Path "versions" $version) $binaryName
-        $existingLauncherCanContinue = Test-Path -LiteralPath $manifestPath
-
         Ensure-Directory $destinationRoot
         Ensure-Directory $versionRoot
         Ensure-Directory $binDir
@@ -433,7 +429,7 @@ switch ($Target) {
             Invoke-Go @("build", "-o", $cliBuildOutput, $cmdPath)
             Invoke-Go @("build", "-o", $launcherBuildOutput, $launcherCmdPath)
             Copy-FileReplacing -Source $cliBuildOutput -Destination $versionedBinary
-            Install-Launcher -LauncherOutput $launcherBuildOutput -Destination $launcherDestination -ExistingLauncherCanContinue $existingLauncherCanContinue
+            Install-Launcher -LauncherOutput $launcherBuildOutput -Destination $launcherDestination
             Write-ActiveVersionManifest -ManifestPath $manifestPath -Version $version -Executable $manifestExecutable
         } finally {
             Remove-Item -LiteralPath $cliBuildOutput -Force -ErrorAction SilentlyContinue
