@@ -56,7 +56,9 @@ The installer merges three idempotent handlers into `$CODEX_HOME/hooks.json` (or
 
 - a `SessionStart` `compact` handler explains that compaction is not a new
   Waypost notice, so historical notices or future conditional receive steps do
-  not trigger a mailbox check on their own
+  not trigger a mailbox check on their own; when the transcript's latest user
+  message is the exact Waypost nudge, it omits that receive guard and only tells
+  the agent to resume the task active before compaction
 - a `UserPromptSubmit` handler recognizes the narrow Waypost nudge form and
   injects a conditional `waypost_recv` instruction that defers tool
   availability to the active session instead of probing a second Codex process

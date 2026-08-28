@@ -37,6 +37,73 @@ func TestWriteOutputEmitsSessionStartAdditionalContext(t *testing.T) {
 	}
 }
 
+func TestRunCompactOmitsReceiveGuardAfterLatestWaypostNudge(t *testing.T) {
+	t.Parallel()
+
+	transcript := writeTestTranscript(t, `
+{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"Earlier task"}]}}
+{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"NOTICE: There might be new delivery in waypost."}]}}
+{"type":"event_msg","payload":{"type":"item_completed","item":{"type":"UserMessage","content":[{"type":"text","text":"NOTICE: There might be new delivery in waypost."}]}}}
+{"type":"compacted","payload":{"message":"Summary mentioning an old Waypost notice"}}
+{"type":"event_msg","payload":{"type":"context_compacted"}}
+`)
+
+	context := runCompactHook(t, transcript)
+	if context != CompactAfterNudgeContext {
+		t.Fatalf("compact context = %q, want nudge-safe context %q", context, CompactAfterNudgeContext)
+	}
+	if strings.Contains(context, "Do not check or receive Waypost") {
+		t.Fatalf("compact context = %q, want no receive guard after live nudge", context)
+	}
+}
+
+func TestRunCompactKeepsReceiveGuardWhenLatestUserMessageIsNotNudge(t *testing.T) {
+	t.Parallel()
+
+	transcript := writeTestTranscript(t, `
+{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"NOTICE: There might be new delivery in waypost."}]}}
+{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"Continue the original task."}]}}
+{"type":"compacted","payload":{"message":"Summary mentioning a Waypost nudge"}}
+`)
+
+	if context := runCompactHook(t, transcript); context != AdditionalContext {
+		t.Fatalf("compact context = %q, want normal guard %q", context, AdditionalContext)
+	}
+}
+
+func TestRunCompactKeepsReceiveGuardAfterNewerNonTextUserMessage(t *testing.T) {
+	t.Parallel()
+
+	for name, newerUserRecord := range map[string]string{
+		"response item":  `{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_image","image_url":"data:image/png;base64,..."}]}}`,
+		"completed item": `{"type":"event_msg","payload":{"type":"item_completed","item":{"type":"UserMessage","content":[{"type":"image","image_url":"data:image/png;base64,..."}]}}}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			transcript := writeTestTranscript(t, `
+{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"NOTICE: There might be new delivery in waypost."}]}}
+`+newerUserRecord)
+
+			if context := runCompactHook(t, transcript); context != AdditionalContext {
+				t.Fatalf("compact context = %q, want normal guard %q", context, AdditionalContext)
+			}
+		})
+	}
+}
+
+func TestRunCompactKeepsReceiveGuardWhenTranscriptIsUnavailable(t *testing.T) {
+	t.Parallel()
+
+	for _, transcript := range []string{
+		filepath.Join(t.TempDir(), "missing.jsonl"),
+		writeTestTranscript(t, `{not-json`),
+	} {
+		if context := runCompactHook(t, transcript); context != AdditionalContext {
+			t.Fatalf("compact context for %q = %q, want normal guard %q", transcript, context, AdditionalContext)
+		}
+	}
+}
+
 func TestRunUserPromptNudgeUsesActiveSessionWithoutCodexProbe(t *testing.T) {
 	t.Setenv("PATH", "")
 
@@ -783,4 +850,34 @@ func handlerHasCommand(value any, command string) bool {
 	handlerType, _ := handler["type"].(string)
 	handlerCommand, _ := handler["command"].(string)
 	return handlerType == "command" && handlerCommand == command
+}
+
+func writeTestTranscript(t *testing.T, contents string) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "rollout.jsonl")
+	if err := os.WriteFile(path, []byte(strings.TrimSpace(contents)+"\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile(transcript) error = %v", err)
+	}
+	return path
+}
+
+func runCompactHook(t *testing.T, transcriptPath string) string {
+	t.Helper()
+	input, err := json.Marshal(hookInput{
+		HookEventName:  "SessionStart",
+		Source:         "compact",
+		TranscriptPath: transcriptPath,
+	})
+	if err != nil {
+		t.Fatalf("Marshal(hook input) error = %v", err)
+	}
+	var output bytes.Buffer
+	if err := run(context.Background(), bytes.NewReader(input), &output); err != nil {
+		t.Fatalf("run(SessionStart compact) error = %v", err)
+	}
+	var payload hookOutput
+	if err := json.Unmarshal(output.Bytes(), &payload); err != nil {
+		t.Fatalf("Unmarshal(hook output) error = %v", err)
+	}
+	return payload.HookSpecificOutput.AdditionalContext
 }

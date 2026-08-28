@@ -39,6 +39,9 @@ Do not check or receive Waypost merely because the compacted summary mentions hi
 Only check Waypost after a fresh live NOTICE, an explicit user request, or while continuing an already-claimed delivery.
 Resume the task that was active before compaction.`
 
+const CompactAfterNudgeContext = `COMPACTION CONTINUATION:
+Resume the task that was active before compaction.`
+
 const MCPNudgeContext = `The current user message appears to be a Waypost nudge.
 If the Waypost MCP tool waypost_recv is available in this Codex session, use it to receive the pending delivery.
 Otherwise use the normal Waypost CLI receive workflow. Do not start another Codex process to infer which MCP tools this session has.`
@@ -48,11 +51,12 @@ Do not poll Waypost. After this wait returns, handle any delivery or continue ot
 If there is nothing else to do, stop completely instead of calling waypost wait again.`
 
 type hookInput struct {
-	HookEventName string          `json:"hook_event_name"`
-	Source        string          `json:"source"`
-	Prompt        string          `json:"prompt"`
-	ToolName      string          `json:"tool_name"`
-	ToolInput     json.RawMessage `json:"tool_input"`
+	HookEventName  string          `json:"hook_event_name"`
+	Source         string          `json:"source"`
+	Prompt         string          `json:"prompt"`
+	ToolName       string          `json:"tool_name"`
+	ToolInput      json.RawMessage `json:"tool_input"`
+	TranscriptPath string          `json:"transcript_path"`
 }
 
 type hookOutput struct {
@@ -92,7 +96,11 @@ func run(_ context.Context, r io.Reader, w io.Writer) error {
 		if input.Source != "compact" {
 			return nil
 		}
-		return writeOutput(w, "SessionStart", AdditionalContext)
+		context := AdditionalContext
+		if latestPrompt, found, err := latestUserPrompt(input.TranscriptPath); err == nil && found && LooksLikeWaypostNudge(latestPrompt) {
+			context = CompactAfterNudgeContext
+		}
+		return writeOutput(w, "SessionStart", context)
 	case "UserPromptSubmit":
 		if !LooksLikeWaypostNudge(input.Prompt) {
 			return nil
@@ -142,6 +150,78 @@ func readHookInput(r io.Reader) (hookInput, bool, error) {
 
 func LooksLikeWaypostNudge(prompt string) bool {
 	return strings.EqualFold(strings.TrimSpace(prompt), defaultNudgeMessage)
+}
+
+func latestUserPrompt(transcriptPath string) (string, bool, error) {
+	if strings.TrimSpace(transcriptPath) == "" {
+		return "", false, nil
+	}
+	transcript, err := os.Open(transcriptPath)
+	if err != nil {
+		return "", false, err
+	}
+	defer transcript.Close()
+
+	decoder := json.NewDecoder(transcript)
+	var latest string
+	found := false
+	for {
+		var record transcriptRecord
+		if err := decoder.Decode(&record); errors.Is(err, io.EOF) {
+			return latest, found, nil
+		} else if err != nil {
+			return "", false, err
+		}
+
+		prompt, ok := transcriptUserPrompt(record)
+		if ok {
+			latest = prompt
+			found = true
+		}
+	}
+}
+
+type transcriptRecord struct {
+	Type    string `json:"type"`
+	Payload struct {
+		Type    string `json:"type"`
+		Role    string `json:"role"`
+		Content []struct {
+			Type string `json:"type"`
+			Text string `json:"text"`
+		} `json:"content"`
+		Item struct {
+			Type    string `json:"type"`
+			Content []struct {
+				Type string `json:"type"`
+				Text string `json:"text"`
+			} `json:"content"`
+		} `json:"item"`
+	} `json:"payload"`
+}
+
+func transcriptUserPrompt(record transcriptRecord) (string, bool) {
+	switch {
+	case record.Type == "response_item" && record.Payload.Type == "message" && record.Payload.Role == "user":
+		return joinTranscriptText(record.Payload.Content, "input_text"), true
+	case record.Type == "event_msg" && record.Payload.Type == "item_completed" && record.Payload.Item.Type == "UserMessage":
+		return joinTranscriptText(record.Payload.Item.Content, "text"), true
+	default:
+		return "", false
+	}
+}
+
+func joinTranscriptText(content []struct {
+	Type string `json:"type"`
+	Text string `json:"text"`
+}, textType string) string {
+	var parts []string
+	for _, item := range content {
+		if item.Type == textType {
+			parts = append(parts, item.Text)
+		}
+	}
+	return strings.Join(parts, "\n")
 }
 
 func LooksLikeWaypostWaitCommand(command string) bool {
