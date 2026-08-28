@@ -1576,6 +1576,11 @@ func TestHelpCLIPathsDoNotCreateRuntimeState(t *testing.T) {
 			wantContains: "Usage:\n  waypost recv --for ADDRESS [--for ADDRESS ...] [--max COUNT] [--json | --yaml] [--full]",
 		},
 		{
+			name:         "recv help requires unavailable MCP tool",
+			args:         []string{"recv", "--help"},
+			wantContains: "Use this CLI command only after confirming that the MCP waypost_recv tool is unavailable.",
+		},
+		{
 			name:         "read help",
 			args:         []string{"read", "--help"},
 			wantContains: "Usage:\n  waypost read ID [ID ...] [--json | --yaml]",
