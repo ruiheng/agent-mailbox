@@ -31,32 +31,19 @@ const (
 const hookTimeoutSeconds int64 = 5
 const hookTimeoutJSON json.Number = "5"
 
-const AdditionalContext = `COMPACTION CONTINUATION:
-Compaction itself is not a new Waypost notice.
-Do not check or receive Waypost merely because the compacted summary mentions historical notices or a future conditional Waypost step.
+const AdditionalContext = `Do not check or receive Waypost merely because compaction occurred or its summary mentions historical notices or a future conditional Waypost step.
 Only check Waypost after a fresh live NOTICE, an explicit user request, or while continuing an already-claimed delivery.
 Resume the task that was active before compaction.`
 
-const CompactAfterNudgeContext = `COMPACTION CONTINUATION:
-Resume the task that was active before compaction.`
+const MCPNudgeContext = `The Waypost MCP tool waypost_recv is available. Use it—not the Waypost CLI—to receive this pending delivery.`
 
-const MCPNudgeContext = `WAYPOST RECEIVE:
-The Codex MCP probe reports Waypost available.
-Use the waypost_recv MCP tool to receive the pending delivery. Do not use the Waypost CLI for this receive.`
+const CLINudgeContext = `The Waypost MCP tool waypost_recv is unavailable. Receive the pending delivery with the Waypost CLI.`
 
-const CLINudgeContext = `WAYPOST RECEIVE:
-The Codex MCP probe did not find Waypost available.
-Use the Waypost CLI receive workflow. Do not attempt to use waypost_recv.`
+const MCPProbeFailedNudgeContext = `Availability of the Waypost MCP tool waypost_recv is unknown. Receive the pending delivery with the Waypost CLI.`
 
-const MCPProbeFailedNudgeContext = `WAYPOST RECEIVE:
-The Codex MCP probe failed, so Waypost MCP availability could not be confirmed.
-Use the Waypost CLI receive workflow.`
+const WaitPollingContext = `Do not poll Waypost. Continue other available work; if none remains, stop completely.`
 
-const WaitPollingContext = `WAYPOST WAIT GUARD:
-Do not poll Waypost. After this wait returns, handle any delivery or continue other available work.
-If there is nothing else to do, stop completely instead of calling waypost wait again.`
-
-const MCPStatusDenialReason = `Waypost MCP is available. waypost_status is a Waypost MCP tool; use it instead of running waypost status.`
+const MCPStatusDenialReason = `The Waypost MCP tool waypost_status is available. Use it instead of running waypost status.`
 
 var waypostMCPCommandBlacklist = map[string]string{
 	"recv":    "waypost_recv",
@@ -116,11 +103,10 @@ func runWithMCPProbe(ctx context.Context, r io.Reader, w io.Writer, probe waypos
 		if input.Source != "compact" {
 			return nil
 		}
-		context := AdditionalContext
 		if latestPrompt, found, err := latestUserPrompt(input.TranscriptPath); err == nil && found && LooksLikeWaypostNudge(latestPrompt) {
-			context = CompactAfterNudgeContext
+			return nil
 		}
-		return writeOutput(w, "SessionStart", context)
+		return writeOutput(w, "SessionStart", AdditionalContext)
 	case "UserPromptSubmit":
 		if !LooksLikeWaypostNudge(input.Prompt) {
 			return nil
@@ -282,7 +268,7 @@ func waypostMCPDenialReason(command string) (string, bool) {
 	if !blocked {
 		return "", false
 	}
-	return fmt.Sprintf("Waypost MCP is available. Use the Waypost MCP tool %s instead of the Waypost CLI.", tool), true
+	return fmt.Sprintf("The Waypost MCP tool %s is available. Use it instead of the Waypost CLI.", tool), true
 }
 
 func directWaypostCommand(command string) (string, bool) {

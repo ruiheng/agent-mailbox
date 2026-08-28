@@ -57,15 +57,16 @@ The installer merges three idempotent handlers into `$CODEX_HOME/hooks.json` (or
 - a `SessionStart` `compact` handler explains that compaction is not a new
   Waypost notice, so historical notices or future conditional receive steps do
   not trigger a mailbox check on their own; when the transcript's latest user
-  message is the exact Waypost nudge, it omits that receive guard and only tells
-  the agent to resume the task active before compaction
+  message is the exact Waypost nudge, it emits no context
 - a `UserPromptSubmit` handler recognizes the narrow Waypost nudge form and
   runs `codex mcp list --json` from the session working directory; it injects
-  one explicit receive instruction: use `waypost_recv` when Waypost is enabled,
-  otherwise use the Waypost CLI (probe failures also fall back to the CLI)
+  one explicit receive instruction: when Waypost is enabled, it tells the agent
+  that the `waypost_recv` MCP tool is available and to use it instead of the CLI
+  for that pending receive; otherwise it instructs use of the Waypost CLI
+  (probe failures also fall back to the CLI)
 - a `PreToolUse` `Bash` handler recognizes direct Waypost CLI invocations. A
-  `waypost wait` call receives a model-visible warning to continue other work
-  after the wait, or stop completely when no work remains; it is not blocked.
+  `waypost wait` call receives a model-visible warning not to poll, to continue
+  other work, or to stop completely when no work remains; it is not blocked.
   When the MCP probe reports Waypost enabled, `waypost status` is denied in
   favor of `waypost_status`, while the maintained `recv`, `receive`, and `send`
   blacklist is denied in favor of `waypost_recv` or `waypost_send`. An

@@ -33,12 +33,12 @@ func TestWriteOutputEmitsSessionStartAdditionalContext(t *testing.T) {
 		t.Fatalf("hookEventName = %v, want SessionStart", got)
 	}
 	context, _ := specific["additionalContext"].(string)
-	if !strings.Contains(context, "not a new Waypost notice") {
+	if !strings.Contains(context, "Do not check or receive Waypost merely because compaction") {
 		t.Fatalf("additionalContext = %q, want Waypost notice guard", context)
 	}
 }
 
-func TestRunCompactOmitsReceiveGuardAfterLatestWaypostNudge(t *testing.T) {
+func TestRunCompactEmitsNoContextAfterLatestWaypostNudge(t *testing.T) {
 	t.Parallel()
 
 	transcript := writeTestTranscript(t, `
@@ -50,11 +50,8 @@ func TestRunCompactOmitsReceiveGuardAfterLatestWaypostNudge(t *testing.T) {
 `)
 
 	context := runCompactHook(t, transcript)
-	if context != CompactAfterNudgeContext {
-		t.Fatalf("compact context = %q, want nudge-safe context %q", context, CompactAfterNudgeContext)
-	}
-	if strings.Contains(context, "Do not check or receive Waypost") {
-		t.Fatalf("compact context = %q, want no receive guard after live nudge", context)
+	if context != "" {
+		t.Fatalf("compact context = %q, want no hook context after live nudge", context)
 	}
 }
 
@@ -120,21 +117,21 @@ func TestRunUserPromptNudgeSelectsReceivePathFromCodexProbe(t *testing.T) {
 			name:        "MCP available",
 			available:   true,
 			wantContext: MCPNudgeContext,
-			wantText:    "waypost_recv MCP tool",
-			rejectText:  "Use the Waypost CLI receive workflow",
+			wantText:    "Use it—not the Waypost CLI—to receive this pending delivery",
+			rejectText:  "Do not use the Waypost CLI.",
 		},
 		{
 			name:        "MCP unavailable",
 			wantContext: CLINudgeContext,
-			wantText:    "Use the Waypost CLI receive workflow",
-			rejectText:  "waypost_recv MCP tool",
+			wantText:    "MCP tool waypost_recv is unavailable",
+			rejectText:  "MCP tool waypost_recv is available",
 		},
 		{
 			name:        "probe failed",
 			probeErr:    errors.New("codex unavailable"),
 			wantContext: MCPProbeFailedNudgeContext,
-			wantText:    "Use the Waypost CLI receive workflow",
-			rejectText:  "waypost_recv MCP tool",
+			wantText:    "MCP tool waypost_recv is unknown",
+			rejectText:  "MCP tool waypost_recv is available. Use it",
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -255,7 +252,7 @@ func TestRunPreToolUseWarnsBeforeWaypostWait(t *testing.T) {
 		t.Fatalf("hookEventName = %v, want PreToolUse", got)
 	}
 	additionalContext, _ := specific["additionalContext"].(string)
-	if !strings.Contains(additionalContext, "Do not poll Waypost") || !strings.Contains(additionalContext, "continue other available work") || !strings.Contains(additionalContext, "stop completely") {
+	if !strings.Contains(additionalContext, "Do not poll Waypost") || !strings.Contains(additionalContext, "Continue other available work") || !strings.Contains(additionalContext, "stop completely") {
 		t.Fatalf("additionalContext = %q, want wait polling warning", additionalContext)
 	}
 }
@@ -271,22 +268,22 @@ func TestRunPreToolUseDeniesMCPPreferredWaypostCLICommands(t *testing.T) {
 		{
 			name:       "status",
 			command:    "waypost status",
-			wantReason: "waypost_status is a Waypost MCP tool",
+			wantReason: "MCP tool waypost_status is available",
 		},
 		{
 			name:       "recv",
 			command:    "waypost recv --for workflow/reviewer",
-			wantReason: "Waypost MCP tool waypost_recv",
+			wantReason: "MCP tool waypost_recv is available",
 		},
 		{
 			name:       "receive alias",
 			command:    "waypost receive --for workflow/reviewer",
-			wantReason: "Waypost MCP tool waypost_recv",
+			wantReason: "MCP tool waypost_recv is available",
 		},
 		{
 			name:       "send",
 			command:    "waypost --state-dir /tmp/waypost send --to workflow/reviewer",
-			wantReason: "Waypost MCP tool waypost_send",
+			wantReason: "MCP tool waypost_send is available",
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -1072,6 +1069,9 @@ func runCompactHook(t *testing.T, transcriptPath string) string {
 	var output bytes.Buffer
 	if err := run(context.Background(), bytes.NewReader(input), &output); err != nil {
 		t.Fatalf("run(SessionStart compact) error = %v", err)
+	}
+	if output.Len() == 0 {
+		return ""
 	}
 	var payload hookOutput
 	if err := json.Unmarshal(output.Bytes(), &payload); err != nil {
