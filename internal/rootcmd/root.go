@@ -165,7 +165,7 @@ func (a *App) runDoctorCommand(ctx context.Context, args []string) error {
 	} else if available {
 		mcpStatus = "available to a new Codex process in the current directory (an already-running session, profile, or `-c` override may differ)"
 	}
-	_, err = fmt.Fprintf(a.stdout, "Codex compact hook: configured\nCodex nudge hook: configured\nCodex hook trust: not checked; verify with `/hooks` in Codex\nWaypost MCP: %s\nHooks file: %s\nCommand: %s\n", mcpStatus, result.Path, result.Command)
+	_, err = fmt.Fprintf(a.stdout, "Codex compact hook: configured\nCodex nudge hook: configured\nCodex wait polling guard: configured\nCodex hook trust: not checked; verify with `/hooks` in Codex\nWaypost MCP: %s\nHooks file: %s\nCommand: %s\n", mcpStatus, result.Path, result.Command)
 	return err
 }
 
@@ -340,6 +340,8 @@ func (a *App) writeCodexHookHelp() {
 		"Emit the SessionStart hookSpecificOutput used after Codex compaction.",
 		"For UserPromptSubmit, emit a conditional waypost_recv hint only for a",
 		"Waypost nudge. Tool availability is resolved by the active Codex session.",
+		"For PreToolUse Bash calls, warn before a direct waypost wait command so",
+		"the agent continues other work or stops instead of polling.",
 	})
 }
 
@@ -357,7 +359,8 @@ func (a *App) writeInstallCodexHookHelp() {
 		"Usage:",
 		"  waypost install codex-hook",
 		"",
-		"Merge SessionStart compact and UserPromptSubmit hooks into $CODEX_HOME/hooks.json.",
+		"Merge SessionStart compact, UserPromptSubmit nudge, and PreToolUse wait hooks",
+		"into $CODEX_HOME/hooks.json.",
 		"The command is idempotent and preserves unrelated hooks.",
 		"Review new or changed non-managed hooks with `/hooks` in Codex before use.",
 	})
@@ -377,7 +380,7 @@ func (a *App) writeDoctorCodexHookHelp() {
 		"Usage:",
 		"  waypost doctor codex-hook",
 		"",
-		"Verify both Codex hook definitions and report MCP availability for a new Codex process in the current directory.",
+		"Verify all Codex hook definitions and report MCP availability for a new Codex process in the current directory.",
 		"Codex hook trust must be verified interactively with `/hooks`.",
 	})
 }

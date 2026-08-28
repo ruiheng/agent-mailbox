@@ -112,6 +112,9 @@ func TestRunInstallAndDoctorCodexHook(t *testing.T) {
 	if !strings.Contains(doctorOutput.String(), "Codex nudge hook: configured") || !strings.Contains(doctorOutput.String(), "Waypost MCP: available to a new Codex process in the current directory") {
 		t.Fatalf("doctor output = %q, want nudge hook and MCP status", doctorOutput.String())
 	}
+	if !strings.Contains(doctorOutput.String(), "Codex wait polling guard: configured") {
+		t.Fatalf("doctor output = %q, want wait polling guard status", doctorOutput.String())
+	}
 	if !strings.Contains(doctorOutput.String(), "trust: not checked; verify with `/hooks`") {
 		t.Fatalf("doctor output = %q, want explicit unverified trust status", doctorOutput.String())
 	}

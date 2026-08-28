@@ -51,7 +51,7 @@ Install a Codex `SessionStart` hook that runs after compaction:
 waypost install codex-hook
 ```
 
-The installer merges two idempotent handlers into `$CODEX_HOME/hooks.json` (or
+The installer merges three idempotent handlers into `$CODEX_HOME/hooks.json` (or
 `~/.codex/hooks.json` when `CODEX_HOME` is unset) and preserves unrelated hooks:
 
 - a `SessionStart` `compact` handler explains that compaction is not a new
@@ -60,9 +60,13 @@ The installer merges two idempotent handlers into `$CODEX_HOME/hooks.json` (or
 - a `UserPromptSubmit` handler recognizes the narrow Waypost nudge form and
   injects a conditional `waypost_recv` instruction that defers tool
   availability to the active session instead of probing a second Codex process
+- a `PreToolUse` `Bash` handler recognizes a direct `waypost wait` invocation
+  and injects a model-visible warning to continue other work after the wait, or
+  stop completely when no work remains, instead of polling again; it does not
+  block or rewrite the command
 
 Codex requires new or changed non-managed hooks to be reviewed and trusted
-before they run. After installation, open `/hooks` in Codex and trust the two
+before they run. After installation, open `/hooks` in Codex and trust the three
 Waypost handlers. Waypost does not modify Codex's private hook-trust state.
 
 Verify the installation:

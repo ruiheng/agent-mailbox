@@ -80,6 +80,51 @@ func TestRunUserPromptSkipsOrdinaryWaypostDiscussion(t *testing.T) {
 	}
 }
 
+func TestRunPreToolUseWarnsBeforeWaypostWait(t *testing.T) {
+	t.Parallel()
+
+	input := strings.NewReader(`{
+  "hook_event_name": "PreToolUse",
+  "tool_name": "Bash",
+  "tool_input": {
+    "command": "waypost --state-dir /tmp/waypost-state wait --for workflow/reviewer --timeout 30s"
+  }
+}`)
+	var output bytes.Buffer
+	if err := run(context.Background(), input, &output); err != nil {
+		t.Fatalf("run(PreToolUse) error = %v", err)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(output.Bytes(), &payload); err != nil {
+		t.Fatalf("Unmarshal(output) error = %v", err)
+	}
+	specific := payload["hookSpecificOutput"].(map[string]any)
+	if got := specific["hookEventName"]; got != "PreToolUse" {
+		t.Fatalf("hookEventName = %v, want PreToolUse", got)
+	}
+	additionalContext, _ := specific["additionalContext"].(string)
+	if !strings.Contains(additionalContext, "Do not poll Waypost") || !strings.Contains(additionalContext, "continue other available work") || !strings.Contains(additionalContext, "stop completely") {
+		t.Fatalf("additionalContext = %q, want wait polling warning", additionalContext)
+	}
+}
+
+func TestRunPreToolUseSkipsUnrelatedToolCalls(t *testing.T) {
+	t.Parallel()
+
+	for _, input := range []string{
+		`{"hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{"command":"waypost recv --for workflow/reviewer"}}`,
+		`{"hook_event_name":"PreToolUse","tool_name":"apply_patch","tool_input":{"command":"waypost wait --for workflow/reviewer"}}`,
+	} {
+		var output bytes.Buffer
+		if err := run(context.Background(), strings.NewReader(input), &output); err != nil {
+			t.Fatalf("run(PreToolUse) error = %v", err)
+		}
+		if output.Len() != 0 {
+			t.Fatalf("output = %q, want empty", output.String())
+		}
+	}
+}
+
 func TestLooksLikeWaypostNudge(t *testing.T) {
 	t.Parallel()
 
@@ -103,6 +148,36 @@ func TestLooksLikeWaypostNudge(t *testing.T) {
 	} {
 		if LooksLikeWaypostNudge(prompt) {
 			t.Errorf("LooksLikeWaypostNudge(%q) = true, want false", prompt)
+		}
+	}
+}
+
+func TestLooksLikeWaypostWaitCommand(t *testing.T) {
+	t.Parallel()
+
+	for _, command := range []string{
+		"waypost wait --for workflow/reviewer",
+		"/home/alice/.local/bin/waypost --state-dir /tmp/waypost wait --timeout 30s",
+		`'/opt/Waypost' --state-dir '/tmp/state with spaces' wait --json`,
+		`& "C:\Users\alice\.local\bin\waypost.exe" wait --for workflow/reviewer`,
+		`waypost.exe --state-dir "C:\Users\alice\Waypost State" wait --timeout 30s`,
+		`waypost --state-dir=/tmp/waypost wait`,
+	} {
+		if !LooksLikeWaypostWaitCommand(command) {
+			t.Errorf("LooksLikeWaypostWaitCommand(%q) = false, want true", command)
+		}
+	}
+	for _, command := range []string{
+		"echo 'waypost wait --for workflow/reviewer'",
+		"waypost recv --for workflow/reviewer",
+		"waypost doc wait",
+		"my-waypost wait",
+		"waypost --state-dir wait",
+		"waypost\nwait --for workflow/reviewer",
+		"cd /tmp && waypost wait --for workflow/reviewer",
+	} {
+		if LooksLikeWaypostWaitCommand(command) {
+			t.Errorf("LooksLikeWaypostWaitCommand(%q) = true, want false", command)
 		}
 	}
 }
@@ -135,6 +210,18 @@ func TestInstallRefreshesManagedGroupsInPlace(t *testing.T) {
       {
         "description": "trusted prompt sibling",
         "hooks": [{"type": "command", "command": "keep-prompt-position"}]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "description": "Waypost Codex wait polling guard",
+        "matcher": "^Bash$",
+        "hooks": [{"type": "command", "command": "'/old/waypost' codex-hook", "statusMessage": "Checking Waypost wait usage"}]
+      },
+      {
+        "description": "trusted tool sibling",
+        "matcher": "^Bash$",
+        "hooks": [{"type": "command", "command": "keep-tool-position"}]
       }
     ]
   }
@@ -174,6 +261,14 @@ func TestInstallRefreshesManagedGroupsInPlace(t *testing.T) {
 	}
 	if !groupHasCommand(promptGroups[1].(map[string]any), "keep-prompt-position") {
 		t.Fatalf("UserPromptSubmit[1] = %#v, want unrelated group at original position", promptGroups[1])
+	}
+
+	waitGroups := hooks["PreToolUse"].([]any)
+	if !groupHasCommand(waitGroups[0].(map[string]any), command) {
+		t.Fatalf("PreToolUse[0] = %#v, want refreshed Waypost group", waitGroups[0])
+	}
+	if !groupHasCommand(waitGroups[1].(map[string]any), "keep-tool-position") {
+		t.Fatalf("PreToolUse[1] = %#v, want unrelated group at original position", waitGroups[1])
 	}
 }
 
@@ -258,8 +353,12 @@ func TestInstallPreservesUnrelatedHooksAndIsIdempotent(t *testing.T) {
 		t.Fatalf("custom field = %#v, want preserved", custom)
 	}
 	hooks := document["hooks"].(map[string]any)
-	if got := len(hooks["PreToolUse"].([]any)); got != 1 {
-		t.Fatalf("PreToolUse hooks = %d, want 1", got)
+	preToolGroups := hooks["PreToolUse"].([]any)
+	if got := len(preToolGroups); got != 2 {
+		t.Fatalf("PreToolUse hooks = %d, want existing plus Waypost", got)
+	}
+	if !groupHasCommand(preToolGroups[0].(map[string]any), "check-bash") || !groupHasCommand(preToolGroups[1].(map[string]any), command) {
+		t.Fatalf("PreToolUse hooks = %#v, want preserved existing group followed by Waypost", preToolGroups)
 	}
 	if got := len(hooks["SessionStart"].([]any)); got != 2 {
 		t.Fatalf("SessionStart hooks = %d, want existing plus Waypost", got)
@@ -330,6 +429,21 @@ func TestInstallPreservesSiblingHandlersWhenAdoptingGroups(t *testing.T) {
           {"type": "command", "command": "keep-prompt-sibling"}
         ]
       }
+    ],
+    "PreToolUse": [
+      {
+        "description": "Waypost Codex wait polling guard",
+        "matcher": "^Bash$",
+        "custom": "keep-wait",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "C:\\old-version\\waypost.exe codex-hook",
+            "statusMessage": "Checking Waypost wait usage"
+          },
+          {"type": "command", "command": "keep-wait-sibling"}
+        ]
+      }
     ]
   }
 }`
@@ -376,6 +490,19 @@ func TestInstallPreservesSiblingHandlersWhenAdoptingGroups(t *testing.T) {
 		t.Fatalf("prompt handlers = %#v, want Waypost and sibling handler positions preserved", promptHandlers)
 	}
 
+	waitGroups := hooks["PreToolUse"].([]any)
+	if got := len(waitGroups); got != 1 {
+		t.Fatalf("PreToolUse groups = %d, want mixed group updated in place", got)
+	}
+	preservedWait := waitGroups[0].(map[string]any)
+	if preservedWait["custom"] != "keep-wait" || !groupHasCommand(preservedWait, "keep-wait-sibling") {
+		t.Fatalf("preserved wait group = %#v, want custom field and sibling handler", preservedWait)
+	}
+	waitHandlers := preservedWait["hooks"].([]any)
+	if !handlerHasCommand(waitHandlers[0], command) || !handlerHasCommand(waitHandlers[1], "keep-wait-sibling") {
+		t.Fatalf("wait handlers = %#v, want Waypost and sibling handler positions preserved", waitHandlers)
+	}
+
 	second, err := Install(home, command)
 	if err != nil {
 		t.Fatalf("Install(second) error = %v", err)
@@ -419,6 +546,7 @@ func TestManagedGroupsUseShortTimeout(t *testing.T) {
 	for name, group := range map[string]map[string]any{
 		"compact": compactManagedGroup("waypost codex-hook"),
 		"prompt":  promptManagedGroup("waypost codex-hook"),
+		"wait":    waitManagedGroup("waypost codex-hook"),
 	} {
 		handlers := group["hooks"].([]any)
 		handler := handlers[0].(map[string]any)
@@ -569,6 +697,31 @@ func TestDoctorRejectsMatcherThatAlsoRunsOnStartup(t *testing.T) {
 	}
 	if _, err := Doctor(home, "waypost codex-hook"); err == nil {
 		t.Fatal("Doctor() error = nil, want broad matcher rejection")
+	}
+}
+
+func TestDoctorRequiresWaypostWaitPollingGuard(t *testing.T) {
+	t.Parallel()
+
+	home := t.TempDir()
+	path := filepath.Join(home, "hooks.json")
+	contents := `{
+  "hooks": {
+    "SessionStart": [{
+      "matcher": "^compact$",
+      "hooks": [{"type": "command", "command": "waypost codex-hook", "timeout": 5}]
+    }],
+    "UserPromptSubmit": [{
+      "hooks": [{"type": "command", "command": "waypost codex-hook", "timeout": 5}]
+    }]
+  }
+}`
+	if err := os.WriteFile(path, []byte(contents), 0o600); err != nil {
+		t.Fatalf("WriteFile(hooks.json) error = %v", err)
+	}
+	_, err := Doctor(home, "waypost codex-hook")
+	if err == nil || !strings.Contains(err.Error(), "wait polling guard") {
+		t.Fatalf("Doctor() error = %v, want missing wait polling guard error", err)
 	}
 }
 

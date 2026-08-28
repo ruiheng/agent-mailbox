@@ -22,8 +22,10 @@ import (
 const (
 	compactManagedDescription = "Waypost Codex compact-context guard"
 	promptManagedDescription  = "Waypost Codex nudge MCP hint"
+	waitManagedDescription    = "Waypost Codex wait polling guard"
 	compactStatusMessage      = "Restoring Waypost compact context"
 	promptStatusMessage       = "Preparing Waypost receive hint"
+	waitStatusMessage         = "Checking Waypost wait usage"
 	legacyPromptStatusMessage = "Checking Waypost MCP availability"
 	defaultNudgeMessage       = "NOTICE: There might be new delivery in waypost."
 )
@@ -41,10 +43,16 @@ const MCPNudgeContext = `The current user message appears to be a Waypost nudge.
 If the Waypost MCP tool waypost_recv is available in this Codex session, use it to receive the pending delivery.
 Otherwise use the normal Waypost CLI receive workflow. Do not start another Codex process to infer which MCP tools this session has.`
 
+const WaitPollingContext = `WAYPOST WAIT GUARD:
+Do not poll Waypost. After this wait returns, handle any delivery or continue other available work.
+If there is nothing else to do, stop completely instead of calling waypost wait again.`
+
 type hookInput struct {
-	HookEventName string `json:"hook_event_name"`
-	Source        string `json:"source"`
-	Prompt        string `json:"prompt"`
+	HookEventName string          `json:"hook_event_name"`
+	Source        string          `json:"source"`
+	Prompt        string          `json:"prompt"`
+	ToolName      string          `json:"tool_name"`
+	ToolInput     json.RawMessage `json:"tool_input"`
 }
 
 type hookOutput struct {
@@ -90,6 +98,18 @@ func run(_ context.Context, r io.Reader, w io.Writer) error {
 			return nil
 		}
 		return writeOutput(w, "UserPromptSubmit", MCPNudgeContext)
+	case "PreToolUse":
+		if input.ToolName != "Bash" {
+			return nil
+		}
+		command, err := bashCommand(input.ToolInput)
+		if err != nil {
+			return err
+		}
+		if !LooksLikeWaypostWaitCommand(command) {
+			return nil
+		}
+		return writeOutput(w, "PreToolUse", WaitPollingContext)
 	default:
 		return nil
 	}
@@ -122,6 +142,103 @@ func readHookInput(r io.Reader) (hookInput, bool, error) {
 
 func LooksLikeWaypostNudge(prompt string) bool {
 	return strings.EqualFold(strings.TrimSpace(prompt), defaultNudgeMessage)
+}
+
+func LooksLikeWaypostWaitCommand(command string) bool {
+	rest := strings.TrimSpace(command)
+	executable, rest, ok := consumeCommandWord(rest)
+	if !ok {
+		return false
+	}
+	if executable == "&" {
+		executable, rest, ok = consumeCommandWord(rest)
+		if !ok {
+			return false
+		}
+	}
+	if !isWaypostExecutable(executable) {
+		return false
+	}
+
+	for {
+		argument, remaining, ok := consumeCommandWord(rest)
+		if !ok {
+			return false
+		}
+		switch {
+		case argument == "wait":
+			return true
+		case argument == "--state-dir":
+			_, rest, ok = consumeCommandWord(remaining)
+			if !ok {
+				return false
+			}
+		case strings.HasPrefix(argument, "--state-dir=") && len(argument) > len("--state-dir="):
+			rest = remaining
+		default:
+			return false
+		}
+	}
+}
+
+func bashCommand(raw json.RawMessage) (string, error) {
+	if len(raw) == 0 {
+		return "", nil
+	}
+	var input struct {
+		Command string `json:"command"`
+	}
+	if err := json.Unmarshal(raw, &input); err != nil {
+		return "", fmt.Errorf("parse Codex Bash tool input: %w", err)
+	}
+	return input.Command, nil
+}
+
+func consumeCommandWord(input string) (string, string, bool) {
+	input = strings.TrimLeft(input, " \t\r")
+	if input == "" || input[0] == '\n' {
+		return "", input, false
+	}
+	if strings.ContainsRune(";&|<>()", rune(input[0])) {
+		return input[:1], input[1:], true
+	}
+
+	var word strings.Builder
+	var quote byte
+	for index := 0; index < len(input); index++ {
+		character := input[index]
+		if quote != 0 {
+			if character == quote {
+				quote = 0
+				continue
+			}
+			word.WriteByte(character)
+			continue
+		}
+		switch character {
+		case '\'', '"':
+			quote = character
+		case ' ', '\t', '\r':
+			return word.String(), input[index:], word.Len() != 0
+		case '\n', ';', '&', '|', '<', '>', '(', ')':
+			return word.String(), input[index:], word.Len() != 0
+		default:
+			word.WriteByte(character)
+		}
+	}
+	if quote != 0 || word.Len() == 0 {
+		return "", input, false
+	}
+	return word.String(), "", true
+}
+
+func isWaypostExecutable(executable string) bool {
+	normalized := strings.ReplaceAll(executable, `\`, "/")
+	base := normalized
+	if separator := strings.LastIndexByte(normalized, '/'); separator >= 0 {
+		base = normalized[separator+1:]
+	}
+	return strings.EqualFold(base, "waypost") || strings.EqualFold(base, "waypost.exe")
 }
 
 // CurrentDirectoryWaypostMCPAvailable reports whether Waypost is enabled in
@@ -214,8 +331,22 @@ func Install(codexHome, command string) (InstallResult, error) {
 		eligibleGroup:  func(map[string]any) bool { return true },
 	})
 	hooks["UserPromptSubmit"] = updated
+
+	waitGroups, err := arrayField(hooks, "PreToolUse")
+	if err != nil {
+		return InstallResult{}, fmt.Errorf("read %q: %w", path, err)
+	}
+	updated, waitChanged := mergeManagedHandler(waitGroups, waitManagedGroup(command), managedHandlerSpec{
+		description:    waitManagedDescription,
+		statusMessages: []string{waitStatusMessage},
+		command:        command,
+		eligibleGroup: func(group map[string]any) bool {
+			return matcherTargetsBashOnly(group["matcher"])
+		},
+	})
+	hooks["PreToolUse"] = updated
 	document["hooks"] = hooks
-	changed := compactChanged || promptChanged
+	changed := compactChanged || promptChanged || waitChanged
 
 	if !changed {
 		return InstallResult{Path: path, Changed: false}, nil
@@ -263,13 +394,32 @@ func Doctor(codexHome, command string) (DoctorResult, error) {
 	if err != nil {
 		return DoctorResult{}, fmt.Errorf("read %q: %w", path, err)
 	}
+	promptInstalled := false
 	for _, item := range promptGroups {
 		group, ok := item.(map[string]any)
 		if ok && groupHasCommandWithTimeout(group, command, hookTimeoutSeconds) {
+			promptInstalled = true
+			break
+		}
+	}
+	if !promptInstalled {
+		return DoctorResult{}, fmt.Errorf("Codex Waypost nudge hook is not installed in %q; run `waypost install codex-hook`", path)
+	}
+
+	waitGroups, err := arrayField(hooks, "PreToolUse")
+	if err != nil {
+		return DoctorResult{}, fmt.Errorf("read %q: %w", path, err)
+	}
+	for _, item := range waitGroups {
+		group, ok := item.(map[string]any)
+		if !ok || !matcherTargetsBashOnly(group["matcher"]) {
+			continue
+		}
+		if groupHasCommandWithTimeout(group, command, hookTimeoutSeconds) {
 			return DoctorResult{Path: path, Command: command}, nil
 		}
 	}
-	return DoctorResult{}, fmt.Errorf("Codex Waypost nudge hook is not installed in %q; run `waypost install codex-hook`", path)
+	return DoctorResult{}, fmt.Errorf("Codex Waypost wait polling guard is not installed in %q; run `waypost install codex-hook`", path)
 }
 
 func compactManagedGroup(command string) map[string]any {
@@ -295,6 +445,21 @@ func promptManagedGroup(command string) map[string]any {
 				"type":          "command",
 				"command":       command,
 				"statusMessage": promptStatusMessage,
+				"timeout":       hookTimeoutJSON,
+			},
+		},
+	}
+}
+
+func waitManagedGroup(command string) map[string]any {
+	return map[string]any{
+		"description": waitManagedDescription,
+		"matcher":     "^Bash$",
+		"hooks": []any{
+			map[string]any{
+				"type":          "command",
+				"command":       command,
+				"statusMessage": waitStatusMessage,
 				"timeout":       hookTimeoutJSON,
 			},
 		},
@@ -460,6 +625,11 @@ func matcherTargetsCompactOnly(value any) bool {
 		}
 	}
 	return true
+}
+
+func matcherTargetsBashOnly(value any) bool {
+	matcher, ok := value.(string)
+	return ok && matcher == "^Bash$"
 }
 
 func validateHooksStructure(hooks map[string]any) error {
