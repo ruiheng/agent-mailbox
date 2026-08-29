@@ -233,7 +233,7 @@ This rule is required for lazy lease expiry recovery to work without a daemon.
 ### Lease Ownership
 
 `delivery_id` alone is not sufficient authorization for `ack`, `release`,
-`defer`, or `fail`.
+`defer`, `fail`, or `dead-letter`.
 `undefer` is not a lease completion operation; it only makes a queued delivery
 claimable again, after which a receiver must call `recv` and use the new lease
 token for later `ack`.
@@ -425,6 +425,20 @@ Behavior:
 
 Failure handling is fixed in v1 so behavior is testable and predictable.
 
+### Dead-letter
+
+```text
+waypost dead-letter --delivery <delivery_id> --lease-token <lease_token> --reason "unsupported request"
+```
+
+Behavior:
+
+- record an explicit terminal decision
+- require the current lease token
+- move the delivery directly from `leased` to `dead_letter`
+- preserve `attempt_count` rather than recording a synthetic processing failure
+- retain the reason and message content for later inspection
+
 ### List
 
 ```text
@@ -540,7 +554,7 @@ The event log should capture lifecycle transitions such as:
 - delivery deferred
 - delivery undeferred
 - delivery failed
-- delivery dead-lettered
+- delivery dead-lettered, whether by the retry limit or an explicit terminal decision
 
 ## 11. Retention and Garbage Collection
 

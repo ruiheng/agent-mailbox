@@ -15,7 +15,7 @@ Personal deliveries have four states:
 - queued: waiting to be claimed; claimable when visible_at is reached.
 - leased: claimed by one receiver; an expired lease may be reclaimed with a new lease token.
 - acked: completed successfully and retained for history.
-- dead_letter: reached the failure-attempt limit and is no longer claimable.
+- dead_letter: reached the failure-attempt limit or was explicitly dead-lettered, and is no longer claimable.
 
 Receiving a personal delivery returns its delivery ID and lease token. While it is leased:
 - renew extends the lease without changing its state or token.
@@ -23,6 +23,7 @@ Receiving a personal delivery returns its delivery ID and lease token. While it 
 - release moves it to queued immediately without recording a failure.
 - defer moves it to queued with a future visible_at.
 - fail increments attempt_count, then moves it to queued or dead_letter.
+- dead-letter moves it directly to dead_letter without incrementing attempt_count.
 
 Group messages track unread/read state per person and do not use personal delivery states or leases.
 
@@ -43,6 +44,10 @@ Use the address as --from when sending and --for when receiving, and give it to 
 MCP and CLI share durable messages and delivery state only when they use the same state directory. Use the executable and state directory reported by MCP status before mixing the two.
 
 The current MCP server defines its tool surface. Use CLI for an operation it does not expose. MCP reconciles durable CLI transitions before later lease work.
+`,
+	"dead-letter": `Dead-lettering is an explicit terminal decision for a currently leased personal delivery. It requires the current lease token, moves the delivery directly to dead_letter, and does not increment attempt_count.
+
+Use fail when processing failed but retry remains appropriate. Use dead-letter when the message must not be retried, such as an unsupported request or a permanently invalid payload. The reason is retained with the delivery, and the message remains readable for history or diagnosis.
 `,
 	"recovery": `A delivery ID alone does not prove lease ownership. Lease-bound transitions require the current lease token.
 

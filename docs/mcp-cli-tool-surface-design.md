@@ -95,6 +95,11 @@ lease transition rather than a common agent operation. CLI owns it once its
 structured result is complete; MCP lease tracking is reconciled from durable
 delivery state rather than requiring `waypost_fail` to mutate the tracker.
 
+`dead-letter` is likewise CLI-only. It is an explicit terminal lease
+transition with no former MCP tool: it requires the current token, moves the
+delivery directly to `dead_letter`, preserves `attempt_count`, and returns the
+same structured transition shape as `fail`.
+
 Before deletion:
 
 - add group subscriber add, remove, and list CLI commands
@@ -166,6 +171,12 @@ Full record names below refer to the existing exported Waypost JSON records.
 | `waypost_group_remove_subscriber` | `group remove-subscriber --group ADDRESS --notify-address ADDRESS --json` | Updated subscriber record | Missing group: `not_found`; no active subscriber: `invalid_state` | `groups` |
 | `waypost_group_subscribers` | `group subscribers --group ADDRESS --json` | Active subscribers created/id ascending | Missing group: `not_found` | `groups` |
 | `waypost_address_inspect` | `address inspect --address ADDRESS --json` | `AddressInspection`; unbound is a successful `kind: "unbound"` result | Malformed address: `invalid_argument` | `diagnostics` |
+
+The additive CLI-only route is `dead-letter --delivery ID --lease-token TOKEN
+--reason TEXT --json`. It returns the delivery in `dead_letter` with its
+unchanged `attempt_count`; missing deliveries report `not_found`, while a
+non-leased delivery or token mismatch reports `invalid_state`. Its doc topic is
+`dead-letter`.
 
 ## MCP Registration
 
@@ -389,9 +400,10 @@ inspection error keeps the entry for a later retry but skips renewal. `recv` and
 claim history return the inspection error instead of presenting stale memory as
 authoritative.
 
-This is the root-cause fix that allows `waypost_fail` to be CLI-owned without an
-MCP-specific tracker mutation path. A CLI `fail` observed immediately by recv,
-claim history, or the renewal loop ends MCP ownership and is never renewed.
+This is the root-cause fix that allows `waypost_fail` and the CLI-only
+`dead-letter` command to operate without an MCP-specific tracker mutation path.
+A durable terminal transition observed immediately by recv, claim history, or
+the renewal loop ends MCP ownership and is never renewed.
 
 ### Post-claim count failure
 
@@ -521,7 +533,9 @@ Initial topics:
 - `recovery`
 - `history`
 - `groups`
+- `addresses`
 - `diagnostics`
+- `dead-letter`
 
 The doc command accepts explicit command-shaped aliases for these canonical
 topics and reports the canonical topic list with an unknown-topic error. It
@@ -599,8 +613,9 @@ turn.
 ### Move every lease completion to CLI
 
 Rejected because `ack`, `release`, and `defer` are common message-path
-operations. Exceptional `fail` is CLI-owned; durable-state reconciliation keeps
-the MCP tracker and renewal loop correct without exposing it as a tool.
+operations. Exceptional `fail` and `dead-letter` are CLI-owned; durable-state
+reconciliation keeps the MCP tracker and renewal loop correct without exposing
+them as tools.
 
 ### Move Agent Deck session tools to CLI
 

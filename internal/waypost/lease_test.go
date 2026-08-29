@@ -1182,6 +1182,71 @@ func TestFailRetryPolicyDeadLettersAfterThirdFailure(t *testing.T) {
 	assertStringSlicesEqual(t, eventTypes, want)
 }
 
+func TestDeadLetterStopsRetryWithoutIncrementingAttemptCount(t *testing.T) {
+	t.Parallel()
+
+	runtime, store := newLeaseTestStore(t)
+	defer runtime.Close()
+
+	sent := mustSendMessage(t, store, "workflow/reviewer/task-123", "agent/sender", "review request", "hello reviewer")
+
+	first, err := store.Receive(context.Background(), ReceiveParams{Address: "workflow/reviewer/task-123"})
+	if err != nil {
+		t.Fatalf("Receive(first) error = %v", err)
+	}
+	if _, err := store.Fail(context.Background(), first.DeliveryID, first.LeaseToken, "transient failure"); err != nil {
+		t.Fatalf("Fail() error = %v", err)
+	}
+
+	second, err := store.Receive(context.Background(), ReceiveParams{Address: "workflow/reviewer/task-123"})
+	if err != nil {
+		t.Fatalf("Receive(second) error = %v", err)
+	}
+	deadLettered, err := store.DeadLetter(context.Background(), second.DeliveryID, second.LeaseToken, "unsupported request")
+	if err != nil {
+		t.Fatalf("DeadLetter() error = %v", err)
+	}
+	if deadLettered.State != "dead_letter" {
+		t.Fatalf("DeadLetter() state = %q, want dead_letter", deadLettered.State)
+	}
+	if deadLettered.AttemptCount != 1 {
+		t.Fatalf("DeadLetter() attempt_count = %d, want unchanged count 1", deadLettered.AttemptCount)
+	}
+
+	if _, err := store.Receive(context.Background(), ReceiveParams{Address: "workflow/reviewer/task-123"}); !errors.Is(err, ErrNoMessage) {
+		t.Fatalf("Receive(after dead-letter) error = %v, want ErrNoMessage", err)
+	}
+	read, err := store.ReadDelivery(context.Background(), sent.DeliveryID)
+	if err != nil {
+		t.Fatalf("ReadDelivery() error = %v", err)
+	}
+	if read.State != "dead_letter" || read.Body != "hello reviewer" {
+		t.Fatalf("ReadDelivery() = state %q body %q, want retained dead-letter body", read.State, read.Body)
+	}
+
+	var lastErrorText string
+	if err := runtime.readDB.QueryRowContext(context.Background(), `
+SELECT last_error_text
+FROM deliveries
+WHERE delivery_id = ?
+`, sent.DeliveryID).Scan(&lastErrorText); err != nil {
+		t.Fatalf("read last_error_text error = %v", err)
+	}
+	if lastErrorText != "unsupported request" {
+		t.Fatalf("last_error_text = %q, want unsupported request", lastErrorText)
+	}
+
+	eventTypes := readDeliveryEventTypes(t, runtime, sent.DeliveryID)
+	want := []string{
+		"delivery_queued",
+		"delivery_leased",
+		"delivery_failed",
+		"delivery_leased",
+		"delivery_dead_letter",
+	}
+	assertStringSlicesEqual(t, eventTypes, want)
+}
+
 func newLeaseTestStore(t *testing.T) (*Runtime, *Store) {
 	t.Helper()
 

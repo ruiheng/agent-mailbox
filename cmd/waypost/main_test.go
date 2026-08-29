@@ -1928,6 +1928,11 @@ func TestCLIHelpExitsZeroAndPrintsUsage(t *testing.T) {
 			wantContains: "  forward             Forward a stored message or delivery",
 		},
 		{
+			name:         "root help lists dead-letter",
+			args:         []string{"--help"},
+			wantContains: "  dead-letter         Stop retrying a leased delivery",
+		},
+		{
 			name:         "send help",
 			args:         []string{"send", "--help"},
 			wantContains: "Usage:\n  waypost send --to ADDRESS [--to ADDRESS ...] --body-file PATH [options] [--json | --yaml] [--full] [--notify]",
@@ -1936,6 +1941,11 @@ func TestCLIHelpExitsZeroAndPrintsUsage(t *testing.T) {
 			name:         "renew help",
 			args:         []string{"renew", "--help"},
 			wantContains: "Usage:\n  waypost renew --delivery ID --lease-token TOKEN --for DURATION",
+		},
+		{
+			name:         "dead-letter help",
+			args:         []string{"dead-letter", "--help"},
+			wantContains: "Usage:\n  waypost dead-letter --delivery ID --lease-token TOKEN --reason TEXT [--json | --yaml]",
 		},
 		{
 			name:         "stale help",

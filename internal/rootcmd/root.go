@@ -56,7 +56,7 @@ func (a *App) Run(ctx context.Context, args []string) error {
 		return err
 	}
 	if len(rest) == 0 {
-		return errors.New("expected a command: mcp, codex-hook, install, doctor, migrate, doc, send, forward, recv, wait, watch, read, ack, renew, release, defer, undefer, fail, list, stale, group, or address")
+		return errors.New("expected a command: mcp, codex-hook, install, doctor, migrate, doc, send, forward, recv, wait, watch, read, ack, renew, release, defer, undefer, fail, dead-letter, list, stale, group, or address")
 	}
 	if rest[0] == "codex-hook" {
 		return a.runCodexHookCommand(ctx, rest[1:])
@@ -322,6 +322,7 @@ func (a *App) writeRootHelp() {
 		"  defer               Hide a leased delivery until a future time",
 		"  undefer             Make a deferred queued delivery visible now",
 		"  fail                Record a failed delivery attempt",
+		"  dead-letter         Stop retrying a leased delivery",
 		"",
 		"Global options:",
 		"  --state-dir PATH    Override waypost state directory",

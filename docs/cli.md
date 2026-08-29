@@ -297,7 +297,7 @@ Rules:
   and `group remove-subscriber`
 - use `send --to <group-address> --group` for group messages
 - use `list|wait|recv --for <group-address> --as <person>` for group reads
-- `watch`, `ack`, `renew`, `release`, `defer`, `undefer`, and `fail` stay personal-waypost-only
+- `watch`, `ack`, `renew`, `release`, `defer`, `undefer`, `fail`, and `dead-letter` stay personal-waypost-only
 - `--as` is caller-asserted identity in the trusted local workflow environment;
   it is not an authentication boundary
 
@@ -419,7 +419,7 @@ isolation, personal delivery states and transitions, per-person group reads,
 and the notification boundary. It does not assume MCP is available, prescribe
 an output format, or duplicate the command catalog. `--list` shows the available
 focused topics; initial topics are `mcp-cli-boundary`, `recovery`, `history`,
-`groups`, `addresses`, and `diagnostics`.
+`groups`, `addresses`, `diagnostics`, and `dead-letter`.
 One topic retains the plain prompt output. With multiple topics, each prompt is
 emitted in argument order as a `waypost: <topic>` block whose body is indented
 by two spaces. Command-shaped aliases are accepted when their routing is
@@ -428,6 +428,9 @@ unambiguous: `read` and `list` select `history`; `group` selects `groups`;
 common-flow names such as `send`, `recv`, `receive`, and `claim-history` select
 `mcp-cli-boundary`. Unknown-topic errors include the canonical topic list so
 callers do not need a separate `doc --list` call.
+
+The `dead-letter` topic explains when to stop retrying a leased delivery and
+how that differs from recording a retryable failure.
 
 ### `send`
 
@@ -711,6 +714,26 @@ Retry behavior in v1:
 
 - attempts 1 and 2 requeue immediately
 - attempt 3 moves the delivery to `dead_letter`
+
+### `dead-letter`
+
+Stop retrying a currently leased delivery immediately.
+
+```bash
+waypost dead-letter \
+  --delivery <delivery_id> \
+  --lease-token <lease_token> \
+  --reason "unsupported request" \
+  --json
+```
+
+Behavior:
+
+- requires the current lease token
+- moves the delivery directly from `leased` to `dead_letter`
+- does not increment `attempt_count`
+- records the reason and retains the message for history and diagnosis
+- use `fail` instead when another processing attempt remains appropriate
 
 ### `list`
 

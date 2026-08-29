@@ -9,7 +9,7 @@ The current MVP is intentionally narrow:
 - one local Unix user on one machine
 - direct delivery by endpoint address
 - SQLite metadata plus blob-backed message bodies
-- explicit `send`, `recv`, `wait`, `watch`, `list`, `stale`, `ack`, `renew`, `release`, `defer`, `undefer`, and `fail`
+- explicit `send`, `recv`, `wait`, `watch`, `list`, `stale`, `ack`, `renew`, `release`, `defer`, `undefer`, `fail`, and `dead-letter`
 - no daemon, no network transport, no adapter-specific correctness dependency
 
 ## Rename note
@@ -522,6 +522,17 @@ waypost --state-dir /tmp/waypost-demo \
 ```
 
 After `undefer`, call `recv` again and use the new lease token before acking.
+
+When a leased delivery must not be retried, move it directly to `dead_letter`.
+This terminal action records the reason without incrementing `attempt_count`:
+
+```bash
+waypost --state-dir /tmp/waypost-demo \
+  dead-letter --delivery <delivery_id> --lease-token <lease_token> --reason "unsupported request"
+```
+
+Use `waypost doc dead-letter` for the distinction between a retryable `fail`
+and an explicit terminal decision.
 
 List previously acked deliveries for one queue:
 
