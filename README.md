@@ -298,10 +298,15 @@ messages. The string form returns the existing single-send output.
 
 Supply the message content with exactly one of `body` or `body_file`.
 `body` keeps the existing inline-string behavior. `body_file` is a filesystem
-path read by the MCP server before sending; prefer an absolute path because a
-relative path is resolved from the server process's working directory. The
-file is read once and the resulting snapshot is reused for every recipient in
-a batch. Inline and file-backed empty bodies are rejected.
+path read by the MCP server before sending. It requires a bound
+`default_workdir`; relative paths resolve from that directory, and absolute
+paths must remain inside it. Waypost resolves symlinks and Windows junctions
+before enforcing the boundary; if resolution is unsupported or fails, the
+send is rejected. It also rejects Windows alternate data streams and
+non-regular files, and limits file-backed bodies to 10 MiB. If the workdir or
+path boundary cannot be established, the send is rejected. The file is read
+once and the resulting snapshot is reused for every recipient in a batch.
+Inline and file-backed empty bodies are rejected.
 
 `waypost_send` always uses the fixed wakeup text for supported remote notify
 paths. Set `disable_notify_message = true` to skip only that immediate send-time

@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"os"
 	"sort"
 	"strings"
 	"time"
@@ -100,7 +99,7 @@ func waypostSendInputSchema() *jsonschema.Schema {
 	if !ok {
 		panic("build waypost_send input schema: missing body_file")
 	}
-	bodyFile.Description = "Filesystem path read by the MCP server for the message body. Supply exactly one of body or body_file; prefer an absolute path."
+	bodyFile.Description = "Message body file inside the bound default_workdir. Relative paths resolve from default_workdir. Supply exactly one of body or body_file. Files outside that workspace, non-regular files, and files larger than 10 MiB are rejected."
 	return schema
 }
 
@@ -245,7 +244,7 @@ func (s *Service) registerWaypostTools(server *mcp.Server) {
 	}
 	addToolRequiringWaypostStatus(server, s, &mcp.Tool{
 		Name:        "waypost_send",
-		Description: "Send a Waypost message. Set `to` to one recipient address for a single send, or an array of 1-10 recipient addresses for a batch. Supply the content with exactly one of `body` or `body_file`; the latter is read by the MCP server. Push-notify a non-local target when supported. Set disable_notify_message=true to skip notification.",
+		Description: "Send a Waypost message. Set `to` to one recipient address for a single send, or an array of 1-10 recipient addresses for a batch. Supply the content with exactly one of `body` or `body_file`; the latter is read by the MCP server only from the bound default_workdir. Push-notify a non-local target when supported. Set disable_notify_message=true to skip notification.",
 		InputSchema: waypostSendInputSchema(),
 	}, s.waypostSend)
 	addToolRequiringWaypostStatus(server, s, &mcp.Tool{
@@ -478,7 +477,7 @@ func prepareWaypostSendTarget(req *mcp.CallToolRequest, input *waypostSendInput)
 	return false, nil
 }
 
-func prepareWaypostSendBody(req *mcp.CallToolRequest, input *waypostSendInput) error {
+func (s *Service) prepareWaypostSendBody(req *mcp.CallToolRequest, input *waypostSendInput) error {
 	if req == nil || len(req.Params.Arguments) == 0 {
 		return errors.New("waypost_send requires body or body_file")
 	}
@@ -506,15 +505,15 @@ func prepareWaypostSendBody(req *mcp.CallToolRequest, input *waypostSendInput) e
 	if strings.TrimSpace(bodyFile) == "" {
 		return errors.New("waypost_send body_file must not be empty")
 	}
-	body, err := os.ReadFile(bodyFile)
+	body, resolvedBodyFile, err := readWaypostSendBodyFile(bodyFile, s.sessions.snapshotState().DefaultWorkdir)
 	if err != nil {
-		return fmt.Errorf("read waypost_send body_file %q: %w", bodyFile, err)
+		return err
 	}
 	if len(body) == 0 {
 		return waypost.ErrEmptyBody
 	}
 	input.Body = string(body)
-	input.BodyFile = bodyFile
+	input.BodyFile = resolvedBodyFile
 	return nil
 }
 
@@ -684,7 +683,7 @@ func (s *Service) waypostSend(ctx context.Context, req *mcp.CallToolRequest, inp
 	if err != nil {
 		return nil, nil, err
 	}
-	if err := prepareWaypostSendBody(req, &input); err != nil {
+	if err := s.prepareWaypostSendBody(req, &input); err != nil {
 		return nil, nil, err
 	}
 	var out map[string]any
