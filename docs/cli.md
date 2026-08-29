@@ -59,7 +59,7 @@ The installer merges three idempotent handlers into `$CODEX_HOME/hooks.json` (or
   not trigger a mailbox check on their own; when the transcript's latest user
   message is the exact Waypost nudge, it emits no context
 - a `UserPromptSubmit` handler recognizes the narrow Waypost nudge form and
-  runs `codex mcp list --json` from the session working directory; it injects
+  runs `codex mcp get waypost --json` from the session working directory; it injects
   one explicit receive instruction: when Waypost is enabled, it tells the agent
   that the `waypost_recv` MCP tool is available and to use it instead of the CLI
   for that pending receive; when Waypost is unavailable, it instructs use of the
@@ -86,7 +86,7 @@ waypost doctor codex-hook
 ```
 
 The doctor verifies both handler definitions and reports whether
-`codex mcp list --json` sees Waypost for a new Codex process started in the
+`codex mcp get waypost --json` sees Waypost for a new Codex process started in the
 current directory. This includes trusted project configuration. The MCP result
 is diagnostic only: an already-running session, profile, or `-c` override may
 differ. Codex does not expose hook trust through a documented noninteractive

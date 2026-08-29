@@ -187,10 +187,10 @@ func TestRunUserPromptNudgeStartsCodexMCPProbe(t *testing.T) {
 	binDir := t.TempDir()
 	codexPath := filepath.Join(binDir, "codex")
 	probe := `#!/bin/sh
-if [ "$1" != "mcp" ] || [ "$2" != "list" ] || [ "$3" != "--json" ]; then
+if [ "$1" != "mcp" ] || [ "$2" != "get" ] || [ "$3" != "waypost" ] || [ "$4" != "--json" ]; then
   exit 9
 fi
-printf '%s\n' '[{"name":"waypost","enabled":true}]'
+printf '%s\n' '{"name":"waypost","enabled":true}'
 `
 	if err := os.WriteFile(codexPath, []byte(probe), 0o700); err != nil {
 		t.Fatalf("WriteFile(codex probe) error = %v", err)
@@ -553,9 +553,9 @@ func TestParseWaypostMCPAvailable(t *testing.T) {
 		available bool
 		wantError bool
 	}{
-		{name: "enabled", payload: `[{"name":"waypost","enabled":true}]`, available: true},
-		{name: "disabled", payload: `[{"name":"waypost","enabled":false}]`},
-		{name: "missing", payload: `[{"name":"other","enabled":true}]`},
+		{name: "enabled", payload: `{"name":"waypost","enabled":true}`, available: true},
+		{name: "disabled", payload: `{"name":"waypost","enabled":false}`},
+		{name: "wrong server", payload: `{"name":"other","enabled":true}`, wantError: true},
 		{name: "invalid", payload: `{`, wantError: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -568,6 +568,46 @@ func TestParseWaypostMCPAvailable(t *testing.T) {
 				t.Fatalf("parseWaypostMCPAvailable() = %v, want %v", available, tc.available)
 			}
 		})
+	}
+}
+
+func TestCurrentDirectoryWaypostMCPAvailableTreatsMissingServerAsUnavailable(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("test helper is a POSIX shell script")
+	}
+
+	binDir := t.TempDir()
+	codexPath := filepath.Join(binDir, "codex")
+	probe := `#!/bin/sh
+i=0
+while [ "$i" -lt 100 ]; do
+  printf '%s' 'verbose startup warning '
+  i=$((i + 1))
+done >&2
+printf '\n' >&2
+printf '%s\n' "Error: No MCP server named 'waypost' found." >&2
+exit 1
+`
+	if err := os.WriteFile(codexPath, []byte(probe), 0o700); err != nil {
+		t.Fatalf("WriteFile(codex probe) error = %v", err)
+	}
+	t.Setenv("PATH", binDir)
+
+	available, err := CurrentDirectoryWaypostMCPAvailable(context.Background())
+	if err != nil || available {
+		t.Fatalf("CurrentDirectoryWaypostMCPAvailable() = %v, %v; want unavailable", available, err)
+	}
+}
+
+func TestBoundedProbeErrorDetailPreservesHeadAndTail(t *testing.T) {
+	t.Parallel()
+
+	detail := boundedProbeErrorDetail([]byte("error prefix: " + strings.Repeat("x", 600) + " :root cause"))
+	if !strings.HasPrefix(detail, "error prefix: ") || !strings.HasSuffix(detail, " :root cause") {
+		t.Fatalf("boundedProbeErrorDetail() = %q, want preserved head and tail", detail)
+	}
+	if got := len([]rune(detail)); got != 500 {
+		t.Fatalf("boundedProbeErrorDetail() length = %d, want 500 runes", got)
 	}
 }
 

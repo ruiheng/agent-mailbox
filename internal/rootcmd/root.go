@@ -338,7 +338,7 @@ func (a *App) writeCodexHookHelp() {
 		"  waypost codex-hook",
 		"",
 		"Emit the SessionStart hookSpecificOutput used after Codex compaction.",
-		"For a Waypost nudge on UserPromptSubmit, probe `codex mcp list --json` and",
+		"For a Waypost nudge on UserPromptSubmit, probe `codex mcp get waypost --json` and",
 		"emit one explicit receive instruction: waypost_recv when available, CLI otherwise.",
 		"For PreToolUse Bash calls, warn before waypost wait; when MCP is available,",
 		"deny waypost status, recv, receive, and send in favor of Waypost MCP tools.",

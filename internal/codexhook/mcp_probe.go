@@ -12,6 +12,8 @@ import (
 
 const mcpProbeTimeout = 4 * time.Second
 
+const waypostMCPServerName = "waypost"
+
 type waypostMCPAvailability uint8
 
 const (
@@ -42,18 +44,21 @@ func detectWaypostMCP(ctx context.Context, probe waypostMCPProbe) (waypostMCPAva
 func CurrentDirectoryWaypostMCPAvailable(ctx context.Context) (bool, error) {
 	probeCtx, cancel := context.WithTimeout(ctx, mcpProbeTimeout)
 	defer cancel()
-	output, err := exec.CommandContext(probeCtx, "codex", "mcp", "list", "--json").Output()
+	output, err := exec.CommandContext(probeCtx, "codex", "mcp", "get", waypostMCPServerName, "--json").Output()
 	if err != nil {
 		if probeErr := probeCtx.Err(); probeErr != nil {
-			return false, fmt.Errorf("run `codex mcp list --json`: %w", probeErr)
+			return false, fmt.Errorf("run `codex mcp get waypost --json`: %w", probeErr)
 		}
 		var exitErr *exec.ExitError
 		if errors.As(err, &exitErr) {
+			if isMissingWaypostMCPError(string(exitErr.Stderr)) {
+				return false, nil
+			}
 			if detail := boundedProbeErrorDetail(exitErr.Stderr); detail != "" {
-				return false, fmt.Errorf("run `codex mcp list --json`: %w: %s", err, detail)
+				return false, fmt.Errorf("run `codex mcp get waypost --json`: %w: %s", err, detail)
 			}
 		}
-		return false, fmt.Errorf("run `codex mcp list --json`: %w", err)
+		return false, fmt.Errorf("run `codex mcp get waypost --json`: %w", err)
 	}
 	return parseWaypostMCPAvailable(output)
 }
@@ -63,23 +68,31 @@ func boundedProbeErrorDetail(stderr []byte) string {
 	const maxRunes = 500
 	runes := []rune(detail)
 	if len(runes) > maxRunes {
-		detail = string(runes[:maxRunes]) + "…"
+		const marker = "…"
+		headRunes := maxRunes / 2
+		tailRunes := maxRunes - headRunes - len([]rune(marker))
+		detail = string(runes[:headRunes]) + marker + string(runes[len(runes)-tailRunes:])
 	}
 	return detail
 }
 
+func isMissingWaypostMCPError(detail string) bool {
+	detail = strings.ToLower(detail)
+	singleQuoted := "no mcp server named '" + waypostMCPServerName + "' found"
+	doubleQuoted := `no mcp server named "` + waypostMCPServerName + `" found`
+	return strings.Contains(detail, singleQuoted) || strings.Contains(detail, doubleQuoted)
+}
+
 func parseWaypostMCPAvailable(output []byte) (bool, error) {
-	var servers []struct {
+	var server struct {
 		Name    string `json:"name"`
 		Enabled bool   `json:"enabled"`
 	}
-	if err := json.Unmarshal(output, &servers); err != nil {
-		return false, fmt.Errorf("parse `codex mcp list --json`: %w", err)
+	if err := json.Unmarshal(output, &server); err != nil {
+		return false, fmt.Errorf("parse `codex mcp get waypost --json`: %w", err)
 	}
-	for _, server := range servers {
-		if server.Name == "waypost" {
-			return server.Enabled, nil
-		}
+	if server.Name != waypostMCPServerName {
+		return false, fmt.Errorf("parse `codex mcp get waypost --json`: returned server %q", server.Name)
 	}
-	return false, nil
+	return server.Enabled, nil
 }
