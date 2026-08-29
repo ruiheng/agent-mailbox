@@ -117,8 +117,8 @@ func TestRunUserPromptNudgeSelectsReceivePathFromCodexProbe(t *testing.T) {
 			name:        "MCP available",
 			available:   true,
 			wantContext: MCPNudgeContext,
-			wantText:    "Use it—not the Waypost CLI—to receive this pending delivery",
-			rejectText:  "Do not use the Waypost CLI.",
+			wantText:    "The waypost_recv MCP tool is available. Use it instead of the Waypost CLI.",
+			rejectText:  "Use it—not the Waypost CLI",
 		},
 		{
 			name:        "MCP unavailable",

@@ -35,7 +35,7 @@ const AdditionalContext = `Do not check or receive Waypost merely because compac
 Only check Waypost after a fresh live NOTICE, an explicit user request, or while continuing an already-claimed delivery.
 Resume the task that was active before compaction.`
 
-const MCPNudgeContext = `The Waypost MCP tool waypost_recv is available. Use it—not the Waypost CLI—to receive this pending delivery.`
+const MCPNudgeContext = `The waypost_recv MCP tool is available. Use it instead of the Waypost CLI.`
 
 const CLINudgeContext = `The Waypost MCP tool waypost_recv is unavailable. Receive the pending delivery with the Waypost CLI.`
 
