@@ -3,8 +3,10 @@ package codexhook
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os/exec"
+	"strings"
 	"time"
 )
 
@@ -20,15 +22,15 @@ const (
 
 type waypostMCPProbe func(context.Context) (bool, error)
 
-func detectWaypostMCP(ctx context.Context, probe waypostMCPProbe) waypostMCPAvailability {
+func detectWaypostMCP(ctx context.Context, probe waypostMCPProbe) (waypostMCPAvailability, error) {
 	available, err := probe(ctx)
 	if err != nil {
-		return waypostMCPUnknown
+		return waypostMCPUnknown, err
 	}
 	if available {
-		return waypostMCPAvailable
+		return waypostMCPAvailable, nil
 	}
-	return waypostMCPUnavailable
+	return waypostMCPUnavailable, nil
 }
 
 // CurrentDirectoryWaypostMCPAvailable reports whether Waypost is enabled in
@@ -42,9 +44,28 @@ func CurrentDirectoryWaypostMCPAvailable(ctx context.Context) (bool, error) {
 	defer cancel()
 	output, err := exec.CommandContext(probeCtx, "codex", "mcp", "list", "--json").Output()
 	if err != nil {
+		if probeErr := probeCtx.Err(); probeErr != nil {
+			return false, fmt.Errorf("run `codex mcp list --json`: %w", probeErr)
+		}
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) {
+			if detail := boundedProbeErrorDetail(exitErr.Stderr); detail != "" {
+				return false, fmt.Errorf("run `codex mcp list --json`: %w: %s", err, detail)
+			}
+		}
 		return false, fmt.Errorf("run `codex mcp list --json`: %w", err)
 	}
 	return parseWaypostMCPAvailable(output)
+}
+
+func boundedProbeErrorDetail(stderr []byte) string {
+	detail := strings.TrimSpace(string(stderr))
+	const maxRunes = 500
+	runes := []rune(detail)
+	if len(runes) > maxRunes {
+		detail = string(runes[:maxRunes]) + "…"
+	}
+	return detail
 }
 
 func parseWaypostMCPAvailable(output []byte) (bool, error) {

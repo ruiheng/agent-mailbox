@@ -112,6 +112,7 @@ func TestRunUserPromptNudgeSelectsReceivePathFromCodexProbe(t *testing.T) {
 		wantContext string
 		wantText    string
 		rejectText  string
+		wantWarning string
 	}{
 		{
 			name:        "MCP available",
@@ -130,8 +131,9 @@ func TestRunUserPromptNudgeSelectsReceivePathFromCodexProbe(t *testing.T) {
 			name:        "probe failed",
 			probeErr:    errors.New("codex unavailable"),
 			wantContext: MCPProbeFailedNudgeContext,
-			wantText:    "MCP tool waypost_recv is unknown",
-			rejectText:  "MCP tool waypost_recv is available. Use it",
+			wantText:    "Look for the waypost_recv MCP tool",
+			rejectText:  "Receive the pending delivery with the Waypost CLI",
+			wantWarning: "Waypost MCP probe failed: codex unavailable",
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -169,6 +171,9 @@ func TestRunUserPromptNudgeSelectsReceivePathFromCodexProbe(t *testing.T) {
 			}
 			if strings.Contains(specific.AdditionalContext, tc.rejectText) {
 				t.Fatalf("additionalContext = %q, reject %q", specific.AdditionalContext, tc.rejectText)
+			}
+			if payload.SystemMessage != tc.wantWarning {
+				t.Fatalf("systemMessage = %q, want %q", payload.SystemMessage, tc.wantWarning)
 			}
 		})
 	}
@@ -316,23 +321,28 @@ func TestRunPreToolUseDeniesMCPPreferredWaypostCLICommands(t *testing.T) {
 func TestRunPreToolUseAllowsMCPPreferredWaypostCLIWhenMCPIsNotKnownAvailable(t *testing.T) {
 	t.Parallel()
 
-	for _, tc := range []struct {
-		name      string
-		available bool
-		probeErr  error
-	}{
-		{name: "unavailable"},
-		{name: "probe failed", probeErr: errors.New("codex unavailable")},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-			_, emitted := runPreToolHook(t, "waypost recv --for workflow/reviewer", func(context.Context) (bool, error) {
-				return tc.available, tc.probeErr
-			})
-			if emitted {
-				t.Fatal("PreToolUse emitted output, want CLI command allowed")
-			}
-		})
+	_, emitted := runPreToolHook(t, "waypost recv --for workflow/reviewer", func(context.Context) (bool, error) {
+		return false, nil
+	})
+	if emitted {
+		t.Fatal("PreToolUse emitted output, want unavailable MCP to leave CLI command untouched")
+	}
+}
+
+func TestRunPreToolUseReportsMCPProbeFailureWithoutDenyingCLI(t *testing.T) {
+	t.Parallel()
+
+	output, emitted := runPreToolHook(t, "waypost recv --for workflow/reviewer", func(context.Context) (bool, error) {
+		return false, errors.New("codex unavailable")
+	})
+	if !emitted {
+		t.Fatal("PreToolUse output is empty, want probe failure warning")
+	}
+	if output.SystemMessage != "Waypost MCP probe failed: codex unavailable" {
+		t.Fatalf("systemMessage = %q, want probe failure reason", output.SystemMessage)
+	}
+	if output.HookSpecificOutput.PermissionDecision != "" {
+		t.Fatalf("permissionDecision = %q, want CLI command allowed", output.HookSpecificOutput.PermissionDecision)
 	}
 }
 
@@ -558,6 +568,28 @@ func TestParseWaypostMCPAvailable(t *testing.T) {
 				t.Fatalf("parseWaypostMCPAvailable() = %v, want %v", available, tc.available)
 			}
 		})
+	}
+}
+
+func TestCurrentDirectoryWaypostMCPAvailableReportsCommandStderr(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("test helper is a POSIX shell script")
+	}
+
+	binDir := t.TempDir()
+	codexPath := filepath.Join(binDir, "codex")
+	probe := `#!/bin/sh
+printf '%s\n' 'invalid Codex MCP configuration' >&2
+exit 9
+`
+	if err := os.WriteFile(codexPath, []byte(probe), 0o700); err != nil {
+		t.Fatalf("WriteFile(codex probe) error = %v", err)
+	}
+	t.Setenv("PATH", binDir)
+
+	available, err := CurrentDirectoryWaypostMCPAvailable(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "invalid Codex MCP configuration") {
+		t.Fatalf("CurrentDirectoryWaypostMCPAvailable() = %v, %v; want stderr detail", available, err)
 	}
 }
 

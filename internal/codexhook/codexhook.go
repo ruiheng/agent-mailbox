@@ -39,7 +39,7 @@ const MCPNudgeContext = `The waypost_recv MCP tool is available. Use it instead 
 
 const CLINudgeContext = `The Waypost MCP tool waypost_recv is unavailable. Receive the pending delivery with the Waypost CLI.`
 
-const MCPProbeFailedNudgeContext = `Availability of the Waypost MCP tool waypost_recv is unknown. Receive the pending delivery with the Waypost CLI.`
+const MCPProbeFailedNudgeContext = `Look for the waypost_recv MCP tool. Use the Waypost CLI only if it is unavailable.`
 
 const WaitPollingContext = `Do not poll Waypost. Continue other available work; if none remains, stop completely.`
 
@@ -61,6 +61,7 @@ type hookInput struct {
 }
 
 type hookOutput struct {
+	SystemMessage      string             `json:"systemMessage,omitempty"`
 	HookSpecificOutput hookSpecificOutput `json:"hookSpecificOutput"`
 }
 
@@ -111,9 +112,10 @@ func runWithMCPProbe(ctx context.Context, r io.Reader, w io.Writer, probe waypos
 		if !LooksLikeWaypostNudge(input.Prompt) {
 			return nil
 		}
-		switch detectWaypostMCP(ctx, probe) {
+		availability, probeErr := detectWaypostMCP(ctx, probe)
+		switch availability {
 		case waypostMCPUnknown:
-			return writeOutput(w, "UserPromptSubmit", MCPProbeFailedNudgeContext)
+			return writeOutputWithSystemMessage(w, "UserPromptSubmit", MCPProbeFailedNudgeContext, mcpProbeFailureMessage(probeErr))
 		case waypostMCPAvailable:
 			return writeOutput(w, "UserPromptSubmit", MCPNudgeContext)
 		default:
@@ -131,7 +133,14 @@ func runWithMCPProbe(ctx context.Context, r io.Reader, w io.Writer, probe waypos
 			return writeOutput(w, "PreToolUse", WaitPollingContext)
 		}
 		denialReason, guarded := waypostMCPDenialReason(command)
-		if !guarded || detectWaypostMCP(ctx, probe) != waypostMCPAvailable {
+		if !guarded {
+			return nil
+		}
+		availability, probeErr := detectWaypostMCP(ctx, probe)
+		if availability == waypostMCPUnknown {
+			return writeSystemMessage(w, mcpProbeFailureMessage(probeErr))
+		}
+		if availability == waypostMCPUnavailable {
 			return nil
 		}
 		return writeDenyOutput(w, denialReason)
@@ -145,12 +154,30 @@ func WriteOutput(w io.Writer) error {
 }
 
 func writeOutput(w io.Writer, eventName, additionalContext string) error {
+	return writeOutputWithSystemMessage(w, eventName, additionalContext, "")
+}
+
+func writeOutputWithSystemMessage(w io.Writer, eventName, additionalContext, systemMessage string) error {
 	return json.NewEncoder(w).Encode(hookOutput{
+		SystemMessage: systemMessage,
 		HookSpecificOutput: hookSpecificOutput{
 			HookEventName:     eventName,
 			AdditionalContext: additionalContext,
 		},
 	})
+}
+
+func mcpProbeFailureMessage(err error) string {
+	if err == nil {
+		return "Waypost MCP probe failed for an unknown reason."
+	}
+	return fmt.Sprintf("Waypost MCP probe failed: %v", err)
+}
+
+func writeSystemMessage(w io.Writer, systemMessage string) error {
+	return json.NewEncoder(w).Encode(struct {
+		SystemMessage string `json:"systemMessage"`
+	}{SystemMessage: systemMessage})
 }
 
 func writeDenyOutput(w io.Writer, reason string) error {
