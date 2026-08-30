@@ -1462,6 +1462,18 @@ func TestInvalidCLIPathsDoNotCreateRuntimeState(t *testing.T) {
 			name: "fail missing reason",
 			args: []string{"fail", "--delivery", "dlv_123", "--lease-token", "lease_token"},
 		},
+		{
+			name: "dead-letter missing delivery",
+			args: []string{"dead-letter", "--lease-token", "lease_token", "--reason", "unsupported request"},
+		},
+		{
+			name: "dead-letter missing lease token",
+			args: []string{"dead-letter", "--delivery", "dlv_123", "--reason", "unsupported request"},
+		},
+		{
+			name: "dead-letter missing reason",
+			args: []string{"dead-letter", "--delivery", "dlv_123", "--lease-token", "lease_token"},
+		},
 	}
 
 	for _, tc := range testCases {
@@ -1605,6 +1617,11 @@ func TestHelpCLIPathsDoNotCreateRuntimeState(t *testing.T) {
 			name:         "undefer help",
 			args:         []string{"undefer", "--help"},
 			wantContains: "Usage:\n  waypost undefer --delivery ID",
+		},
+		{
+			name:         "dead-letter help",
+			args:         []string{"dead-letter", "--help"},
+			wantContains: "Usage:\n  waypost dead-letter --delivery ID --lease-token TOKEN --reason TEXT [--json | --yaml]",
 		},
 		{
 			name:         "group help",

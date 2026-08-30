@@ -210,6 +210,48 @@ func (a *App) prepareFailCommand(args []string) (preparedCommand, error) {
 	}, nil
 }
 
+func (a *App) prepareDeadLetterCommand(args []string) (preparedCommand, error) {
+	fs := flag.NewFlagSet("waypost dead-letter", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+
+	var deliveryID string
+	var leaseToken string
+	var reason string
+	var formats outputFlags
+	fs.StringVar(&deliveryID, "delivery", "", "delivery id")
+	fs.StringVar(&leaseToken, "lease-token", "", "lease token")
+	fs.StringVar(&reason, "reason", "", "dead-letter reason")
+	formats.register(fs, "emit JSON", "emit YAML")
+
+	if err := a.parseCommandFlags(fs, args, a.writeDeadLetterHelp); err != nil {
+		return nil, err
+	}
+	if err := requireFlag(deliveryID, "--delivery"); err != nil {
+		return nil, err
+	}
+	if err := requireFlag(leaseToken, "--lease-token"); err != nil {
+		return nil, err
+	}
+	if err := requireFlag(reason, "--reason"); err != nil {
+		return nil, err
+	}
+	format, err := formats.resolve()
+	if err != nil {
+		return nil, err
+	}
+
+	return func(ctx context.Context, store *Store) error {
+		result, err := store.DeadLetter(ctx, deliveryID, leaseToken, reason)
+		if err != nil {
+			return err
+		}
+		if format != outputFormatText {
+			return a.writeStructuredOutput(format, result)
+		}
+		return a.writeDeliveryTransitionResultText(result)
+	}, nil
+}
+
 func (a *App) writeAckHelp() {
 	writeHelp(a.stdout, []string{
 		"Usage:",
@@ -253,6 +295,17 @@ func (a *App) writeFailHelp() {
 	writeHelp(a.stdout, []string{
 		"Usage:",
 		"  waypost fail --delivery ID --lease-token TOKEN --reason TEXT [--json | --yaml]",
+		"",
+		"Options:",
+		"  --json              Emit JSON",
+		"  --yaml              Emit YAML",
+	})
+}
+
+func (a *App) writeDeadLetterHelp() {
+	writeHelp(a.stdout, []string{
+		"Usage:",
+		"  waypost dead-letter --delivery ID --lease-token TOKEN --reason TEXT [--json | --yaml]",
 		"",
 		"Options:",
 		"  --json              Emit JSON",

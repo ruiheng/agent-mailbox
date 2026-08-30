@@ -392,6 +392,8 @@ Compatibility rules:
 
 - existing `recv`, `ack`, `release`, `defer`, `undefer`, `fail`, `list`, and `read`
   behavior remains valid
+- `dead-letter` is an additive terminal transition with the same lease-ownership
+  rules
 - persisted schema stays unchanged
 - old clients that do not call `renew` still work under current TTL rules
 - MCP-driven clients can opt into short TTL plus auto-renew through the new

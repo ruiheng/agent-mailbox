@@ -56,7 +56,7 @@ func (a *App) Run(ctx context.Context, args []string) error {
 		return err
 	}
 	if len(rest) == 0 {
-		return errors.New("expected a command: mcp, codex-hook, install, doctor, migrate, doc, send, forward, recv, wait, watch, read, ack, renew, release, defer, undefer, fail, list, stale, group, or address")
+		return errors.New("expected a command: mcp, codex-hook, install, doctor, migrate, doc, send, forward, recv, wait, watch, read, ack, renew, release, defer, undefer, fail, dead-letter, list, stale, group, or address")
 	}
 	if rest[0] == "codex-hook" {
 		return a.runCodexHookCommand(ctx, rest[1:])
@@ -165,7 +165,7 @@ func (a *App) runDoctorCommand(ctx context.Context, args []string) error {
 	} else if available {
 		mcpStatus = "available to a new Codex process in the current directory (an already-running session, profile, or `-c` override may differ)"
 	}
-	_, err = fmt.Fprintf(a.stdout, "Codex compact hook: configured\nCodex nudge hook: configured\nCodex wait polling guard: configured\nCodex hook trust: not checked; verify with `/hooks` in Codex\nWaypost MCP: %s\nHooks file: %s\nCommand: %s\n", mcpStatus, result.Path, result.Command)
+	_, err = fmt.Fprintf(a.stdout, "Codex compact hook: configured\nCodex nudge hook: configured\nCodex wait polling guard: configured\nCodex receive completion tracker: configured\nCodex nudge state cleanup: configured\nCodex hook trust: not checked; verify with `/hooks` in Codex\nWaypost MCP: %s\nHooks file: %s\nCommand: %s\n", mcpStatus, result.Path, result.Command)
 	return err
 }
 
@@ -322,6 +322,7 @@ func (a *App) writeRootHelp() {
 		"  defer               Hide a leased delivery until a future time",
 		"  undefer             Make a deferred queued delivery visible now",
 		"  fail                Record a failed delivery attempt",
+		"  dead-letter         Stop retrying a leased delivery",
 		"",
 		"Global options:",
 		"  --state-dir PATH    Override waypost state directory",
@@ -337,9 +338,10 @@ func (a *App) writeCodexHookHelp() {
 		"Usage:",
 		"  waypost codex-hook",
 		"",
-		"Emit the SessionStart hookSpecificOutput used after Codex compaction.",
+		"Track pending and consumed Waypost nudges for the current Codex session.",
 		"For a Waypost nudge on UserPromptSubmit, probe `codex mcp get waypost --json` and",
-		"emit one explicit receive instruction: waypost_recv when available, CLI otherwise.",
+		"emit one receive instruction: waypost_recv when available, CLI otherwise.",
+		"After a successful receive, SessionStart compact emits an anti-repeat guard.",
 		"For PreToolUse Bash calls, warn before waypost wait; when MCP is available,",
 		"deny waypost status, recv, receive, and send in favor of Waypost MCP tools.",
 	})
@@ -359,7 +361,7 @@ func (a *App) writeInstallCodexHookHelp() {
 		"Usage:",
 		"  waypost install codex-hook",
 		"",
-		"Merge SessionStart compact, UserPromptSubmit nudge, and PreToolUse wait hooks",
+		"Merge Codex nudge lifecycle, compact guard, receive tracking, and wait hooks",
 		"into $CODEX_HOME/hooks.json.",
 		"The command is idempotent and preserves unrelated hooks.",
 		"Review new or changed non-managed hooks with `/hooks` in Codex before use.",

@@ -1124,7 +1124,7 @@ func TestCLISendYAMLOutputIsCompact(t *testing.T) {
 	}
 }
 
-func TestCLIRecvNoMessageExitCodeAndSilence(t *testing.T) {
+func TestCLIRecvNoMessageExitCodeAndStatus(t *testing.T) {
 	stateDir := filepath.Join(t.TempDir(), "waypost-state")
 
 	immediate := runCLI(t, "", "--state-dir", stateDir,
@@ -1134,11 +1134,45 @@ func TestCLIRecvNoMessageExitCodeAndSilence(t *testing.T) {
 	if immediate.exitCode != 2 {
 		t.Fatalf("immediate recv exit code = %d, want 2; stderr = %q", immediate.exitCode, immediate.stderr)
 	}
-	if immediate.stdout != "" {
-		t.Fatalf("immediate recv stdout = %q, want empty", immediate.stdout)
+	if immediate.stdout != "status=no_message\n" {
+		t.Fatalf("immediate recv stdout = %q, want no-message status", immediate.stdout)
 	}
 	if immediate.stderr != "" {
 		t.Fatalf("immediate recv stderr = %q, want empty", immediate.stderr)
+	}
+
+	structured := runCLI(t, "", "--state-dir", stateDir,
+		"recv",
+		"--for", "workflow/empty",
+		"--json",
+	)
+	if structured.exitCode != 2 {
+		t.Fatalf("JSON recv exit code = %d, want 2; stderr = %q", structured.exitCode, structured.stderr)
+	}
+	if structured.stderr != "" {
+		t.Fatalf("JSON recv stderr = %q, want empty", structured.stderr)
+	}
+	var output map[string]any
+	if err := json.Unmarshal([]byte(structured.stdout), &output); err != nil {
+		t.Fatalf("json.Unmarshal(JSON recv output) error = %v; stdout = %q", err, structured.stdout)
+	}
+	if output["status"] != "no_message" {
+		t.Fatalf("JSON recv status = %v, want no_message", output["status"])
+	}
+
+	yamlOutput := runCLI(t, "", "--state-dir", stateDir,
+		"recv",
+		"--for", "workflow/empty",
+		"--yaml",
+	)
+	if yamlOutput.exitCode != 2 {
+		t.Fatalf("YAML recv exit code = %d, want 2; stderr = %q", yamlOutput.exitCode, yamlOutput.stderr)
+	}
+	if yamlOutput.stderr != "" {
+		t.Fatalf("YAML recv stderr = %q, want empty", yamlOutput.stderr)
+	}
+	if !strings.HasPrefix(yamlOutput.stdout, "status: \"no_message\"\n") {
+		t.Fatalf("YAML recv stdout = %q, want no-message status", yamlOutput.stdout)
 	}
 }
 
@@ -1928,6 +1962,11 @@ func TestCLIHelpExitsZeroAndPrintsUsage(t *testing.T) {
 			wantContains: "  forward             Forward a stored message or delivery",
 		},
 		{
+			name:         "root help lists dead-letter",
+			args:         []string{"--help"},
+			wantContains: "  dead-letter         Stop retrying a leased delivery",
+		},
+		{
 			name:         "send help",
 			args:         []string{"send", "--help"},
 			wantContains: "Usage:\n  waypost send --to ADDRESS [--to ADDRESS ...] --body-file PATH [options] [--json | --yaml] [--full] [--notify]",
@@ -1936,6 +1975,11 @@ func TestCLIHelpExitsZeroAndPrintsUsage(t *testing.T) {
 			name:         "renew help",
 			args:         []string{"renew", "--help"},
 			wantContains: "Usage:\n  waypost renew --delivery ID --lease-token TOKEN --for DURATION",
+		},
+		{
+			name:         "dead-letter help",
+			args:         []string{"dead-letter", "--help"},
+			wantContains: "Usage:\n  waypost dead-letter --delivery ID --lease-token TOKEN --reason TEXT [--json | --yaml]",
 		},
 		{
 			name:         "stale help",

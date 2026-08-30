@@ -51,19 +51,16 @@ Install a Codex `SessionStart` hook that runs after compaction:
 waypost install codex-hook
 ```
 
-The installer merges three idempotent handlers into `$CODEX_HOME/hooks.json` (or
+The installer merges five idempotent handlers into `$CODEX_HOME/hooks.json` (or
 `~/.codex/hooks.json` when `CODEX_HOME` is unset) and preserves unrelated hooks:
 
-- a `SessionStart` `compact` handler explains that compaction is not a new
-  Waypost notice, so historical notices or future conditional receive steps do
-  not trigger a mailbox check on their own; when the transcript's latest user
-  message is the exact Waypost nudge, it emits no context
-- a `UserPromptSubmit` handler recognizes the narrow Waypost nudge form and
-  runs `codex mcp get waypost --json` from the session working directory; it injects
+- a `UserPromptSubmit` handler records the exact Waypost nudge as pending,
+  clears prior nudge state for ordinary user prompts, and runs
+  `codex mcp get waypost --json` from the session working directory; it injects
   one explicit receive instruction: when Waypost is enabled, it tells the agent
   that the `waypost_recv` MCP tool is available and to use it instead of the CLI
-  for that pending receive; when Waypost is unavailable, it instructs use of the
-  Waypost CLI. If the probe fails, it tells the agent to look for
+  for that pending receive; when Waypost is unavailable, it instructs use of
+  `waypost recv --json`. If the probe fails, it tells the agent to look for
   `waypost_recv`, fall back to the CLI only when the tool is unavailable, and
   surfaces the probe error as a Codex UI or event-stream warning
 - a `PreToolUse` `Bash` handler recognizes direct Waypost CLI invocations. A
@@ -74,9 +71,22 @@ The installer merges three idempotent handlers into `$CODEX_HOME/hooks.json` (or
   blacklist is denied in favor of `waypost_recv` or `waypost_send`. An
   unavailable MCP probe leaves those CLI commands untouched; a failed probe
   also leaves them untouched and surfaces the error as a warning.
+- a `PostToolUse` handler observes successful MCP or direct CLI receives and
+  changes a pending nudge to consumed; `received` and `no_message` are terminal
+  receive results, while active-lease and recovery-required results stay pending.
+  CLI JSON and YAML output are recognized by their `status` field or, for
+  `--full`, their complete personal, batch, or group receive fields; normal
+  text output is recognized by the receive header fields or `status=no_message`
+- a `SessionStart` `compact` handler emits the anti-repeat receive guard only
+  while the current session's latest nudge is consumed; pending nudges and
+  sessions without a nudge receive no compact-time context
+- a `SessionEnd` handler removes the session's nudge state
+
+The small session-scoped state lives under `$CODEX_HOME/waypost-hook-state/`
+(or `~/.codex/waypost-hook-state/`). The hook does not read the Codex transcript.
 
 Codex requires new or changed non-managed hooks to be reviewed and trusted
-before they run. After installation, open `/hooks` in Codex and trust the three
+before they run. After installation, open `/hooks` in Codex and trust the five
 Waypost handlers. Waypost does not modify Codex's private hook-trust state.
 
 Verify the installation:
@@ -297,7 +307,7 @@ Rules:
   and `group remove-subscriber`
 - use `send --to <group-address> --group` for group messages
 - use `list|wait|recv --for <group-address> --as <person>` for group reads
-- `watch`, `ack`, `renew`, `release`, `defer`, `undefer`, and `fail` stay personal-waypost-only
+- `watch`, `ack`, `renew`, `release`, `defer`, `undefer`, `fail`, and `dead-letter` stay personal-waypost-only
 - `--as` is caller-asserted identity in the trusted local workflow environment;
   it is not an authentication boundary
 
@@ -419,7 +429,7 @@ isolation, personal delivery states and transitions, per-person group reads,
 and the notification boundary. It does not assume MCP is available, prescribe
 an output format, or duplicate the command catalog. `--list` shows the available
 focused topics; initial topics are `mcp-cli-boundary`, `recovery`, `history`,
-`groups`, `addresses`, and `diagnostics`.
+`groups`, `addresses`, `diagnostics`, and `dead-letter`.
 One topic retains the plain prompt output. With multiple topics, each prompt is
 emitted in argument order as a `waypost: <topic>` block whose body is indented
 by two spaces. Command-shaped aliases are accepted when their routing is
@@ -428,6 +438,9 @@ unambiguous: `read` and `list` select `history`; `group` selects `groups`;
 common-flow names such as `send`, `recv`, `receive`, and `claim-history` select
 `mcp-cli-boundary`. Unknown-topic errors include the canonical topic list so
 callers do not need a separate `doc --list` call.
+
+The `dead-letter` topic explains when to stop retrying a leased delivery and
+how that differs from recording a retryable failure.
 
 ### `send`
 
@@ -711,6 +724,26 @@ Retry behavior in v1:
 
 - attempts 1 and 2 requeue immediately
 - attempt 3 moves the delivery to `dead_letter`
+
+### `dead-letter`
+
+Stop retrying a currently leased delivery immediately.
+
+```bash
+waypost dead-letter \
+  --delivery <delivery_id> \
+  --lease-token <lease_token> \
+  --reason "unsupported request" \
+  --json
+```
+
+Behavior:
+
+- requires the current lease token
+- moves the delivery directly from `leased` to `dead_letter`
+- does not increment `attempt_count`
+- records the reason and retains the message for history and diagnosis
+- use `fail` instead when another processing attempt remains appropriate
 
 ### `list`
 

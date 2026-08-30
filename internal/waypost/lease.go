@@ -463,6 +463,32 @@ func (s *Store) Fail(ctx context.Context, deliveryID, leaseToken, reason string)
 	})
 }
 
+// DeadLetter permanently stops retrying a leased delivery without recording
+// another processing attempt. The current lease token is required so only the
+// active owner can make this terminal decision.
+func (s *Store) DeadLetter(ctx context.Context, deliveryID, leaseToken, reason string) (DeliveryTransitionResult, error) {
+	reason = strings.TrimSpace(reason)
+	if reason == "" {
+		return DeliveryTransitionResult{}, invalidArgumentError(errors.New("dead-letter reason is required"))
+	}
+
+	return s.transitionLeasedDelivery(ctx, deliveryID, leaseToken, func(now time.Time, delivery leasedDeliveryRecord) (deliveryTransitionSpec, error) {
+		return deliveryTransitionSpec{
+			State:            "dead_letter",
+			VisibleAt:        formatTimestamp(now),
+			AttemptCount:     delivery.AttemptCount,
+			LastErrorText:    reason,
+			PrimaryEventType: "delivery_dead_letter",
+			PrimaryEventDetail: map[string]any{
+				"previous_state": delivery.State,
+				"reason":         reason,
+				"attempt_count":  delivery.AttemptCount,
+				"manual":         true,
+			},
+		}, nil
+	})
+}
+
 func (s *Store) Renew(ctx context.Context, deliveryID, leaseToken string, extendBy time.Duration) (LeaseRenewResult, error) {
 	deliveryID, leaseToken, err := validateLeaseMutationInput(deliveryID, leaseToken)
 	if err != nil {

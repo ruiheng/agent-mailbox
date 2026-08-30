@@ -115,6 +115,12 @@ func TestRunInstallAndDoctorCodexHook(t *testing.T) {
 	if !strings.Contains(doctorOutput.String(), "Codex wait polling guard: configured") {
 		t.Fatalf("doctor output = %q, want wait polling guard status", doctorOutput.String())
 	}
+	if !strings.Contains(doctorOutput.String(), "Codex receive completion tracker: configured") {
+		t.Fatalf("doctor output = %q, want receive completion tracker status", doctorOutput.String())
+	}
+	if !strings.Contains(doctorOutput.String(), "Codex nudge state cleanup: configured") {
+		t.Fatalf("doctor output = %q, want nudge state cleanup status", doctorOutput.String())
+	}
 	if !strings.Contains(doctorOutput.String(), "trust: not checked; verify with `/hooks`") {
 		t.Fatalf("doctor output = %q, want explicit unverified trust status", doctorOutput.String())
 	}

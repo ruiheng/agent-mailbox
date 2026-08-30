@@ -139,6 +139,23 @@ func TestCLIOwnedLifecycleAndSubscriberCommandsEmitJSON(t *testing.T) {
 	if transition["delivery_id"] != message.DeliveryID || transition["state"] != "queued" || transition["attempt_count"] != float64(1) {
 		t.Fatalf("fail payload = %v", transition)
 	}
+
+	receivedAfterFailure := runCLI(t, "", "--state-dir", stateDir, "recv", "--for", "workflow/lifecycle", "--json")
+	if receivedAfterFailure.exitCode != 0 {
+		t.Fatalf("third recv exit code = %d, stderr = %q", receivedAfterFailure.exitCode, receivedAfterFailure.stderr)
+	}
+	message = decodeReceivedMessage(t, receivedAfterFailure.stdout)
+	deadLetter := runCLI(t, "", "--state-dir", stateDir,
+		"dead-letter", "--delivery", message.DeliveryID, "--lease-token", message.LeaseToken, "--reason", "unsupported request", "--json")
+	if deadLetter.exitCode != 0 {
+		t.Fatalf("dead-letter exit code = %d, stderr = %q", deadLetter.exitCode, deadLetter.stderr)
+	}
+	if err := json.Unmarshal([]byte(deadLetter.stdout), &transition); err != nil {
+		t.Fatalf("json.Unmarshal(dead-letter) error = %v", err)
+	}
+	if transition["delivery_id"] != message.DeliveryID || transition["state"] != "dead_letter" || transition["attempt_count"] != float64(1) {
+		t.Fatalf("dead-letter payload = %v", transition)
+	}
 }
 
 func TestCLIHistoryFiltersPersonalAndGroupMessagesBySender(t *testing.T) {
@@ -305,7 +322,7 @@ Personal deliveries have four states:
 - queued: waiting to be claimed; claimable when visible_at is reached.
 - leased: claimed by one receiver; an expired lease may be reclaimed with a new lease token.
 - acked: completed successfully and retained for history.
-- dead_letter: reached the failure-attempt limit and is no longer claimable.
+- dead_letter: reached the failure-attempt limit or was explicitly dead-lettered, and is no longer claimable.
 
 Receiving a personal delivery returns its delivery ID and lease token. While it is leased:
 - renew extends the lease without changing its state or token.
@@ -313,6 +330,7 @@ Receiving a personal delivery returns its delivery ID and lease token. While it 
 - release moves it to queued immediately without recording a failure.
 - defer moves it to queued with a future visible_at.
 - fail increments attempt_count, then moves it to queued or dead_letter.
+- dead-letter moves it directly to dead_letter without incrementing attempt_count.
 
 Group messages track unread/read state per person and do not use personal delivery states or leases.
 
@@ -328,12 +346,12 @@ Use waypost COMMAND --help for command syntax. Use waypost doc --list for focuse
 	if list.exitCode != 0 {
 		t.Fatalf("doc --list exit code = %d, stderr = %q", list.exitCode, list.stderr)
 	}
-	for _, topic := range []string{"addresses", "mcp-cli-boundary", "recovery", "history", "groups", "diagnostics"} {
+	for _, topic := range []string{"addresses", "dead-letter", "mcp-cli-boundary", "recovery", "history", "groups", "diagnostics"} {
 		if !strings.Contains(list.stdout, topic+"\n") {
 			t.Fatalf("doc --list = %q, missing %q", list.stdout, topic)
 		}
 	}
-	for _, topic := range []string{"addresses", "mcp-cli-boundary", "recovery", "history", "groups", "diagnostics"} {
+	for _, topic := range []string{"addresses", "dead-letter", "mcp-cli-boundary", "recovery", "history", "groups", "diagnostics"} {
 		t.Run(topic, func(t *testing.T) {
 			prompt := runCLI(t, "", "doc", topic)
 			if prompt.exitCode != 0 {
@@ -349,6 +367,7 @@ Use waypost COMMAND --help for command syntax. Use waypost doc --list for focuse
 			}
 			requiredByTopic := map[string][]string{
 				"addresses":        {"Waypost does not assign a current address", "use its actual session identity", "Obtain the ID from the launcher or tool", "--from when sending and --for when receiving", "group/... is reserved"},
+				"dead-letter":      {"explicit terminal decision", "does not increment attempt_count", "must not be retried", "remains readable"},
 				"mcp-cli-boundary": {"MCP is optional", "process-local bindings", "same state directory"},
 				"recovery":         {"does not complete a delivery or immediately invalidate its token", "reclaiming replaces the token", "Undefer only"},
 				"history":          {"Message IDs and delivery IDs identify different records", "does not claim a personal delivery", "forwarded_from_address"},

@@ -52,7 +52,7 @@ func cliOwnedCommand(args []string) bool {
 			continue
 		}
 		switch arg {
-		case "forward", "wait", "list", "read", "undefer", "fail", "group", "address":
+		case "forward", "wait", "list", "read", "undefer", "fail", "dead-letter", "group", "address":
 			return true
 		default:
 			return false
