@@ -5670,6 +5670,7 @@ func TestWaypostServiceUsesConfiguredStateDir(t *testing.T) {
 			return RunResult{}, nil
 		}},
 	})
+	defer service.Close()
 	service.state.boundAddresses = []string{"agent-deck/self"}
 	service.state.defaultSender = "agent-deck/self"
 	service.state.autoBindAttempted = true
@@ -5884,6 +5885,7 @@ func TestWaypostRecvDoesNotWaitForLaterMessage(t *testing.T) {
 		DisableWakeScheduler:  true,
 		DisableLeaseRenewLoop: true,
 	})
+	defer service.Close()
 	service.state.boundAddresses = []string{"agent-deck/self"}
 	service.state.defaultSender = "agent-deck/self"
 	service.state.autoBindAttempted = true
@@ -5939,6 +5941,7 @@ func TestWaypostRecvReportsActiveLeaseImmediately(t *testing.T) {
 		DisableWakeScheduler:  true,
 		DisableLeaseRenewLoop: true,
 	})
+	defer service.Close()
 	service.state.boundAddresses = []string{"agent-deck/self"}
 	service.state.defaultSender = "agent-deck/self"
 	service.state.autoBindAttempted = true
@@ -6020,6 +6023,7 @@ func TestWaypostRecvKnownDeliveryIDsSuppressActiveLeaseReport(t *testing.T) {
 		DisableWakeScheduler:  true,
 		DisableLeaseRenewLoop: true,
 	})
+	defer service.Close()
 	service.state.boundAddresses = []string{"agent-deck/self"}
 	service.state.defaultSender = "agent-deck/self"
 	service.state.autoBindAttempted = true

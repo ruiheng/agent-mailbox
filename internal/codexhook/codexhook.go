@@ -917,7 +917,7 @@ func writeHooksDocument(path string, document map[string]any, mode os.FileMode) 
 	if err := temporary.Close(); err != nil {
 		return fmt.Errorf("close temporary Codex hooks: %w", err)
 	}
-	if err := os.Rename(temporaryPath, writePath); err != nil {
+	if err := replaceHooksFile(temporaryPath, writePath); err != nil {
 		return fmt.Errorf("replace Codex hooks %q: %w", path, err)
 	}
 	return nil

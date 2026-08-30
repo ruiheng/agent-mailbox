@@ -704,7 +704,7 @@ func TestInstallPreservesUnrelatedHooksAndIsIdempotent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Stat(hooks.json) error = %v", err)
 	}
-	if got := info.Mode().Perm(); got != 0o640 {
+	if got := info.Mode().Perm(); runtime.GOOS != "windows" && got != 0o640 {
 		t.Fatalf("hooks.json mode = %o, want 640", got)
 	}
 
@@ -963,7 +963,7 @@ func TestInstallPreservesSymlinkAndUpdatesTarget(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Stat(target hooks.json) error = %v", err)
 	}
-	if got := targetInfo.Mode().Perm(); got != 0o640 {
+	if got := targetInfo.Mode().Perm(); runtime.GOOS != "windows" && got != 0o640 {
 		t.Fatalf("target hooks.json mode = %o, want 640", got)
 	}
 }

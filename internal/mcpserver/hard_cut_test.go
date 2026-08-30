@@ -18,11 +18,12 @@ import (
 
 func TestWaypostStatusReportsAuthoritativeCLIContext(t *testing.T) {
 	stateDir := filepath.Join(t.TempDir(), "waypost-state")
+	executable := filepath.Join(t.TempDir(), "bin", "waypost")
 	service := newService(Options{
 		WaypostServiceFactory: fakeWaypostServiceFactory{service: &fakeWaypostService{t: t}},
 		CommandRunner:         &fakeRunner{t: t, handler: func([]string, string) (RunResult, error) { return RunResult{}, nil }},
 		StateDir:              stateDir,
-		Executable:            "/opt/waypost/bin/waypost",
+		Executable:            executable,
 		DisableWakeScheduler:  true,
 		DisableLeaseRenewLoop: true,
 	})
@@ -73,7 +74,7 @@ func TestWaypostStatusReportsAuthoritativeCLIContext(t *testing.T) {
 	if _, ok := status["default_workdir"]; ok {
 		t.Fatalf("default waypost_status exposed empty default_workdir: %v", status)
 	}
-	if got := status["executable"]; got != "/opt/waypost/bin/waypost" {
+	if got := status["executable"]; got != executable {
 		t.Fatalf("executable = %v, want authoritative executable", got)
 	}
 	wantStateDir, err := filepath.Abs(stateDir)
