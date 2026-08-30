@@ -51,19 +51,16 @@ Install a Codex `SessionStart` hook that runs after compaction:
 waypost install codex-hook
 ```
 
-The installer merges three idempotent handlers into `$CODEX_HOME/hooks.json` (or
+The installer merges five idempotent handlers into `$CODEX_HOME/hooks.json` (or
 `~/.codex/hooks.json` when `CODEX_HOME` is unset) and preserves unrelated hooks:
 
-- a `SessionStart` `compact` handler explains that compaction is not a new
-  Waypost notice, so historical notices or future conditional receive steps do
-  not trigger a mailbox check on their own; when the transcript's latest user
-  message is the exact Waypost nudge, it emits no context
-- a `UserPromptSubmit` handler recognizes the narrow Waypost nudge form and
-  runs `codex mcp get waypost --json` from the session working directory; it injects
+- a `UserPromptSubmit` handler records the exact Waypost nudge as pending,
+  clears prior nudge state for ordinary user prompts, and runs
+  `codex mcp get waypost --json` from the session working directory; it injects
   one explicit receive instruction: when Waypost is enabled, it tells the agent
   that the `waypost_recv` MCP tool is available and to use it instead of the CLI
-  for that pending receive; when Waypost is unavailable, it instructs use of the
-  Waypost CLI. If the probe fails, it tells the agent to look for
+  for that pending receive; when Waypost is unavailable, it instructs use of
+  `waypost recv --json`. If the probe fails, it tells the agent to look for
   `waypost_recv`, fall back to the CLI only when the tool is unavailable, and
   surfaces the probe error as a Codex UI or event-stream warning
 - a `PreToolUse` `Bash` handler recognizes direct Waypost CLI invocations. A
@@ -74,9 +71,22 @@ The installer merges three idempotent handlers into `$CODEX_HOME/hooks.json` (or
   blacklist is denied in favor of `waypost_recv` or `waypost_send`. An
   unavailable MCP probe leaves those CLI commands untouched; a failed probe
   also leaves them untouched and surfaces the error as a warning.
+- a `PostToolUse` handler observes successful MCP or direct CLI receives and
+  changes a pending nudge to consumed; `received` and `no_message` are terminal
+  receive results, while active-lease and recovery-required results stay pending.
+  CLI JSON and YAML output are recognized by their `status` field or, for
+  `--full`, their complete personal, batch, or group receive fields; normal
+  text output is recognized by the receive header fields or `status=no_message`
+- a `SessionStart` `compact` handler emits the anti-repeat receive guard only
+  while the current session's latest nudge is consumed; pending nudges and
+  sessions without a nudge receive no compact-time context
+- a `SessionEnd` handler removes the session's nudge state
+
+The small session-scoped state lives under `$CODEX_HOME/waypost-hook-state/`
+(or `~/.codex/waypost-hook-state/`). The hook does not read the Codex transcript.
 
 Codex requires new or changed non-managed hooks to be reviewed and trusted
-before they run. After installation, open `/hooks` in Codex and trust the three
+before they run. After installation, open `/hooks` in Codex and trust the five
 Waypost handlers. Waypost does not modify Codex's private hook-trust state.
 
 Verify the installation:

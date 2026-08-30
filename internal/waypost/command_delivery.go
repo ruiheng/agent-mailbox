@@ -220,6 +220,8 @@ func (a *App) prepareRecvCommand(args []string) (preparedCommand, error) {
 					}); writeErr != nil {
 						return writeErr
 					}
+				} else if _, writeErr := fmt.Fprintln(a.stdout, "status=no_message"); writeErr != nil {
+					return writeErr
 				}
 				return ErrNoMessage
 			}
@@ -253,6 +255,8 @@ func (a *App) prepareRecvCommand(args []string) (preparedCommand, error) {
 				}); writeErr != nil {
 					return writeErr
 				}
+			} else if _, writeErr := fmt.Fprintln(a.stdout, "status=no_message"); writeErr != nil {
+				return writeErr
 			}
 			return ErrNoMessage
 		}

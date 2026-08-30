@@ -38,67 +38,204 @@ func TestWriteOutputEmitsSessionStartAdditionalContext(t *testing.T) {
 	}
 }
 
-func TestRunCompactEmitsNoContextAfterLatestWaypostNudge(t *testing.T) {
+func TestNudgeLifecycleControlsCompactGuard(t *testing.T) {
 	t.Parallel()
 
-	transcript := writeTestTranscript(t, `
-{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"Earlier task"}]}}
-{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"NOTICE: There might be new delivery in waypost."}]}}
-{"type":"event_msg","payload":{"type":"item_completed","item":{"type":"UserMessage","content":[{"type":"text","text":"NOTICE: There might be new delivery in waypost."}]}}}
-{"type":"compacted","payload":{"message":"Summary mentioning an old Waypost notice"}}
-{"type":"event_msg","payload":{"type":"context_compacted"}}
-`)
+	const sessionID = "session-nudge-lifecycle"
+	store := newMemoryNudgeStateStore()
+	probe := func(context.Context) (bool, error) { return true, nil }
 
-	context := runCompactHook(t, transcript)
-	if context != "" {
-		t.Fatalf("compact context = %q, want no hook context after live nudge", context)
+	if context := runCompactHook(t, store, sessionID); context != "" {
+		t.Fatalf("compact context before nudge = %q, want empty", context)
+	}
+	output, emitted := runHook(t, store, probe, hookInput{
+		HookEventName: "UserPromptSubmit",
+		SessionID:     sessionID,
+		Prompt:        defaultNudgeMessage,
+	})
+	if !emitted || output.HookSpecificOutput.AdditionalContext != MCPNudgeContext {
+		t.Fatalf("nudge output = %+v, %v; want MCP receive context", output, emitted)
+	}
+	if state, err := store.Load(sessionID); err != nil || state != nudgePending {
+		t.Fatalf("state after nudge = %q, %v; want pending", state, err)
+	}
+	if context := runCompactHook(t, store, sessionID); context != "" {
+		t.Fatalf("compact context while pending = %q, want empty", context)
+	}
+
+	toolResponse := json.RawMessage(`{"structuredContent":{"status":"received"}}`)
+	if output, emitted := runHook(t, store, probe, hookInput{
+		HookEventName: "PostToolUse",
+		SessionID:     sessionID,
+		ToolName:      receiveMCPToolName,
+		ToolResponse:  toolResponse,
+	}); emitted {
+		t.Fatalf("PostToolUse output = %+v, want empty", output)
+	}
+	if state, err := store.Load(sessionID); err != nil || state != nudgeConsumed {
+		t.Fatalf("state after receive = %q, %v; want consumed", state, err)
+	}
+	for compact := 1; compact <= 2; compact++ {
+		if context := runCompactHook(t, store, sessionID); context != AdditionalContext {
+			t.Fatalf("compact %d context = %q, want guard %q", compact, context, AdditionalContext)
+		}
+	}
+
+	if output, emitted := runHook(t, store, probe, hookInput{
+		HookEventName: "UserPromptSubmit",
+		SessionID:     sessionID,
+		Prompt:        "Continue the original task.",
+	}); emitted {
+		t.Fatalf("ordinary prompt output = %+v, want empty", output)
+	}
+	if state, err := store.Load(sessionID); err != nil || state != nudgeNone {
+		t.Fatalf("state after ordinary prompt = %q, %v; want none", state, err)
+	}
+	if context := runCompactHook(t, store, sessionID); context != "" {
+		t.Fatalf("compact context after ordinary prompt = %q, want empty", context)
 	}
 }
 
-func TestRunCompactKeepsReceiveGuardWhenLatestUserMessageIsNotNudge(t *testing.T) {
+func TestPostToolUseConsumesPendingNudgeOnlyAfterSuccessfulReceive(t *testing.T) {
 	t.Parallel()
 
-	transcript := writeTestTranscript(t, `
-{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"NOTICE: There might be new delivery in waypost."}]}}
-{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"Continue the original task."}]}}
-{"type":"compacted","payload":{"message":"Summary mentioning a Waypost nudge"}}
-`)
-
-	if context := runCompactHook(t, transcript); context != AdditionalContext {
-		t.Fatalf("compact context = %q, want normal guard %q", context, AdditionalContext)
-	}
-}
-
-func TestRunCompactKeepsReceiveGuardAfterNewerNonTextUserMessage(t *testing.T) {
-	t.Parallel()
-
-	for name, newerUserRecord := range map[string]string{
-		"response item":  `{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_image","image_url":"data:image/png;base64,..."}]}}`,
-		"completed item": `{"type":"event_msg","payload":{"type":"item_completed","item":{"type":"UserMessage","content":[{"type":"image","image_url":"data:image/png;base64,..."}]}}}`,
+	for _, tc := range []struct {
+		name         string
+		toolName     string
+		toolInput    json.RawMessage
+		toolResponse json.RawMessage
+		wantConsumed bool
+	}{
+		{name: "MCP received", toolName: receiveMCPToolName, toolResponse: json.RawMessage(`{"structuredContent":{"status":"received"}}`), wantConsumed: true},
+		{name: "MCP no message", toolName: receiveMCPToolName, toolResponse: json.RawMessage(`{"structuredContent":{"status":"no_message"}}`), wantConsumed: true},
+		{name: "MCP active leases", toolName: receiveMCPToolName, toolResponse: json.RawMessage(`{"structuredContent":{"status":"active_leases"}}`)},
+		{name: "MCP recovery required", toolName: receiveMCPToolName, toolResponse: json.RawMessage(`{"structuredContent":{"status":"receive_recovery_required"}}`)},
+		{name: "MCP error", toolName: receiveMCPToolName, toolResponse: json.RawMessage(`{"isError":true,"structuredContent":{"status":"received"}}`)},
+		{name: "CLI JSON received", toolName: "Bash", toolInput: json.RawMessage(`{"command":"waypost recv --json"}`), toolResponse: jsonText(`{"status":"received","delivery":{"delivery_id":"dlv_1"}}`), wantConsumed: true},
+		{name: "CLI JSON no message", toolName: "Bash", toolInput: json.RawMessage(`{"command":"waypost recv --json"}`), toolResponse: jsonText(`{"status":"no_message"}`), wantConsumed: true},
+		{name: "CLI JSON full personal", toolName: "Bash", toolInput: json.RawMessage(`{"command":"waypost recv --json --full"}`), toolResponse: jsonText(`{"delivery_id":"dlv_1","message_id":"msg_1","recipient_address":"agent/reviewer","lease_token":"lease_1","body":"review"}`), wantConsumed: true},
+		{name: "CLI JSON full batch", toolName: "Bash", toolInput: json.RawMessage(`{"command":"waypost recv --json --full --max 2"}`), toolResponse: jsonText(`{"messages":[{"delivery_id":"dlv_1","recipient_address":"agent/reviewer","lease_token":"lease_1"},{"delivery_id":"dlv_2","recipient_address":"agent/reviewer","lease_token":"lease_2"}]}`), wantConsumed: true},
+		{name: "CLI JSON full group", toolName: "Bash", toolInput: json.RawMessage(`{"command":"waypost recv --for group/review --as alice --json --full"}`), toolResponse: jsonText(`{"message_id":"msg_1","group_address":"group/review","person":"alice","first_read_at":"2026-08-30T00:00:00Z","body":"review"}`), wantConsumed: true},
+		{name: "CLI YAML received", toolName: "Bash", toolInput: json.RawMessage(`{"command":"waypost recv --yaml"}`), toolResponse: jsonText("status: \"received\"\naddresses:\n  - \"agent/reviewer\"\ndelivery:\n  delivery_id: \"dlv_1\"\n"), wantConsumed: true},
+		{name: "CLI YAML no message", toolName: "Bash", toolInput: json.RawMessage(`{"command":"waypost recv --yaml"}`), toolResponse: jsonText("status: \"no_message\"\naddresses:\n  - \"agent/reviewer\"\n"), wantConsumed: true},
+		{name: "CLI YAML full personal", toolName: "Bash", toolInput: json.RawMessage(`{"command":"waypost recv --yaml --full"}`), toolResponse: jsonText("delivery_id: \"dlv_1\"\nmessage_id: \"msg_1\"\nrecipient_address: \"agent/reviewer\"\nlease_token: \"lease_1\"\nbody: \"review\"\n"), wantConsumed: true},
+		{name: "CLI YAML full batch", toolName: "Bash", toolInput: json.RawMessage(`{"command":"waypost recv --yaml --full --max 2"}`), toolResponse: jsonText("messages:\n  -\n    delivery_id: \"dlv_1\"\n    recipient_address: \"agent/reviewer\"\n    lease_token: \"lease_1\"\n"), wantConsumed: true},
+		{name: "CLI YAML full group", toolName: "Bash", toolInput: json.RawMessage(`{"command":"waypost recv --for group/review --as alice --yaml --full"}`), toolResponse: jsonText("message_id: \"msg_1\"\ngroup_address: \"group/review\"\nperson: \"alice\"\nfirst_read_at: \"2026-08-30T00:00:00Z\"\nbody: \"review\"\n"), wantConsumed: true},
+		{name: "CLI text received", toolName: "Bash", toolInput: json.RawMessage(`{"command":"waypost recv"}`), toolResponse: jsonText("delivery_id=dlv_1 recipient_address=agent/reviewer lease_token=lease_1 content_type=text/plain subject=\"review\"\nbody\n"), wantConsumed: true},
+		{name: "CLI group text received", toolName: "Bash", toolInput: json.RawMessage(`{"command":"waypost recv --for group/review --as alice"}`), toolResponse: jsonText("message_id=msg_1 group=group/review person=alice first_read_at=2026-08-30T00:00:00Z content_type=text/plain subject=\"review\" read_count=1 eligible_count=1\nbody\n"), wantConsumed: true},
+		{name: "CLI text no message", toolName: "Bash", toolInput: json.RawMessage(`{"command":"waypost recv"}`), toolResponse: jsonText("status=no_message\n"), wantConsumed: true},
+		{name: "CLI JSON failure", toolName: "Bash", toolInput: json.RawMessage(`{"command":"waypost recv --json"}`), toolResponse: jsonText(`{"status":"error","error_code":"busy"}`)},
+		{name: "CLI JSON error status overrides delivery fields", toolName: "Bash", toolInput: json.RawMessage(`{"command":"waypost recv --json"}`), toolResponse: jsonText(`{"status":"error","delivery_id":"dlv_1","recipient_address":"agent/reviewer","lease_token":"lease_1"}`)},
+		{name: "CLI YAML failure", toolName: "Bash", toolInput: json.RawMessage(`{"command":"waypost recv --yaml"}`), toolResponse: jsonText("status: \"error\"\nerror_code: \"busy\"\n")},
+		{name: "CLI YAML error status overrides delivery fields", toolName: "Bash", toolInput: json.RawMessage(`{"command":"waypost recv --yaml"}`), toolResponse: jsonText("status: \"error\"\ndetails:\n  delivery_id: \"dlv_1\"\n  recipient_address: \"agent/reviewer\"\n  lease_token: \"lease_1\"\n")},
+		{name: "CLI text failure", toolName: "Bash", toolInput: json.RawMessage(`{"command":"waypost recv"}`), toolResponse: jsonText("database is locked")},
+		{name: "unrelated Bash", toolName: "Bash", toolInput: json.RawMessage(`{"command":"go test ./..."}`), toolResponse: jsonText("ok")},
 	} {
-		t.Run(name, func(t *testing.T) {
+		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			transcript := writeTestTranscript(t, `
-{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"NOTICE: There might be new delivery in waypost."}]}}
-`+newerUserRecord)
-
-			if context := runCompactHook(t, transcript); context != AdditionalContext {
-				t.Fatalf("compact context = %q, want normal guard %q", context, AdditionalContext)
+			const sessionID = "session-receive-result"
+			store := newMemoryNudgeStateStore()
+			if err := store.Save(sessionID, nudgePending); err != nil {
+				t.Fatalf("Save(pending) error = %v", err)
+			}
+			if output, emitted := runHook(t, store, nil, hookInput{
+				HookEventName: "PostToolUse",
+				SessionID:     sessionID,
+				ToolName:      tc.toolName,
+				ToolInput:     tc.toolInput,
+				ToolResponse:  tc.toolResponse,
+			}); emitted {
+				t.Fatalf("PostToolUse output = %+v, want empty", output)
+			}
+			state, err := store.Load(sessionID)
+			if err != nil {
+				t.Fatalf("Load() error = %v", err)
+			}
+			want := nudgePending
+			if tc.wantConsumed {
+				want = nudgeConsumed
+			}
+			if state != want {
+				t.Fatalf("state = %q, want %q", state, want)
 			}
 		})
 	}
 }
 
-func TestRunCompactKeepsReceiveGuardWhenTranscriptIsUnavailable(t *testing.T) {
+func TestReceiveWithoutPendingNudgeDoesNotEnableCompactGuard(t *testing.T) {
 	t.Parallel()
 
-	for _, transcript := range []string{
-		filepath.Join(t.TempDir(), "missing.jsonl"),
-		writeTestTranscript(t, `{not-json`),
-	} {
-		if context := runCompactHook(t, transcript); context != AdditionalContext {
-			t.Fatalf("compact context for %q = %q, want normal guard %q", transcript, context, AdditionalContext)
-		}
+	const sessionID = "session-explicit-receive"
+	store := newMemoryNudgeStateStore()
+	if output, emitted := runHook(t, store, nil, hookInput{
+		HookEventName: "PostToolUse",
+		SessionID:     sessionID,
+		ToolName:      receiveMCPToolName,
+		ToolResponse:  json.RawMessage(`{"structuredContent":{"status":"received"}}`),
+	}); emitted {
+		t.Fatalf("PostToolUse output = %+v, want empty", output)
+	}
+	if state, err := store.Load(sessionID); err != nil || state != nudgeNone {
+		t.Fatalf("state after explicit receive = %q, %v; want none", state, err)
+	}
+	if context := runCompactHook(t, store, sessionID); context != "" {
+		t.Fatalf("compact context after explicit receive = %q, want empty", context)
+	}
+}
+
+func TestSessionEndClearsNudgeState(t *testing.T) {
+	t.Parallel()
+
+	const sessionID = "session-end"
+	store := newMemoryNudgeStateStore()
+	if err := store.Save(sessionID, nudgeConsumed); err != nil {
+		t.Fatalf("Save(consumed) error = %v", err)
+	}
+	if output, emitted := runHook(t, store, nil, hookInput{HookEventName: "SessionEnd", SessionID: sessionID}); emitted {
+		t.Fatalf("SessionEnd output = %+v, want empty", output)
+	}
+	if state, err := store.Load(sessionID); err != nil || state != nudgeNone {
+		t.Fatalf("state after SessionEnd = %q, %v; want none", state, err)
+	}
+}
+
+func TestFileNudgeStateStorePersistsAndClearsSessionState(t *testing.T) {
+	t.Parallel()
+
+	stateDir := filepath.Join(t.TempDir(), "hook-state")
+	store := fileNudgeStateStore{dir: stateDir}
+	const sessionID = "session/with unsafe path characters"
+	if err := store.Save(sessionID, nudgePending); err != nil {
+		t.Fatalf("Save(pending) error = %v", err)
+	}
+	entries, err := os.ReadDir(stateDir)
+	if err != nil {
+		t.Fatalf("ReadDir(%q) error = %v", stateDir, err)
+	}
+	if len(entries) != 1 || entries[0].IsDir() {
+		t.Fatalf("state entries = %#v, want one file", entries)
+	}
+	info, err := entries[0].Info()
+	if err != nil {
+		t.Fatalf("state file Info() error = %v", err)
+	}
+	if got := info.Mode().Perm(); got != 0o600 {
+		t.Fatalf("state file mode = %o, want 600", got)
+	}
+	if state, err := store.Load(sessionID); err != nil || state != nudgePending {
+		t.Fatalf("Load(pending) = %q, %v; want pending", state, err)
+	}
+	if err := store.Save(sessionID, nudgeConsumed); err != nil {
+		t.Fatalf("Save(consumed) error = %v", err)
+	}
+	if state, err := store.Load(sessionID); err != nil || state != nudgeConsumed {
+		t.Fatalf("Load(consumed) = %q, %v; want consumed", state, err)
+	}
+	if err := store.Clear(sessionID); err != nil {
+		t.Fatalf("Clear() error = %v", err)
+	}
+	if state, err := store.Load(sessionID); err != nil || state != nudgeNone {
+		t.Fatalf("Load(after clear) = %q, %v; want none", state, err)
 	}
 }
 
@@ -146,6 +283,7 @@ func TestRunUserPromptNudgeSelectsReceivePathFromCodexProbe(t *testing.T) {
 
 			input := strings.NewReader(`{
   "hook_event_name": "UserPromptSubmit",
+  "session_id": "session-probe-selection",
   "prompt": "NOTICE: There might be new delivery in waypost."
 }`)
 			var output bytes.Buffer
@@ -196,9 +334,11 @@ printf '%s\n' '{"name":"waypost","enabled":true}'
 		t.Fatalf("WriteFile(codex probe) error = %v", err)
 	}
 	t.Setenv("PATH", binDir)
+	t.Setenv("CODEX_HOME", t.TempDir())
 
 	input := strings.NewReader(`{
   "hook_event_name": "UserPromptSubmit",
+  "session_id": "session-real-probe",
   "prompt": "NOTICE: There might be new delivery in waypost."
 }`)
 	var output bytes.Buffer
@@ -219,6 +359,7 @@ func TestRunUserPromptSkipsOrdinaryWaypostDiscussion(t *testing.T) {
 
 	input := strings.NewReader(`{
   "hook_event_name": "UserPromptSubmit",
+  "session_id": "session-ordinary-prompt",
   "prompt": "Please explain how the Waypost nudge message works."
 	}`)
 	var output bytes.Buffer
@@ -495,6 +636,28 @@ func TestInstallRefreshesManagedGroupsInPlace(t *testing.T) {
         "matcher": "^Bash$",
         "hooks": [{"type": "command", "command": "keep-tool-position"}]
       }
+    ],
+    "PostToolUse": [
+      {
+        "description": "Waypost Codex receive completion tracker",
+        "matcher": "^(Bash|mcp__waypost__waypost_recv)$",
+        "hooks": [{"type": "command", "command": "'/old/waypost' codex-hook"}]
+      },
+      {
+        "description": "trusted post-tool sibling",
+        "matcher": "^apply_patch$",
+        "hooks": [{"type": "command", "command": "keep-post-tool-position"}]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "description": "Waypost Codex nudge state cleanup",
+        "hooks": [{"type": "command", "command": "'/old/waypost' codex-hook"}]
+      },
+      {
+        "description": "trusted session-end sibling",
+        "hooks": [{"type": "command", "command": "keep-session-end-position"}]
+      }
     ]
   }
 }`
@@ -541,6 +704,22 @@ func TestInstallRefreshesManagedGroupsInPlace(t *testing.T) {
 	}
 	if !groupHasCommand(waitGroups[1].(map[string]any), "keep-tool-position") {
 		t.Fatalf("PreToolUse[1] = %#v, want unrelated group at original position", waitGroups[1])
+	}
+
+	receiveGroups := hooks["PostToolUse"].([]any)
+	if !groupHasCommand(receiveGroups[0].(map[string]any), command) {
+		t.Fatalf("PostToolUse[0] = %#v, want refreshed Waypost group", receiveGroups[0])
+	}
+	if !groupHasCommand(receiveGroups[1].(map[string]any), "keep-post-tool-position") {
+		t.Fatalf("PostToolUse[1] = %#v, want unrelated group at original position", receiveGroups[1])
+	}
+
+	cleanupGroups := hooks["SessionEnd"].([]any)
+	if !groupHasCommand(cleanupGroups[0].(map[string]any), command) {
+		t.Fatalf("SessionEnd[0] = %#v, want refreshed Waypost group", cleanupGroups[0])
+	}
+	if !groupHasCommand(cleanupGroups[1].(map[string]any), "keep-session-end-position") {
+		t.Fatalf("SessionEnd[1] = %#v, want unrelated group at original position", cleanupGroups[1])
 	}
 }
 
@@ -659,6 +838,17 @@ func TestInstallPreservesUnrelatedHooksAndIsIdempotent(t *testing.T) {
         "matcher": "^Bash$",
         "hooks": [{"type": "command", "command": "check-bash"}]
       }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "^apply_patch$",
+        "hooks": [{"type": "command", "command": "review-patch"}]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [{"type": "command", "command": "archive-session"}]
+      }
     ]
   }
 }`
@@ -699,6 +889,20 @@ func TestInstallPreservesUnrelatedHooksAndIsIdempotent(t *testing.T) {
 	}
 	if got := len(hooks["UserPromptSubmit"].([]any)); got != 2 {
 		t.Fatalf("UserPromptSubmit hooks = %d, want existing plus Waypost", got)
+	}
+	postToolGroups := hooks["PostToolUse"].([]any)
+	if got := len(postToolGroups); got != 2 {
+		t.Fatalf("PostToolUse hooks = %d, want existing plus Waypost", got)
+	}
+	if !groupHasCommand(postToolGroups[0].(map[string]any), "review-patch") || !groupHasCommand(postToolGroups[1].(map[string]any), command) {
+		t.Fatalf("PostToolUse hooks = %#v, want preserved existing group followed by Waypost", postToolGroups)
+	}
+	sessionEndGroups := hooks["SessionEnd"].([]any)
+	if got := len(sessionEndGroups); got != 2 {
+		t.Fatalf("SessionEnd hooks = %d, want existing plus Waypost", got)
+	}
+	if !groupHasCommand(sessionEndGroups[0].(map[string]any), "archive-session") || !groupHasCommand(sessionEndGroups[1].(map[string]any), command) {
+		t.Fatalf("SessionEnd hooks = %#v, want preserved existing group followed by Waypost", sessionEndGroups)
 	}
 	info, err := os.Stat(path)
 	if err != nil {
@@ -877,15 +1081,20 @@ func TestCurrentCommandRejectsRelativeLauncherPath(t *testing.T) {
 func TestManagedGroupsUseShortTimeout(t *testing.T) {
 	t.Parallel()
 
-	for name, group := range map[string]map[string]any{
-		"compact": compactManagedGroup("waypost codex-hook"),
-		"prompt":  promptManagedGroup("waypost codex-hook"),
-		"wait":    waitManagedGroup("waypost codex-hook"),
+	for name, tc := range map[string]struct {
+		group   map[string]any
+		timeout json.Number
+	}{
+		"compact": {group: compactManagedGroup("waypost codex-hook"), timeout: hookTimeoutJSON},
+		"prompt":  {group: promptManagedGroup("waypost codex-hook"), timeout: hookTimeoutJSON},
+		"wait":    {group: waitManagedGroup("waypost codex-hook"), timeout: hookTimeoutJSON},
+		"receive": {group: receiveManagedGroup("waypost codex-hook"), timeout: hookTimeoutJSON},
+		"cleanup": {group: cleanupManagedGroup("waypost codex-hook"), timeout: cleanupHookTimeoutJSON},
 	} {
-		handlers := group["hooks"].([]any)
+		handlers := tc.group["hooks"].([]any)
 		handler := handlers[0].(map[string]any)
-		if got := handler["timeout"]; got != hookTimeoutJSON {
-			t.Errorf("%s timeout = %#v, want %d", name, got, hookTimeoutSeconds)
+		if got := handler["timeout"]; got != tc.timeout {
+			t.Errorf("%s timeout = %#v, want %s", name, got, tc.timeout)
 		}
 	}
 }
@@ -893,7 +1102,7 @@ func TestManagedGroupsUseShortTimeout(t *testing.T) {
 func TestInstallRejectsMalformedMatcherGroupsWithoutChangingFile(t *testing.T) {
 	t.Parallel()
 
-	for _, event := range []string{"SessionStart", "PreToolUse"} {
+	for _, event := range []string{"SessionStart", "PreToolUse", "PostToolUse", "SessionEnd"} {
 		t.Run(event, func(t *testing.T) {
 			t.Parallel()
 
@@ -1059,6 +1268,68 @@ func TestDoctorRequiresWaypostWaitPollingGuard(t *testing.T) {
 	}
 }
 
+func TestDoctorRequiresWaypostReceiveCompletionTracker(t *testing.T) {
+	t.Parallel()
+
+	home := t.TempDir()
+	path := filepath.Join(home, "hooks.json")
+	contents := `{
+  "hooks": {
+    "SessionStart": [{
+      "matcher": "^compact$",
+      "hooks": [{"type": "command", "command": "waypost codex-hook", "timeout": 5}]
+    }],
+    "UserPromptSubmit": [{
+      "hooks": [{"type": "command", "command": "waypost codex-hook", "timeout": 5}]
+    }],
+    "PreToolUse": [{
+      "matcher": "^Bash$",
+      "hooks": [{"type": "command", "command": "waypost codex-hook", "timeout": 5}]
+    }]
+  }
+}`
+	if err := os.WriteFile(path, []byte(contents), 0o600); err != nil {
+		t.Fatalf("WriteFile(hooks.json) error = %v", err)
+	}
+	_, err := Doctor(home, "waypost codex-hook")
+	if err == nil || !strings.Contains(err.Error(), "receive completion") {
+		t.Fatalf("Doctor() error = %v, want missing receive completion tracker error", err)
+	}
+}
+
+func TestDoctorRequiresWaypostNudgeStateCleanup(t *testing.T) {
+	t.Parallel()
+
+	home := t.TempDir()
+	path := filepath.Join(home, "hooks.json")
+	contents := `{
+  "hooks": {
+    "SessionStart": [{
+      "matcher": "^compact$",
+      "hooks": [{"type": "command", "command": "waypost codex-hook", "timeout": 5}]
+    }],
+    "UserPromptSubmit": [{
+      "hooks": [{"type": "command", "command": "waypost codex-hook", "timeout": 5}]
+    }],
+    "PreToolUse": [{
+      "matcher": "^Bash$",
+      "hooks": [{"type": "command", "command": "waypost codex-hook", "timeout": 5}]
+    }],
+    "PostToolUse": [{
+      "matcher": "^(Bash|mcp__waypost__waypost_recv)$",
+      "hooks": [{"type": "command", "command": "waypost codex-hook", "timeout": 5}]
+    }]
+  }
+}`
+	if err := os.WriteFile(path, []byte(contents), 0o600); err != nil {
+		t.Fatalf("WriteFile(hooks.json) error = %v", err)
+	}
+	_, err := Doctor(home, "waypost codex-hook")
+	if err == nil || !strings.Contains(err.Error(), "nudge state cleanup") {
+		t.Fatalf("Doctor() error = %v, want missing nudge state cleanup error", err)
+	}
+}
+
 func TestDoctorRejectsMalformedHookSource(t *testing.T) {
 	t.Parallel()
 
@@ -1109,6 +1380,14 @@ func TestDoctorRejectsManagedHandlersWithoutShortTimeout(t *testing.T) {
 	}
 }
 
+func jsonText(value string) json.RawMessage {
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		panic(err)
+	}
+	return encoded
+}
+
 func handlerHasCommand(value any, command string) bool {
 	handler, ok := value.(map[string]any)
 	if !ok {
@@ -1119,37 +1398,42 @@ func handlerHasCommand(value any, command string) bool {
 	return handlerType == "command" && handlerCommand == command
 }
 
-func writeTestTranscript(t *testing.T, contents string) string {
+func runCompactHook(t *testing.T, store nudgeStateStore, sessionID string) string {
 	t.Helper()
-	path := filepath.Join(t.TempDir(), "rollout.jsonl")
-	if err := os.WriteFile(path, []byte(strings.TrimSpace(contents)+"\n"), 0o600); err != nil {
-		t.Fatalf("WriteFile(transcript) error = %v", err)
+	output, emitted := runHook(t, store, nil, hookInput{
+		HookEventName: "SessionStart",
+		SessionID:     sessionID,
+		Source:        "compact",
+	})
+	if !emitted {
+		return ""
 	}
-	return path
+	return output.HookSpecificOutput.AdditionalContext
 }
 
-func runCompactHook(t *testing.T, transcriptPath string) string {
+func runHook(
+	t *testing.T,
+	store nudgeStateStore,
+	probe waypostMCPProbe,
+	input hookInput,
+) (hookOutput, bool) {
 	t.Helper()
-	input, err := json.Marshal(hookInput{
-		HookEventName:  "SessionStart",
-		Source:         "compact",
-		TranscriptPath: transcriptPath,
-	})
+	encodedInput, err := json.Marshal(input)
 	if err != nil {
 		t.Fatalf("Marshal(hook input) error = %v", err)
 	}
-	var output bytes.Buffer
-	if err := run(context.Background(), bytes.NewReader(input), &output); err != nil {
-		t.Fatalf("run(SessionStart compact) error = %v", err)
+	var encodedOutput bytes.Buffer
+	if err := runWithDependencies(context.Background(), bytes.NewReader(encodedInput), &encodedOutput, probe, store); err != nil {
+		t.Fatalf("runWithDependencies(%s) error = %v", input.HookEventName, err)
 	}
-	if output.Len() == 0 {
-		return ""
+	if encodedOutput.Len() == 0 {
+		return hookOutput{}, false
 	}
-	var payload hookOutput
-	if err := json.Unmarshal(output.Bytes(), &payload); err != nil {
+	var output hookOutput
+	if err := json.Unmarshal(encodedOutput.Bytes(), &output); err != nil {
 		t.Fatalf("Unmarshal(hook output) error = %v", err)
 	}
-	return payload.HookSpecificOutput.AdditionalContext
+	return output, true
 }
 
 func runPreToolHook(t *testing.T, command string, probe waypostMCPProbe) (hookOutput, bool) {

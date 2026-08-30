@@ -3,6 +3,7 @@ package codexhook
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -21,15 +22,21 @@ const (
 	compactManagedDescription = "Waypost Codex compact-context guard"
 	promptManagedDescription  = "Waypost Codex nudge MCP hint"
 	waitManagedDescription    = "Waypost Codex wait polling guard"
+	receiveManagedDescription = "Waypost Codex receive completion tracker"
+	cleanupManagedDescription = "Waypost Codex nudge state cleanup"
 	compactStatusMessage      = "Restoring Waypost compact context"
 	promptStatusMessage       = "Preparing Waypost receive hint"
 	waitStatusMessage         = "Checking Waypost wait usage"
 	legacyPromptStatusMessage = "Checking Waypost MCP availability"
 	defaultNudgeMessage       = "NOTICE: There might be new delivery in waypost."
+	receiveMCPToolName        = "mcp__waypost__waypost_recv"
+	hookStateDirectoryName    = "waypost-hook-state"
 )
 
 const hookTimeoutSeconds int64 = 5
 const hookTimeoutJSON json.Number = "5"
+const cleanupHookTimeoutSeconds int64 = 3
+const cleanupHookTimeoutJSON json.Number = "3"
 
 const AdditionalContext = `Do not check or receive Waypost merely because compaction occurred or its summary mentions historical notices or a future conditional Waypost step.
 Only check Waypost after a fresh live NOTICE, an explicit user request, or while continuing an already-claimed delivery.
@@ -37,9 +44,9 @@ Resume the task that was active before compaction.`
 
 const MCPNudgeContext = `The waypost_recv MCP tool is available. Use it instead of the Waypost CLI.`
 
-const CLINudgeContext = `The Waypost MCP tool waypost_recv is unavailable. Receive the pending delivery with the Waypost CLI.`
+const CLINudgeContext = `The Waypost MCP tool waypost_recv is unavailable. Receive the pending delivery with ` + "`waypost recv --json`" + `.`
 
-const MCPProbeFailedNudgeContext = `Look for the waypost_recv MCP tool. Use the Waypost CLI only if it is unavailable.`
+const MCPProbeFailedNudgeContext = `Look for the waypost_recv MCP tool. If it is unavailable, receive the pending delivery with ` + "`waypost recv --json`" + `.`
 
 const WaitPollingContext = `Do not poll Waypost. Continue other available work; if none remains, stop completely.`
 
@@ -52,12 +59,13 @@ var waypostMCPCommandBlacklist = map[string]string{
 }
 
 type hookInput struct {
-	HookEventName  string          `json:"hook_event_name"`
-	Source         string          `json:"source"`
-	Prompt         string          `json:"prompt"`
-	ToolName       string          `json:"tool_name"`
-	ToolInput      json.RawMessage `json:"tool_input"`
-	TranscriptPath string          `json:"transcript_path"`
+	HookEventName string          `json:"hook_event_name"`
+	SessionID     string          `json:"session_id"`
+	Source        string          `json:"source"`
+	Prompt        string          `json:"prompt"`
+	ToolName      string          `json:"tool_name"`
+	ToolInput     json.RawMessage `json:"tool_input"`
+	ToolResponse  json.RawMessage `json:"tool_response"`
 }
 
 type hookOutput struct {
@@ -87,10 +95,24 @@ func Run(ctx context.Context, r io.Reader, w io.Writer) error {
 }
 
 func run(ctx context.Context, r io.Reader, w io.Writer) error {
-	return runWithMCPProbe(ctx, r, w, CurrentDirectoryWaypostMCPAvailable)
+	store, err := defaultNudgeStateStore()
+	if err != nil {
+		return err
+	}
+	return runWithDependencies(ctx, r, w, CurrentDirectoryWaypostMCPAvailable, store)
 }
 
 func runWithMCPProbe(ctx context.Context, r io.Reader, w io.Writer, probe waypostMCPProbe) error {
+	return runWithDependencies(ctx, r, w, probe, newMemoryNudgeStateStore())
+}
+
+func runWithDependencies(
+	ctx context.Context,
+	r io.Reader,
+	w io.Writer,
+	probe waypostMCPProbe,
+	store nudgeStateStore,
+) error {
 	input, hasInput, err := readHookInput(r)
 	if err != nil {
 		return err
@@ -104,13 +126,20 @@ func runWithMCPProbe(ctx context.Context, r io.Reader, w io.Writer, probe waypos
 		if input.Source != "compact" {
 			return nil
 		}
-		if latestPrompt, found, err := latestUserPrompt(input.TranscriptPath); err == nil && found && LooksLikeWaypostNudge(latestPrompt) {
+		state, err := store.Load(input.SessionID)
+		if err != nil {
+			return err
+		}
+		if state != nudgeConsumed {
 			return nil
 		}
 		return writeOutput(w, "SessionStart", AdditionalContext)
 	case "UserPromptSubmit":
 		if !LooksLikeWaypostNudge(input.Prompt) {
-			return nil
+			return store.Clear(input.SessionID)
+		}
+		if err := store.Save(input.SessionID, nudgePending); err != nil {
+			return err
 		}
 		availability, probeErr := detectWaypostMCP(ctx, probe)
 		switch availability {
@@ -121,6 +150,18 @@ func runWithMCPProbe(ctx context.Context, r io.Reader, w io.Writer, probe waypos
 		default:
 			return writeOutput(w, "UserPromptSubmit", CLINudgeContext)
 		}
+	case "PostToolUse":
+		if !successfulWaypostReceive(input) {
+			return nil
+		}
+		state, err := store.Load(input.SessionID)
+		if err != nil {
+			return err
+		}
+		if state != nudgePending {
+			return nil
+		}
+		return store.Save(input.SessionID, nudgeConsumed)
 	case "PreToolUse":
 		if input.ToolName != "Bash" {
 			return nil
@@ -144,6 +185,8 @@ func runWithMCPProbe(ctx context.Context, r io.Reader, w io.Writer, probe waypos
 			return nil
 		}
 		return writeDenyOutput(w, denialReason)
+	case "SessionEnd":
+		return store.Clear(input.SessionID)
 	default:
 		return nil
 	}
@@ -206,76 +249,311 @@ func LooksLikeWaypostNudge(prompt string) bool {
 	return strings.EqualFold(strings.TrimSpace(prompt), defaultNudgeMessage)
 }
 
-func latestUserPrompt(transcriptPath string) (string, bool, error) {
-	if strings.TrimSpace(transcriptPath) == "" {
-		return "", false, nil
-	}
-	transcript, err := os.Open(transcriptPath)
+type nudgeState string
+
+const (
+	nudgeNone     nudgeState = ""
+	nudgePending  nudgeState = "pending"
+	nudgeConsumed nudgeState = "consumed"
+)
+
+type nudgeStateStore interface {
+	Load(sessionID string) (nudgeState, error)
+	Save(sessionID string, state nudgeState) error
+	Clear(sessionID string) error
+}
+
+type fileNudgeStateStore struct {
+	dir string
+}
+
+type nudgeStateRecord struct {
+	SessionID string     `json:"session_id"`
+	State     nudgeState `json:"state"`
+}
+
+func defaultNudgeStateStore() (nudgeStateStore, error) {
+	home, err := DefaultHome()
 	if err != nil {
-		return "", false, err
+		return nil, err
 	}
-	defer transcript.Close()
-
-	decoder := json.NewDecoder(transcript)
-	var latest string
-	found := false
-	for {
-		var record transcriptRecord
-		if err := decoder.Decode(&record); errors.Is(err, io.EOF) {
-			return latest, found, nil
-		} else if err != nil {
-			return "", false, err
-		}
-
-		prompt, ok := transcriptUserPrompt(record)
-		if ok {
-			latest = prompt
-			found = true
-		}
-	}
+	return fileNudgeStateStore{dir: filepath.Join(home, hookStateDirectoryName)}, nil
 }
 
-type transcriptRecord struct {
-	Type    string `json:"type"`
-	Payload struct {
-		Type    string `json:"type"`
-		Role    string `json:"role"`
-		Content []struct {
-			Type string `json:"type"`
-			Text string `json:"text"`
-		} `json:"content"`
-		Item struct {
-			Type    string `json:"type"`
-			Content []struct {
-				Type string `json:"type"`
-				Text string `json:"text"`
-			} `json:"content"`
-		} `json:"item"`
-	} `json:"payload"`
+func (store fileNudgeStateStore) Load(sessionID string) (nudgeState, error) {
+	sessionID, err := normalizedSessionID(sessionID)
+	if err != nil {
+		return nudgeNone, err
+	}
+	path, err := store.path(sessionID)
+	if err != nil {
+		return nudgeNone, err
+	}
+	contents, err := os.ReadFile(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return nudgeNone, nil
+	}
+	if err != nil {
+		return nudgeNone, fmt.Errorf("read Codex Waypost nudge state %q: %w", path, err)
+	}
+	var record nudgeStateRecord
+	if err := json.Unmarshal(contents, &record); err != nil {
+		return nudgeNone, fmt.Errorf("parse Codex Waypost nudge state %q: %w", path, err)
+	}
+	if record.SessionID != sessionID {
+		return nudgeNone, fmt.Errorf("parse Codex Waypost nudge state %q: session id mismatch", path)
+	}
+	if record.State != nudgePending && record.State != nudgeConsumed {
+		return nudgeNone, fmt.Errorf("parse Codex Waypost nudge state %q: invalid state %q", path, record.State)
+	}
+	return record.State, nil
 }
 
-func transcriptUserPrompt(record transcriptRecord) (string, bool) {
-	switch {
-	case record.Type == "response_item" && record.Payload.Type == "message" && record.Payload.Role == "user":
-		return joinTranscriptText(record.Payload.Content, "input_text"), true
-	case record.Type == "event_msg" && record.Payload.Type == "item_completed" && record.Payload.Item.Type == "UserMessage":
-		return joinTranscriptText(record.Payload.Item.Content, "text"), true
+func (store fileNudgeStateStore) Save(sessionID string, state nudgeState) error {
+	if state != nudgePending && state != nudgeConsumed {
+		return fmt.Errorf("save Codex Waypost nudge state: invalid state %q", state)
+	}
+	sessionID, err := normalizedSessionID(sessionID)
+	if err != nil {
+		return err
+	}
+	path, err := store.path(sessionID)
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(store.dir, 0o700); err != nil {
+		return fmt.Errorf("create Codex Waypost nudge state directory %q: %w", store.dir, err)
+	}
+	contents, err := json.Marshal(nudgeStateRecord{SessionID: sessionID, State: state})
+	if err != nil {
+		return fmt.Errorf("encode Codex Waypost nudge state: %w", err)
+	}
+	contents = append(contents, '\n')
+	temporary, err := os.CreateTemp(store.dir, ".state.tmp-*")
+	if err != nil {
+		return fmt.Errorf("create temporary Codex Waypost nudge state: %w", err)
+	}
+	temporaryPath := temporary.Name()
+	defer func() {
+		_ = temporary.Close()
+		_ = os.Remove(temporaryPath)
+	}()
+	if err := temporary.Chmod(0o600); err != nil {
+		return fmt.Errorf("set Codex Waypost nudge state permissions: %w", err)
+	}
+	if _, err := temporary.Write(contents); err != nil {
+		return fmt.Errorf("write Codex Waypost nudge state: %w", err)
+	}
+	if err := temporary.Sync(); err != nil {
+		return fmt.Errorf("sync Codex Waypost nudge state: %w", err)
+	}
+	if err := temporary.Close(); err != nil {
+		return fmt.Errorf("close Codex Waypost nudge state: %w", err)
+	}
+	if runtime.GOOS == "windows" {
+		if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("replace Codex Waypost nudge state %q: %w", path, err)
+		}
+	}
+	if err := os.Rename(temporaryPath, path); err != nil {
+		return fmt.Errorf("replace Codex Waypost nudge state %q: %w", path, err)
+	}
+	return nil
+}
+
+func (store fileNudgeStateStore) Clear(sessionID string) error {
+	sessionID, err := normalizedSessionID(sessionID)
+	if err != nil {
+		return err
+	}
+	path, err := store.path(sessionID)
+	if err != nil {
+		return err
+	}
+	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("remove Codex Waypost nudge state %q: %w", path, err)
+	}
+	return nil
+}
+
+func (store fileNudgeStateStore) path(sessionID string) (string, error) {
+	sessionID, err := normalizedSessionID(sessionID)
+	if err != nil {
+		return "", err
+	}
+	digest := sha256.Sum256([]byte(sessionID))
+	return filepath.Join(store.dir, fmt.Sprintf("%x.json", digest)), nil
+}
+
+type memoryNudgeStateStore struct {
+	states map[string]nudgeState
+}
+
+func newMemoryNudgeStateStore() *memoryNudgeStateStore {
+	return &memoryNudgeStateStore{states: make(map[string]nudgeState)}
+}
+
+func (store *memoryNudgeStateStore) Load(sessionID string) (nudgeState, error) {
+	sessionID, err := normalizedSessionID(sessionID)
+	if err != nil {
+		return nudgeNone, err
+	}
+	return store.states[sessionID], nil
+}
+
+func (store *memoryNudgeStateStore) Save(sessionID string, state nudgeState) error {
+	sessionID, err := normalizedSessionID(sessionID)
+	if err != nil {
+		return err
+	}
+	store.states[sessionID] = state
+	return nil
+}
+
+func (store *memoryNudgeStateStore) Clear(sessionID string) error {
+	sessionID, err := normalizedSessionID(sessionID)
+	if err != nil {
+		return err
+	}
+	delete(store.states, sessionID)
+	return nil
+}
+
+func normalizedSessionID(sessionID string) (string, error) {
+	sessionID = strings.TrimSpace(sessionID)
+	if sessionID == "" {
+		return "", errors.New("Codex hook input is missing session_id")
+	}
+	return sessionID, nil
+}
+
+func successfulWaypostReceive(input hookInput) bool {
+	switch input.ToolName {
+	case receiveMCPToolName:
+		return successfulWaypostMCPResponse(input.ToolResponse)
+	case "Bash":
+		command, err := bashCommand(input.ToolInput)
+		if err != nil {
+			return false
+		}
+		subcommand, ok := directWaypostCommand(command)
+		return ok && (subcommand == "recv" || subcommand == "receive") && successfulBashResponse(input.ToolResponse)
 	default:
-		return "", false
+		return false
 	}
 }
 
-func joinTranscriptText(content []struct {
-	Type string `json:"type"`
-	Text string `json:"text"`
-}, textType string) string {
-	var parts []string
-	for _, item := range content {
-		if item.Type == textType {
-			parts = append(parts, item.Text)
+func successfulWaypostMCPResponse(raw json.RawMessage) bool {
+	if len(raw) == 0 {
+		return false
+	}
+	var response struct {
+		IsError           bool `json:"isError"`
+		StructuredContent struct {
+			Status string `json:"status"`
+		} `json:"structuredContent"`
+	}
+	if err := json.Unmarshal(raw, &response); err != nil || response.IsError {
+		return false
+	}
+	return response.StructuredContent.Status == "received" || response.StructuredContent.Status == "no_message"
+}
+
+func successfulBashResponse(raw json.RawMessage) bool {
+	if len(raw) == 0 {
+		return false
+	}
+	var output string
+	if json.Unmarshal(raw, &output) != nil {
+		return false
+	}
+	output = strings.TrimSpace(output)
+	if output == "" {
+		return false
+	}
+
+	if success, parsed := successfulJSONReceive(output); parsed {
+		return success
+	}
+	if output == "status=no_message" {
+		return true
+	}
+
+	firstLine, _, _ := strings.Cut(output, "\n")
+	if strings.HasPrefix(firstLine, "status: ") {
+		var status string
+		if json.Unmarshal([]byte(strings.TrimPrefix(firstLine, "status: ")), &status) == nil {
+			return status == "received" || status == "no_message"
+		}
+		return false
+	}
+	if successfulFullYAMLReceive(output) {
+		return true
+	}
+	personalReceive := strings.HasPrefix(firstLine, "delivery_id=") &&
+		strings.Contains(firstLine, " recipient_address=") &&
+		strings.Contains(firstLine, " lease_token=")
+	groupReceive := strings.HasPrefix(firstLine, "message_id=") &&
+		strings.Contains(firstLine, " group=") &&
+		strings.Contains(firstLine, " person=") &&
+		strings.Contains(firstLine, " first_read_at=")
+	return personalReceive || groupReceive
+}
+
+type cliJSONReceive struct {
+	Status           string           `json:"status"`
+	DeliveryID       string           `json:"delivery_id"`
+	RecipientAddress string           `json:"recipient_address"`
+	LeaseToken       string           `json:"lease_token"`
+	MessageID        string           `json:"message_id"`
+	GroupAddress     string           `json:"group_address"`
+	Person           string           `json:"person"`
+	FirstReadAt      string           `json:"first_read_at"`
+	Messages         []cliJSONReceive `json:"messages"`
+}
+
+func successfulJSONReceive(output string) (success, parsed bool) {
+	var response cliJSONReceive
+	if json.Unmarshal([]byte(output), &response) != nil {
+		return false, false
+	}
+	if response.Status != "" {
+		return response.Status == "received" || response.Status == "no_message", true
+	}
+	if completePersonalJSONReceive(response) || completeGroupJSONReceive(response) {
+		return true, true
+	}
+	if len(response.Messages) == 0 {
+		return false, true
+	}
+	for _, message := range response.Messages {
+		if !completePersonalJSONReceive(message) {
+			return false, true
 		}
 	}
-	return strings.Join(parts, "\n")
+	return true, true
+}
+
+func completePersonalJSONReceive(response cliJSONReceive) bool {
+	return response.DeliveryID != "" && response.RecipientAddress != "" && response.LeaseToken != ""
+}
+
+func completeGroupJSONReceive(response cliJSONReceive) bool {
+	return response.MessageID != "" && response.GroupAddress != "" && response.Person != "" && response.FirstReadAt != ""
+}
+
+func successfulFullYAMLReceive(output string) bool {
+	fields := make(map[string]bool)
+	for _, line := range strings.Split(output, "\n") {
+		line = strings.TrimSpace(line)
+		name, value, found := strings.Cut(line, ":")
+		if found && strings.TrimSpace(value) != "" {
+			fields[name] = true
+		}
+	}
+	personalReceive := fields["delivery_id"] && fields["recipient_address"] && fields["lease_token"]
+	groupReceive := fields["message_id"] && fields["group_address"] && fields["person"] && fields["first_read_at"]
+	return personalReceive || groupReceive
 }
 
 func LooksLikeWaypostWaitCommand(command string) bool {
@@ -466,8 +744,34 @@ func Install(codexHome, command string) (InstallResult, error) {
 		},
 	})
 	hooks["PreToolUse"] = updated
+
+	receiveGroups, err := arrayField(hooks, "PostToolUse")
+	if err != nil {
+		return InstallResult{}, fmt.Errorf("read %q: %w", path, err)
+	}
+	updated, receiveChanged := mergeManagedHandler(receiveGroups, receiveManagedGroup(command), managedHandlerSpec{
+		description:    receiveManagedDescription,
+		statusMessages: nil,
+		command:        command,
+		eligibleGroup: func(group map[string]any) bool {
+			return matcherTargetsReceiveCompletionOnly(group["matcher"])
+		},
+	})
+	hooks["PostToolUse"] = updated
+
+	cleanupGroups, err := arrayField(hooks, "SessionEnd")
+	if err != nil {
+		return InstallResult{}, fmt.Errorf("read %q: %w", path, err)
+	}
+	updated, cleanupChanged := mergeManagedHandler(cleanupGroups, cleanupManagedGroup(command), managedHandlerSpec{
+		description:    cleanupManagedDescription,
+		statusMessages: nil,
+		command:        command,
+		eligibleGroup:  matcherTargetsEverySessionEnd,
+	})
+	hooks["SessionEnd"] = updated
 	document["hooks"] = hooks
-	changed := compactChanged || promptChanged || waitChanged
+	changed := compactChanged || promptChanged || waitChanged || receiveChanged || cleanupChanged
 
 	if !changed {
 		return InstallResult{Path: path, Changed: false}, nil
@@ -531,16 +835,54 @@ func Doctor(codexHome, command string) (DoctorResult, error) {
 	if err != nil {
 		return DoctorResult{}, fmt.Errorf("read %q: %w", path, err)
 	}
+	waitInstalled := false
 	for _, item := range waitGroups {
 		group, ok := item.(map[string]any)
 		if !ok || !matcherTargetsBashOnly(group["matcher"]) {
 			continue
 		}
 		if groupHasCommandWithTimeout(group, command, hookTimeoutSeconds) {
+			waitInstalled = true
+			break
+		}
+	}
+	if !waitInstalled {
+		return DoctorResult{}, fmt.Errorf("Codex Waypost wait polling guard is not installed in %q; run `waypost install codex-hook`", path)
+	}
+
+	receiveGroups, err := arrayField(hooks, "PostToolUse")
+	if err != nil {
+		return DoctorResult{}, fmt.Errorf("read %q: %w", path, err)
+	}
+	receiveInstalled := false
+	for _, item := range receiveGroups {
+		group, ok := item.(map[string]any)
+		if !ok || !matcherTargetsReceiveCompletionOnly(group["matcher"]) {
+			continue
+		}
+		if groupHasCommandWithTimeout(group, command, hookTimeoutSeconds) {
+			receiveInstalled = true
+			break
+		}
+	}
+	if !receiveInstalled {
+		return DoctorResult{}, fmt.Errorf("Codex Waypost receive completion hook is not installed in %q; run `waypost install codex-hook`", path)
+	}
+
+	cleanupGroups, err := arrayField(hooks, "SessionEnd")
+	if err != nil {
+		return DoctorResult{}, fmt.Errorf("read %q: %w", path, err)
+	}
+	for _, item := range cleanupGroups {
+		group, ok := item.(map[string]any)
+		if !ok || !matcherTargetsEverySessionEnd(group) {
+			continue
+		}
+		if groupHasCommandWithTimeout(group, command, cleanupHookTimeoutSeconds) {
 			return DoctorResult{Path: path, Command: command}, nil
 		}
 	}
-	return DoctorResult{}, fmt.Errorf("Codex Waypost wait polling guard is not installed in %q; run `waypost install codex-hook`", path)
+	return DoctorResult{}, fmt.Errorf("Codex Waypost nudge state cleanup hook is not installed in %q; run `waypost install codex-hook`", path)
 }
 
 func compactManagedGroup(command string) map[string]any {
@@ -582,6 +924,33 @@ func waitManagedGroup(command string) map[string]any {
 				"command":       command,
 				"statusMessage": waitStatusMessage,
 				"timeout":       hookTimeoutJSON,
+			},
+		},
+	}
+}
+
+func receiveManagedGroup(command string) map[string]any {
+	return map[string]any{
+		"description": receiveManagedDescription,
+		"matcher":     "^(Bash|mcp__waypost__waypost_recv)$",
+		"hooks": []any{
+			map[string]any{
+				"type":    "command",
+				"command": command,
+				"timeout": hookTimeoutJSON,
+			},
+		},
+	}
+}
+
+func cleanupManagedGroup(command string) map[string]any {
+	return map[string]any{
+		"description": cleanupManagedDescription,
+		"hooks": []any{
+			map[string]any{
+				"type":    "command",
+				"command": command,
+				"timeout": cleanupHookTimeoutJSON,
 			},
 		},
 	}
@@ -751,6 +1120,36 @@ func matcherTargetsCompactOnly(value any) bool {
 func matcherTargetsBashOnly(value any) bool {
 	matcher, ok := value.(string)
 	return ok && matcher == "^Bash$"
+}
+
+func matcherTargetsReceiveCompletionOnly(value any) bool {
+	matcher, ok := value.(string)
+	if !ok {
+		return false
+	}
+	compiled, err := regexp.Compile(matcher)
+	if err != nil || !compiled.MatchString("Bash") || !compiled.MatchString(receiveMCPToolName) {
+		return false
+	}
+	for _, other := range []string{"apply_patch", "mcp__waypost__waypost_send", "mcp__waypost__waypost_status"} {
+		if compiled.MatchString(other) {
+			return false
+		}
+	}
+	return true
+}
+
+func matcherTargetsEverySessionEnd(group map[string]any) bool {
+	value, exists := group["matcher"]
+	if !exists || value == nil {
+		return true
+	}
+	matcher, ok := value.(string)
+	if !ok {
+		return false
+	}
+	compiled, err := regexp.Compile(matcher)
+	return err == nil && compiled.MatchString("other")
 }
 
 func validateHooksStructure(hooks map[string]any) error {
