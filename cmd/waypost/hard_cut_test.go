@@ -395,6 +395,7 @@ Use waypost COMMAND --help for command syntax. Use waypost doc --list for focuse
 		"defer":         "mcp-cli-boundary",
 		"forward":       "mcp-cli-boundary",
 		"read":          "history",
+		"show":          "history",
 		"list":          "history",
 		"send":          "mcp-cli-boundary",
 		"recv":          "mcp-cli-boundary",

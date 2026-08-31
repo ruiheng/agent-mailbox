@@ -433,7 +433,7 @@ focused topics; initial topics are `mcp-cli-boundary`, `recovery`, `history`,
 One topic retains the plain prompt output. With multiple topics, each prompt is
 emitted in argument order as a `waypost: <topic>` block whose body is indented
 by two spaces. Command-shaped aliases are accepted when their routing is
-unambiguous: `read` and `list` select `history`; `group` selects `groups`;
+unambiguous: `read`, `show`, and `list` select `history`; `group` selects `groups`;
 `address` selects `addresses`; `fail` and `undefer` select `recovery`; and
 common-flow names such as `send`, `recv`, `receive`, and `claim-history` select
 `mcp-cli-boundary`. Unknown-topic errors include the canonical topic list so
@@ -612,6 +612,8 @@ Notes:
 
 Read one or more persisted messages, one or more deliveries by id, or the
 latest deliveries for one or more queues.
+
+`show` is an alias for `read`; every option and output mode works identically.
 
 ```bash
 waypost read <id> [<id> ...] [--json | --yaml]

@@ -560,9 +560,9 @@ waypost --state-dir /tmp/waypost-demo \
   read <message_id> --json
 ```
 
-`read` infers a delivery when the ID starts with `dlv_`; all other IDs are
-read as message IDs. The explicit `--delivery` and `--message` forms remain
-available.
+`show` is an alias for `read`. Both commands infer a delivery when the ID
+starts with `dlv_`; all other IDs are read as message IDs. The explicit
+`--delivery` and `--message` forms remain available.
 
 Reading by a message ID (with `--message` or a positional non-`dlv_` ID) is a
 raw body read in the trusted local environment. It does not update group read

@@ -58,7 +58,7 @@ func (a *App) Run(ctx context.Context, args []string) error {
 
 func (a *App) RunWithStateDir(ctx context.Context, stateDir string, args []string) error {
 	if len(args) == 0 {
-		return errors.New("expected a command: doc, send, forward, recv, wait, watch, read, ack, renew, release, defer, undefer, fail, dead-letter, list, stale, group, or address")
+		return errors.New("expected a command: doc, send, forward, recv, wait, watch, read, show, ack, renew, release, defer, undefer, fail, dead-letter, list, stale, group, or address")
 	}
 	if args[0] == "doc" {
 		return a.runDocCommand(args[1:])
@@ -80,7 +80,7 @@ func (a *App) RunWithStateDir(ctx context.Context, stateDir string, args []strin
 
 func (a *App) prepareCommand(args []string) (preparedCommand, error) {
 	if len(args) == 0 {
-		return nil, invalidArgumentError(errors.New("expected a command: doc, send, forward, recv, wait, watch, read, ack, renew, release, defer, undefer, fail, dead-letter, list, stale, group, or address"))
+		return nil, invalidArgumentError(errors.New("expected a command: doc, send, forward, recv, wait, watch, read, show, ack, renew, release, defer, undefer, fail, dead-letter, list, stale, group, or address"))
 	}
 
 	switch args[0] {
@@ -94,7 +94,7 @@ func (a *App) prepareCommand(args []string) (preparedCommand, error) {
 		return classifyPreparedCommand(a.prepareWaitCommand(args[1:]))
 	case "watch":
 		return classifyPreparedCommand(a.prepareWatchCommand(args[1:]))
-	case "read":
+	case "read", "show":
 		return classifyPreparedCommand(a.prepareReadCommand(args[1:]))
 	case "ack":
 		return classifyPreparedCommand(a.prepareAckCommand(args[1:]))
