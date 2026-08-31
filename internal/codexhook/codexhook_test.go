@@ -33,8 +33,8 @@ func TestWriteOutputEmitsSessionStartAdditionalContext(t *testing.T) {
 		t.Fatalf("hookEventName = %v, want SessionStart", got)
 	}
 	context, _ := specific["additionalContext"].(string)
-	if !strings.Contains(context, "Do not check or receive Waypost merely because compaction") {
-		t.Fatalf("additionalContext = %q, want Waypost notice guard", context)
+	if context != AdditionalContext {
+		t.Fatalf("additionalContext = %q, want compact guard %q", context, AdditionalContext)
 	}
 }
 

@@ -65,8 +65,9 @@ func TestRunCodexHookEmitsHookSpecificOutput(t *testing.T) {
 	if !strings.Contains(stdout.String(), `"hookEventName":"SessionStart"`) {
 		t.Fatalf("codex-hook output = %q, want SessionStart hook output", stdout.String())
 	}
-	if !strings.Contains(stdout.String(), "Do not check or receive Waypost merely because compaction") {
-		t.Fatalf("codex-hook output = %q, want notice guard", stdout.String())
+	if !strings.Contains(stdout.String(), "already handled before compaction") ||
+		!strings.Contains(stdout.String(), "Do not repeat the receive merely because of compaction") {
+		t.Fatalf("codex-hook output = %q, want compact guard", stdout.String())
 	}
 }
 

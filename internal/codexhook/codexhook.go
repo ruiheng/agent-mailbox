@@ -38,9 +38,7 @@ const hookTimeoutJSON json.Number = "5"
 const cleanupHookTimeoutSeconds int64 = 3
 const cleanupHookTimeoutJSON json.Number = "3"
 
-const AdditionalContext = `Do not check or receive Waypost merely because compaction occurred or its summary mentions historical notices or a future conditional Waypost step.
-Only check Waypost after a fresh live NOTICE, an explicit user request, or while continuing an already-claimed delivery.
-Resume the task that was active before compaction.`
+const AdditionalContext = `A prior Waypost nudge in this session was already handled before compaction (either a receive completed or no message was available). Do not repeat the receive merely because of compaction. Continue from the compacted context.`
 
 const MCPNudgeContext = `The waypost_recv MCP tool is available. Use it instead of the Waypost CLI.`
 
