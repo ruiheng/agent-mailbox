@@ -348,12 +348,7 @@ func (store fileNudgeStateStore) Save(sessionID string, state nudgeState) error 
 	if err := temporary.Close(); err != nil {
 		return fmt.Errorf("close Codex Waypost nudge state: %w", err)
 	}
-	if runtime.GOOS == "windows" {
-		if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
-			return fmt.Errorf("replace Codex Waypost nudge state %q: %w", path, err)
-		}
-	}
-	if err := os.Rename(temporaryPath, path); err != nil {
+	if err := replaceHooksFile(temporaryPath, path); err != nil {
 		return fmt.Errorf("replace Codex Waypost nudge state %q: %w", path, err)
 	}
 	return nil
@@ -685,7 +680,11 @@ func CurrentCommand() (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("resolve waypost executable: %w", err)
 	}
-	return quoteCommandPath(executable) + " codex-hook", nil
+	command := quoteCommandPath(executable) + " codex-hook"
+	if runtime.GOOS == "windows" {
+		command = "& " + command
+	}
+	return command, nil
 }
 
 func Install(codexHome, command string) (InstallResult, error) {
@@ -1314,7 +1313,7 @@ func writeHooksDocument(path string, document map[string]any, mode os.FileMode) 
 	if err := temporary.Close(); err != nil {
 		return fmt.Errorf("close temporary Codex hooks: %w", err)
 	}
-	if err := os.Rename(temporaryPath, writePath); err != nil {
+	if err := replaceHooksFile(temporaryPath, writePath); err != nil {
 		return fmt.Errorf("replace Codex hooks %q: %w", path, err)
 	}
 	return nil

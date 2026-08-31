@@ -1254,6 +1254,11 @@ func newLeaseTestStore(t *testing.T) (*Runtime, *Store) {
 	if err != nil {
 		t.Fatalf("OpenRuntime() error = %v", err)
 	}
+	t.Cleanup(func() {
+		if err := runtime.Close(); err != nil {
+			t.Errorf("Runtime.Close() error = %v", err)
+		}
+	})
 	return runtime, runtime.Store()
 }
 

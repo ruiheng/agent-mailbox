@@ -219,7 +219,7 @@ func TestFileNudgeStateStorePersistsAndClearsSessionState(t *testing.T) {
 	if err != nil {
 		t.Fatalf("state file Info() error = %v", err)
 	}
-	if got := info.Mode().Perm(); got != 0o600 {
+	if got := info.Mode().Perm(); runtime.GOOS != "windows" && got != 0o600 {
 		t.Fatalf("state file mode = %o, want 600", got)
 	}
 	if state, err := store.Load(sessionID); err != nil || state != nudgePending {
@@ -908,7 +908,7 @@ func TestInstallPreservesUnrelatedHooksAndIsIdempotent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Stat(hooks.json) error = %v", err)
 	}
-	if got := info.Mode().Perm(); got != 0o640 {
+	if got := info.Mode().Perm(); runtime.GOOS != "windows" && got != 0o640 {
 		t.Fatalf("hooks.json mode = %o, want 640", got)
 	}
 
@@ -1066,6 +1066,9 @@ func TestCurrentCommandUsesStableLauncherPath(t *testing.T) {
 		t.Fatalf("CurrentCommand() error = %v", err)
 	}
 	want := quoteCommandPath(stable) + " codex-hook"
+	if runtime.GOOS == "windows" {
+		want = "& " + want
+	}
 	if command != want {
 		t.Fatalf("CurrentCommand() = %q, want %q", command, want)
 	}
@@ -1172,7 +1175,7 @@ func TestInstallPreservesSymlinkAndUpdatesTarget(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Stat(target hooks.json) error = %v", err)
 	}
-	if got := targetInfo.Mode().Perm(); got != 0o640 {
+	if got := targetInfo.Mode().Perm(); runtime.GOOS != "windows" && got != 0o640 {
 		t.Fatalf("target hooks.json mode = %o, want 640", got)
 	}
 }

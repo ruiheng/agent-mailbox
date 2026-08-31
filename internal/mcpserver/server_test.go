@@ -166,7 +166,8 @@ func TestWaypostSendSchemaExposesSingleOrBatchTarget(t *testing.T) {
 }
 
 func TestWaypostSendReadsBodyFile(t *testing.T) {
-	bodyFile := filepath.Join(t.TempDir(), " message.md ")
+	workdir := t.TempDir()
+	bodyFile := filepath.Join(workdir, " message.md ")
 	if err := os.WriteFile(bodyFile, []byte("review from file\n"), 0o600); err != nil {
 		t.Fatalf("WriteFile() error = %v", err)
 	}
@@ -187,12 +188,13 @@ func TestWaypostSendReadsBodyFile(t *testing.T) {
 		DisableLeaseRenewLoop: true,
 	})
 	defer service.Close()
+	service.state.defaultWorkdir = workdir
 
 	output := callServiceTool(t, service, "waypost_send", map[string]any{
 		"to":                     "workflow/reviewer",
 		"from_address":           "agent/sender",
 		"subject":                "file body",
-		"body_file":              bodyFile,
+		"body_file":              filepath.Base(bodyFile),
 		"disable_notify_message": true,
 	})
 	if output["delivery_id"] != "dlv_file" {
@@ -201,7 +203,8 @@ func TestWaypostSendReadsBodyFile(t *testing.T) {
 }
 
 func TestWaypostSendBodyFileBatchUsesOneSnapshot(t *testing.T) {
-	bodyFile := filepath.Join(t.TempDir(), "message.md")
+	workdir := t.TempDir()
+	bodyFile := filepath.Join(workdir, "message.md")
 	if err := os.WriteFile(bodyFile, []byte("original body"), 0o600); err != nil {
 		t.Fatalf("WriteFile() error = %v", err)
 	}
@@ -226,6 +229,7 @@ func TestWaypostSendBodyFileBatchUsesOneSnapshot(t *testing.T) {
 		DisableLeaseRenewLoop: true,
 	})
 	defer service.Close()
+	service.state.defaultWorkdir = workdir
 
 	output := callServiceTool(t, service, "waypost_send", map[string]any{
 		"to":                     []string{"workflow/one", "workflow/two"},
@@ -243,11 +247,12 @@ func TestWaypostSendBodyFileBatchUsesOneSnapshot(t *testing.T) {
 }
 
 func TestWaypostSendRejectsInvalidBodySourcesBeforeSending(t *testing.T) {
-	emptyFile := filepath.Join(t.TempDir(), "empty.md")
+	workdir := t.TempDir()
+	emptyFile := filepath.Join(workdir, "empty.md")
 	if err := os.WriteFile(emptyFile, nil, 0o600); err != nil {
 		t.Fatalf("WriteFile() error = %v", err)
 	}
-	missingFile := filepath.Join(t.TempDir(), "missing.md")
+	missingFile := filepath.Join(workdir, "missing.md")
 
 	waypostService := &fakeWaypostService{t: t}
 	waypostService.sendFunc = func(_ context.Context, params waypost.SendParams) (waypost.SendResult, error) {
@@ -260,6 +265,7 @@ func TestWaypostSendRejectsInvalidBodySourcesBeforeSending(t *testing.T) {
 		DisableLeaseRenewLoop: true,
 	})
 	defer service.Close()
+	service.state.defaultWorkdir = workdir
 
 	tests := []struct {
 		name        string
@@ -271,7 +277,7 @@ func TestWaypostSendRejectsInvalidBodySourcesBeforeSending(t *testing.T) {
 		{name: "empty inline body", bodyArgs: map[string]any{"body": ""}, wantMessage: waypost.ErrEmptyBody.Error()},
 		{name: "empty file path", bodyArgs: map[string]any{"body_file": "  "}, wantMessage: "body_file must not be empty"},
 		{name: "empty file", bodyArgs: map[string]any{"body_file": emptyFile}, wantMessage: waypost.ErrEmptyBody.Error()},
-		{name: "missing file", bodyArgs: map[string]any{"body_file": missingFile}, wantMessage: "read waypost_send body_file"},
+		{name: "missing file", bodyArgs: map[string]any{"body_file": missingFile}, wantMessage: "resolve waypost_send body_file"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -5664,6 +5670,7 @@ func TestWaypostServiceUsesConfiguredStateDir(t *testing.T) {
 			return RunResult{}, nil
 		}},
 	})
+	defer service.Close()
 	service.state.boundAddresses = []string{"agent-deck/self"}
 	service.state.defaultSender = "agent-deck/self"
 	service.state.autoBindAttempted = true
@@ -5878,6 +5885,7 @@ func TestWaypostRecvDoesNotWaitForLaterMessage(t *testing.T) {
 		DisableWakeScheduler:  true,
 		DisableLeaseRenewLoop: true,
 	})
+	defer service.Close()
 	service.state.boundAddresses = []string{"agent-deck/self"}
 	service.state.defaultSender = "agent-deck/self"
 	service.state.autoBindAttempted = true
@@ -5933,6 +5941,7 @@ func TestWaypostRecvReportsActiveLeaseImmediately(t *testing.T) {
 		DisableWakeScheduler:  true,
 		DisableLeaseRenewLoop: true,
 	})
+	defer service.Close()
 	service.state.boundAddresses = []string{"agent-deck/self"}
 	service.state.defaultSender = "agent-deck/self"
 	service.state.autoBindAttempted = true
@@ -6014,6 +6023,7 @@ func TestWaypostRecvKnownDeliveryIDsSuppressActiveLeaseReport(t *testing.T) {
 		DisableWakeScheduler:  true,
 		DisableLeaseRenewLoop: true,
 	})
+	defer service.Close()
 	service.state.boundAddresses = []string{"agent-deck/self"}
 	service.state.defaultSender = "agent-deck/self"
 	service.state.autoBindAttempted = true

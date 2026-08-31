@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	goruntime "runtime"
 	"strings"
 	"testing"
 	"time"
@@ -26,13 +27,13 @@ func TestOpenRuntimeInitializesStateAndSchema(t *testing.T) {
 
 	if info, err := os.Stat(runtime.StateDir()); err != nil {
 		t.Fatalf("os.Stat(stateDir) error = %v", err)
-	} else if info.Mode().Perm() != 0o700 {
+	} else if goruntime.GOOS != "windows" && info.Mode().Perm() != 0o700 {
 		t.Fatalf("state dir permissions = %o, want 700", info.Mode().Perm())
 	}
 
 	if info, err := os.Stat(runtime.BlobDir()); err != nil {
 		t.Fatalf("os.Stat(blobDir) error = %v", err)
-	} else if info.Mode().Perm() != 0o700 {
+	} else if goruntime.GOOS != "windows" && info.Mode().Perm() != 0o700 {
 		t.Fatalf("blob dir permissions = %o, want 700", info.Mode().Perm())
 	}
 
