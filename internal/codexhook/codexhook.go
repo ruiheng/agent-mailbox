@@ -350,12 +350,7 @@ func (store fileNudgeStateStore) Save(sessionID string, state nudgeState) error 
 	if err := temporary.Close(); err != nil {
 		return fmt.Errorf("close Codex Waypost nudge state: %w", err)
 	}
-	if runtime.GOOS == "windows" {
-		if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
-			return fmt.Errorf("replace Codex Waypost nudge state %q: %w", path, err)
-		}
-	}
-	if err := os.Rename(temporaryPath, path); err != nil {
+	if err := replaceHooksFile(temporaryPath, path); err != nil {
 		return fmt.Errorf("replace Codex Waypost nudge state %q: %w", path, err)
 	}
 	return nil

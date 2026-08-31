@@ -219,7 +219,7 @@ func TestFileNudgeStateStorePersistsAndClearsSessionState(t *testing.T) {
 	if err != nil {
 		t.Fatalf("state file Info() error = %v", err)
 	}
-	if got := info.Mode().Perm(); got != 0o600 {
+	if got := info.Mode().Perm(); runtime.GOOS != "windows" && got != 0o600 {
 		t.Fatalf("state file mode = %o, want 600", got)
 	}
 	if state, err := store.Load(sessionID); err != nil || state != nudgePending {
