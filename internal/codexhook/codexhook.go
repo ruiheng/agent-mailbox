@@ -682,7 +682,11 @@ func CurrentCommand() (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("resolve waypost executable: %w", err)
 	}
-	return quoteCommandPath(executable) + " codex-hook", nil
+	command := quoteCommandPath(executable) + " codex-hook"
+	if runtime.GOOS == "windows" {
+		command = "& " + command
+	}
+	return command, nil
 }
 
 func Install(codexHome, command string) (InstallResult, error) {

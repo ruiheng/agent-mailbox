@@ -1066,6 +1066,9 @@ func TestCurrentCommandUsesStableLauncherPath(t *testing.T) {
 		t.Fatalf("CurrentCommand() error = %v", err)
 	}
 	want := quoteCommandPath(stable) + " codex-hook"
+	if runtime.GOOS == "windows" {
+		want = "& " + want
+	}
 	if command != want {
 		t.Fatalf("CurrentCommand() = %q, want %q", command, want)
 	}
