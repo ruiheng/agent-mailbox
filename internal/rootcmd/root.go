@@ -56,7 +56,7 @@ func (a *App) Run(ctx context.Context, args []string) error {
 		return err
 	}
 	if len(rest) == 0 {
-		return errors.New("expected a command: mcp, codex-hook, install, doctor, migrate, doc, send, forward, recv, wait, watch, read, ack, renew, release, defer, undefer, fail, dead-letter, list, stale, group, or address")
+		return errors.New("expected a command: mcp, codex-hook, install, doctor, migrate, doc, send, forward, recv, wait, watch, read, show, ack, renew, release, defer, undefer, fail, dead-letter, list, stale, group, or address")
 	}
 	if rest[0] == "codex-hook" {
 		return a.runCodexHookCommand(ctx, rest[1:])
@@ -312,6 +312,7 @@ func (a *App) writeRootHelp() {
 		"  wait                Wait for one delivery without claiming",
 		"  watch               Observe deliveries without claiming",
 		"  read                Read one persisted personal message or delivery",
+		"  show                Alias for read",
 		"  list                List deliveries",
 		"  stale               List stale personal queues",
 		"  group               Manage group wayposts",

@@ -86,6 +86,7 @@ var cliDocTopicAliases = map[string]string{
 	"group":         "groups",
 	"list":          "history",
 	"read":          "history",
+	"show":          "history",
 	"receive":       "mcp-cli-boundary",
 	"receiver":      "mcp-cli-boundary",
 	"recv":          "mcp-cli-boundary",

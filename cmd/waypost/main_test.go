@@ -139,6 +139,21 @@ func TestCLISendRecvAckFlow(t *testing.T) {
 		t.Fatalf("read acked body = %v, want hello reviewer\\n", stored.Items[0]["body"])
 	}
 
+	show := runCLI(t, "", "--state-dir", stateDir,
+		"show",
+		"--delivery", message.DeliveryID,
+		"--json",
+	)
+	if show.exitCode != 0 {
+		t.Fatalf("show acked exit code = %d, stderr = %q", show.exitCode, show.stderr)
+	}
+	if show.stdout != read.stdout {
+		t.Fatalf("show stdout = %q, want read stdout %q", show.stdout, read.stdout)
+	}
+	if show.stderr != read.stderr {
+		t.Fatalf("show stderr = %q, want read stderr %q", show.stderr, read.stderr)
+	}
+
 	readByDirectDeliveryID := runCLI(t, "", "--state-dir", stateDir,
 		"read",
 		message.DeliveryID,
@@ -1967,6 +1982,11 @@ func TestCLIHelpExitsZeroAndPrintsUsage(t *testing.T) {
 			wantContains: "  dead-letter         Stop retrying a leased delivery",
 		},
 		{
+			name:         "root help lists show alias",
+			args:         []string{"--help"},
+			wantContains: "  show                Alias for read",
+		},
+		{
 			name:         "send help",
 			args:         []string{"send", "--help"},
 			wantContains: "Usage:\n  waypost send --to ADDRESS [--to ADDRESS ...] --body-file PATH [options] [--json | --yaml] [--full] [--notify]",
@@ -1994,6 +2014,11 @@ func TestCLIHelpExitsZeroAndPrintsUsage(t *testing.T) {
 		{
 			name:         "read help",
 			args:         []string{"read", "--help"},
+			wantContains: "Usage:\n  waypost read ID [ID ...] [--json | --yaml]",
+		},
+		{
+			name:         "show help",
+			args:         []string{"show", "--help"},
 			wantContains: "Usage:\n  waypost read ID [ID ...] [--json | --yaml]",
 		},
 		{
