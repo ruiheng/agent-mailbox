@@ -145,8 +145,8 @@ func (s *Service) tryWakeChannel(ctx context.Context, snapshot wakeSnapshot, run
 		}
 		outcome := s.waypostOverviewEmitter(ctx)
 		logWakeAttempt(snapshot, now, channel, config.Category, waypostOverviewURI, outcome)
-		if notificationOutcomeDelivered(outcome) {
-			s.wakeSchedulerState.markDelivered(snapshot.ScopeID, channel, now, snapshot.PendingSince)
+		if notificationOutcomeAttempted(outcome) {
+			s.wakeSchedulerState.markAttempted(snapshot.ScopeID, channel, now, snapshot.PendingSince)
 			return true
 		}
 		return false
@@ -186,14 +186,19 @@ func (s *Service) tryWakeChannel(ctx context.Context, snapshot wakeSnapshot, run
 				}
 				continue
 			}
+			if wakeCtx.Err() != nil {
+				budgetExhausted = true
+				logWakeSuppressed(snapshot, runtime, now, channel, config.Category, target.Target, "unavailable:channel_budget_exhausted")
+				break
+			}
 			attemptedWakeableTarget = true
 			outcome := s.notifications.notifyRoute(wakeCtx, notificationEvent{
 				Kind:  notificationFallbackWake,
 				Route: route,
 			})
 			logWakeAttempt(snapshot, now, channel, config.Category, target.Target, outcome)
-			if notificationOutcomeDelivered(outcome) {
-				s.wakeSchedulerState.markDelivered(snapshot.ScopeID, channel, now, snapshot.PendingSince)
+			if notificationOutcomeAttempted(outcome) {
+				s.wakeSchedulerState.markAttempted(snapshot.ScopeID, channel, now, snapshot.PendingSince)
 				return true
 			}
 			if wakeCtx.Err() != nil {
@@ -450,7 +455,7 @@ func logWakeAttempt(snapshot wakeSnapshot, now time.Time, channel WakeChannelNam
 		errText = outcome.Err.Error()
 	}
 	log.Printf(
-		"mcpserver wake_attempt scope_id=%s channel=%s category=%s target=%s status=%s scheme=%s pending_since=%s addresses=%q now=%s err=%q",
+		"mcpserver wake_attempt scope_id=%s channel=%s category=%s target=%s status=%s scheme=%s pending_since=%s addresses=%q now=%s detail=%q err=%q",
 		snapshot.ScopeID,
 		channel,
 		category,
@@ -460,6 +465,7 @@ func logWakeAttempt(snapshot wakeSnapshot, now time.Time, channel WakeChannelNam
 		snapshot.PendingSince,
 		strings.Join(snapshot.BoundAddresses, ","),
 		now.Format(time.RFC3339Nano),
+		outcome.Detail,
 		errText,
 	)
 }
@@ -477,7 +483,7 @@ func (s *wakeSchedulerState) runtimeForScope(scopeID, pendingSince string) wakeR
 	return runtime
 }
 
-func (s *wakeSchedulerState) markDelivered(scopeID string, channel WakeChannelName, now time.Time, pendingSince string) {
+func (s *wakeSchedulerState) markAttempted(scopeID string, channel WakeChannelName, now time.Time, pendingSince string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	runtime := s.runtimes[scopeID]

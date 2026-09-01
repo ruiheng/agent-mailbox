@@ -311,7 +311,11 @@ Inline and file-backed empty bodies are rejected.
 `waypost_send` always uses the fixed wakeup text for supported remote notify
 paths. Set `disable_notify_message = true` to skip only that immediate send-time
 notify. Its default single-recipient result contains the durable receipt,
-`status`, and `notify_status`; `notify_error` is added only on failure. Set
+`status`, and `notify_status`; `notify_detail` explains an unconfirmed attempt,
+while `notify_error` is added only on definite failure. An `unconfirmed` nudge
+was attempted but could not be verified, so that command is not retried or
+followed by another target in the same wake attempt. Later unread-delivery
+reminders retain the scheduler's normal cooldown policy. Set
 `diagnostics: true` for effective routing, notification scheme, and group
 storage metadata. Batch result items retain their resolved sender, recipient,
 subject, notification outcome, and applicable receipt fields. Input echoes such
@@ -401,9 +405,14 @@ send succeeds. Add `--full` when you also need the legacy `message_id` and
 `blob_id`, or add `--json` / `--yaml` for the same compact or full payloads in
 structured form.
 
-With `--notify`, structured output includes `notify_status`,
-`notify_scheme`, and `notify_error`. Notification failure is informational and
-never rolls back the durable delivery.
+With `--notify`, structured output includes `notify_status`, `notify_scheme`,
+optional `notify_detail`, and `notify_error`. `notify_status=unconfirmed` means
+the wake request may have reached the target but turn submission was not
+verified; it is not reported as a wake failure, and the same command is not
+immediately retried.
+The scheduler may issue a later reminder after its normal cooldown if the
+delivery remains unread. Notification failure is informational and never rolls
+back the durable delivery.
 
 Group delivery is explicit. Create a group address first, then send with
 `--group`:

@@ -31,6 +31,7 @@ type SendResultCompactWithNotification struct {
 	MessageCreatedAt string  `json:"message_created_at,omitempty"`
 	NotifyStatus     string  `json:"notify_status"`
 	NotifyScheme     *string `json:"notify_scheme"`
+	NotifyDetail     *string `json:"notify_detail,omitempty"`
 	NotifyError      *string `json:"notify_error"`
 }
 
@@ -45,6 +46,7 @@ type SendResultFullWithNotification struct {
 	MessageCreatedAt string  `json:"message_created_at,omitempty"`
 	NotifyStatus     string  `json:"notify_status"`
 	NotifyScheme     *string `json:"notify_scheme"`
+	NotifyDetail     *string `json:"notify_detail,omitempty"`
 	NotifyError      *string `json:"notify_error"`
 }
 
@@ -73,6 +75,7 @@ type SendBatchItemOutput struct {
 	MessageCreatedAt string  `json:"message_created_at,omitempty"`
 	NotifyStatus     *string `json:"notify_status,omitempty"`
 	NotifyScheme     *string `json:"notify_scheme,omitempty"`
+	NotifyDetail     *string `json:"notify_detail,omitempty"`
 	NotifyError      *string `json:"notify_error,omitempty"`
 	Error            string  `json:"error,omitempty"`
 }
@@ -219,7 +222,7 @@ func FullSendResult(result SendResult) SendResultFull {
 	}
 }
 
-func notificationOutputFields(outcome SendNotificationOutcome) (string, *string, *string) {
+func notificationOutputFields(outcome SendNotificationOutcome) (string, *string, *string, *string) {
 	status := outcome.Status
 	if status == "" {
 		status = "unknown"
@@ -230,16 +233,21 @@ func notificationOutputFields(outcome SendNotificationOutcome) (string, *string,
 		scheme = &value
 	}
 	var notifyError *string
+	var notifyDetail *string
+	if outcome.Detail != "" {
+		value := outcome.Detail
+		notifyDetail = &value
+	}
 	if outcome.Err != nil {
 		value := outcome.Err.Error()
 		notifyError = &value
 	}
-	return status, scheme, notifyError
+	return status, scheme, notifyDetail, notifyError
 }
 
 func CompactSendResultWithNotification(result SendResult, outcome SendNotificationOutcome) SendResultCompactWithNotification {
 	compact := CompactSendResult(result)
-	status, scheme, notifyError := notificationOutputFields(outcome)
+	status, scheme, notifyDetail, notifyError := notificationOutputFields(outcome)
 	return SendResultCompactWithNotification{
 		Mode:             compact.Mode,
 		DeliveryID:       compact.DeliveryID,
@@ -250,13 +258,14 @@ func CompactSendResultWithNotification(result SendResult, outcome SendNotificati
 		MessageCreatedAt: compact.MessageCreatedAt,
 		NotifyStatus:     status,
 		NotifyScheme:     scheme,
+		NotifyDetail:     notifyDetail,
 		NotifyError:      notifyError,
 	}
 }
 
 func FullSendResultWithNotification(result SendResult, outcome SendNotificationOutcome) SendResultFullWithNotification {
 	full := FullSendResult(result)
-	status, scheme, notifyError := notificationOutputFields(outcome)
+	status, scheme, notifyDetail, notifyError := notificationOutputFields(outcome)
 	return SendResultFullWithNotification{
 		Mode:             full.Mode,
 		MessageID:        full.MessageID,
@@ -268,6 +277,7 @@ func FullSendResultWithNotification(result SendResult, outcome SendNotificationO
 		MessageCreatedAt: full.MessageCreatedAt,
 		NotifyStatus:     status,
 		NotifyScheme:     scheme,
+		NotifyDetail:     notifyDetail,
 		NotifyError:      notifyError,
 	}
 }
@@ -325,9 +335,10 @@ func SendBatchCLIOutput(result SendBatchResult, full, includeNotification bool) 
 				unknown := "unknown"
 				projected.NotifyStatus = &unknown
 			} else {
-				status, scheme, notifyError := notificationOutputFields(*item.Notification)
+				status, scheme, notifyDetail, notifyError := notificationOutputFields(*item.Notification)
 				projected.NotifyStatus = &status
 				projected.NotifyScheme = scheme
+				projected.NotifyDetail = notifyDetail
 				projected.NotifyError = notifyError
 			}
 		}

@@ -624,7 +624,7 @@ func TestWaypostSendBatchRetriesNewAgentDeckTargetsBeforeNudging(t *testing.T) {
 				return RunResult{ExitCode: 0, Stdout: `{"id":"` + target + `","status":"running"}`}, nil
 			}
 		case isAgentDeckDeferredSend(args):
-			target := args[8]
+			target := args[9]
 			callMu.Lock()
 			nudgeCounts[target]++
 			callMu.Unlock()
@@ -1611,6 +1611,7 @@ func canonicalTestWorkdir(t *testing.T, path string) string {
 func agentDeckDeferredSendArgs(target, message string) []string {
 	return []string{
 		"agent-deck", "session", "send",
+		"--json",
 		"-defer-if-busy",
 		"-defer-timeout", agentDeckNotifyDeferTimeout.String(),
 		"-timeout", agentDeckNotifyReadyTimeout.String(),
@@ -1619,15 +1620,85 @@ func agentDeckDeferredSendArgs(target, message string) []string {
 }
 
 func isAgentDeckDeferredSend(args []string) bool {
-	return len(args) == 10 &&
+	return len(args) == 11 &&
 		args[0] == "agent-deck" &&
 		args[1] == "session" &&
 		args[2] == "send" &&
-		args[3] == "-defer-if-busy" &&
-		args[4] == "-defer-timeout" &&
-		args[5] == agentDeckNotifyDeferTimeout.String() &&
-		args[6] == "-timeout" &&
-		args[7] == agentDeckNotifyReadyTimeout.String()
+		args[3] == "--json" &&
+		args[4] == "-defer-if-busy" &&
+		args[5] == "-defer-timeout" &&
+		args[6] == agentDeckNotifyDeferTimeout.String() &&
+		args[7] == "-timeout" &&
+		args[8] == agentDeckNotifyReadyTimeout.String()
+}
+
+func TestAgentDeckNudgeStructuredResultMapping(t *testing.T) {
+	tests := []struct {
+		name       string
+		result     RunResult
+		wantStatus string
+		wantDetail bool
+		wantError  bool
+	}{
+		{name: "submitted boolean", result: RunResult{ExitCode: 0, Stdout: `{"success":true,"delivery":"submitted","submitted":true}`}, wantStatus: "sent"},
+		{name: "typed", result: RunResult{ExitCode: 1, Stdout: `{"success":false,"delivery":"typed","submitted":false,"error":"not confirmed","code":"DELIVERY_FAILED"}`}, wantStatus: "unconfirmed", wantDetail: true},
+		{name: "unverified", result: RunResult{ExitCode: 0, Stdout: `{"success":true,"delivery":"unverified","submitted":false}`}, wantStatus: "unconfirmed", wantDetail: true},
+		{name: "no evidence", result: RunResult{ExitCode: 1, Stdout: `{"success":false,"delivery":"no_evidence","submitted":false,"error":"no evidence","code":"DELIVERY_FAILED"}`}, wantStatus: "unconfirmed", wantDetail: true},
+		{name: "typed not submitted", result: RunResult{ExitCode: 1, Stdout: `{"success":false,"delivery":"typed_not_submitted","submitted":false,"error":"not submitted","code":"DELIVERY_FAILED"}`}, wantStatus: "failed", wantError: true},
+		{name: "line too long", result: RunResult{ExitCode: 1, Stdout: `{"success":false,"delivery":"line_too_long","submitted":false,"error":"too long","code":"DELIVERY_FAILED"}`}, wantStatus: "failed", wantError: true},
+		{name: "send failed", result: RunResult{ExitCode: 1, Stdout: `{"success":false,"delivery":"send_failed","submitted":false,"error":"send failed","code":"INVALID_OPERATION"}`}, wantStatus: "failed", wantError: true},
+		{name: "legacy exit zero", result: RunResult{ExitCode: 0, Stdout: "Sent message"}, wantStatus: "sent"},
+		{name: "legacy nonzero", result: RunResult{ExitCode: 1, Stdout: "", Stderr: "legacy failure"}, wantStatus: "failed", wantError: true},
+		{name: "structured pre-send failure", result: RunResult{ExitCode: 2, Stdout: `{"success":false,"error":"session not found","code":"NOT_FOUND"}`}, wantStatus: "failed", wantError: true},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			runner := &fakeRunner{t: t, handler: func(args []string, input string) (RunResult, error) {
+				if !slices.Contains(args, "--json") {
+					t.Fatalf("agent-deck nudge args = %v, want --json", args)
+				}
+				return test.result, nil
+			}}
+			outcome := (agentDeckNotifier{runner: runner}).runNudge(context.Background(), agentDeckDeferredSendArgs("target", defaultNotifyMessage))
+			if outcome.Status != test.wantStatus {
+				t.Fatalf("status = %q, want %q", outcome.Status, test.wantStatus)
+			}
+			if (outcome.Detail != "") != test.wantDetail {
+				t.Fatalf("detail = %q, want present=%v", outcome.Detail, test.wantDetail)
+			}
+			if (outcome.Err != nil) != test.wantError {
+				t.Fatalf("error = %v, want present=%v", outcome.Err, test.wantError)
+			}
+		})
+	}
+}
+
+func TestAgentDeckNudgeDoesNotRunWithPreCanceledContext(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	runner := &fakeRunner{t: t, handler: func(args []string, input string) (RunResult, error) {
+		t.Fatalf("runner called with pre-canceled context: %v", args)
+		return RunResult{}, nil
+	}}
+
+	outcome := (agentDeckNotifier{runner: runner}).runNudge(ctx, agentDeckDeferredSendArgs("target", defaultNotifyMessage))
+	if outcome.Status != "failed" || !errors.Is(outcome.Err, context.Canceled) {
+		t.Fatalf("outcome = %+v, want failed context cancellation before attempt", outcome)
+	}
+}
+
+func TestAgentDeckNudgeCancellationAfterRunnerCallIsUnconfirmed(t *testing.T) {
+	called := false
+	runner := &fakeRunner{t: t, handler: func(args []string, input string) (RunResult, error) {
+		called = true
+		return RunResult{}, context.Canceled
+	}}
+
+	outcome := (agentDeckNotifier{runner: runner}).runNudge(context.Background(), agentDeckDeferredSendArgs("target", defaultNotifyMessage))
+	if !called || outcome.Status != "unconfirmed" || outcome.Err != nil {
+		t.Fatalf("called = %v, outcome = %+v; want attempted unconfirmed cancellation", called, outcome)
+	}
 }
 
 func TestResolveWakeNotifyMessageUsesFixedWakeText(t *testing.T) {
@@ -1669,11 +1740,11 @@ func TestWaypostSendNotifiesWorkerTarget(t *testing.T) {
 		case strings.Join(args, "\x00") == strings.Join([]string{"agent-deck", "session", "show", "target", "--json"}, "\x00"):
 			return RunResult{ExitCode: 0, Stdout: `{"id":"target","title":"coder-123","status":"waiting"}`}, nil
 		case isAgentDeckDeferredSend(args):
-			if args[8] != "target" {
-				t.Fatalf("notify target = %q, want target", args[8])
+			if args[9] != "target" {
+				t.Fatalf("notify target = %q, want target", args[9])
 			}
-			if args[9] != defaultNotifyMessage {
-				t.Fatalf("notify message = %q, want fixed default", args[9])
+			if args[10] != defaultNotifyMessage {
+				t.Fatalf("notify message = %q, want fixed default", args[10])
 			}
 			return RunResult{ExitCode: 0}, nil
 		default:
@@ -2093,7 +2164,7 @@ func TestCLINotifyWaypostSendUsesMCPNotificationPath(t *testing.T) {
 	}
 }
 
-func TestWaypostSendDoesNotRetryFailedNudge(t *testing.T) {
+func TestWaypostSendDoesNotRetryUnconfirmedNudge(t *testing.T) {
 	waypostService := &fakeWaypostService{t: t}
 	sendCount := 0
 	waypostService.sendFunc = func(_ context.Context, params waypost.SendParams) (waypost.SendResult, error) {
@@ -2114,7 +2185,7 @@ func TestWaypostSendDoesNotRetryFailedNudge(t *testing.T) {
 			return RunResult{ExitCode: 0, Stdout: `{"id":"target","title":"coder-123","status":"waiting"}`}, nil
 		case isAgentDeckDeferredSend(args):
 			nudgeAttempts++
-			return RunResult{ExitCode: 1, Stderr: "ambiguous wakeup failure"}, nil
+			return RunResult{ExitCode: 1, Stdout: `{"success":false,"delivery":"typed","submitted":false,"error":"submission not confirmed","code":"DELIVERY_FAILED"}`}, nil
 		default:
 			t.Fatalf("unexpected command args: %v", args)
 			return RunResult{}, nil
@@ -2144,11 +2215,14 @@ func TestWaypostSendDoesNotRetryFailedNudge(t *testing.T) {
 	if got := output["status"]; got != "sent" {
 		t.Fatalf("status = %v, want sent", got)
 	}
-	if got := output["notify_status"]; got != "failed" {
-		t.Fatalf("notify_status = %v, want failed", got)
+	if got := output["notify_status"]; got != "unconfirmed" {
+		t.Fatalf("notify_status = %v, want unconfirmed", got)
 	}
-	if got := output["notify_error"]; got == nil || !strings.Contains(got.(string), "ambiguous wakeup failure") {
-		t.Fatalf("notify_error = %v, want ambiguous wakeup failure detail", got)
+	if got := output["notify_detail"]; got == nil || !strings.Contains(got.(string), "target pane") {
+		t.Fatalf("notify_detail = %v, want typed delivery detail", got)
+	}
+	if got := output["notify_error"]; got != nil {
+		t.Fatalf("notify_error = %v, want nil", got)
 	}
 	if sendCount != 1 {
 		t.Fatalf("durable sends = %d, want 1", sendCount)
@@ -2407,11 +2481,14 @@ func TestWaypostSendDoesNotRetryAmbiguousNudgeTimeout(t *testing.T) {
 		"body":    "body",
 	})
 
-	if got := output["notify_status"]; got != "failed" {
-		t.Fatalf("notify_status = %v, want failed", got)
+	if got := output["notify_status"]; got != "unconfirmed" {
+		t.Fatalf("notify_status = %v, want unconfirmed", got)
 	}
-	if got := output["notify_error"]; got == nil || !strings.Contains(got.(string), "timed out") {
-		t.Fatalf("notify_error = %v, want timeout detail", got)
+	if got := output["notify_detail"]; got == nil || !strings.Contains(got.(string), "timed out") {
+		t.Fatalf("notify_detail = %v, want timeout detail", got)
+	}
+	if got := output["notify_error"]; got != nil {
+		t.Fatalf("notify_error = %v, want nil", got)
 	}
 	if probeAttempts != 1 {
 		t.Fatalf("probe attempts = %d, want 1", probeAttempts)
@@ -2697,8 +2774,8 @@ func TestWaypostSendGroupModeNotifiesSubscriber(t *testing.T) {
 		case strings.Join(args, "\x00") == strings.Join([]string{"agent-deck", "session", "show", "observer", "--json"}, "\x00"):
 			return RunResult{ExitCode: 0, Stdout: `{"id":"observer","title":"observer","status":"waiting"}`}, nil
 		case isAgentDeckDeferredSend(args):
-			if args[8] != "moderator" && args[8] != "observer" {
-				t.Fatalf("notify target = %q, want moderator or observer", args[8])
+			if args[9] != "moderator" && args[9] != "observer" {
+				t.Fatalf("notify target = %q, want moderator or observer", args[9])
 			}
 			return RunResult{ExitCode: 0}, nil
 		default:
@@ -2738,7 +2815,7 @@ func TestWaypostSendGroupModeNotifiesSubscriber(t *testing.T) {
 	sentTargets := map[string]int{}
 	for _, call := range commandRunner.Calls() {
 		if isAgentDeckDeferredSend(call.Args) {
-			sentTargets[call.Args[8]]++
+			sentTargets[call.Args[9]]++
 		}
 	}
 	if sentTargets["moderator"] != 1 || sentTargets["observer"] != 1 {
@@ -2913,9 +2990,9 @@ func TestWaypostSendGroupModeReportsPartialNotifyFailureDetail(t *testing.T) {
 			return RunResult{ExitCode: 0, Stdout: `{"id":"moderator","title":"moderator","status":"waiting"}`}, nil
 		case strings.Join(args, "\x00") == strings.Join([]string{"agent-deck", "session", "show", "observer", "--json"}, "\x00"):
 			return RunResult{ExitCode: 0, Stdout: `{"id":"observer","title":"observer","status":"waiting"}`}, nil
-		case isAgentDeckDeferredSend(args) && args[8] == "moderator":
+		case isAgentDeckDeferredSend(args) && args[9] == "moderator":
 			return RunResult{ExitCode: 0}, nil
-		case isAgentDeckDeferredSend(args) && args[8] == "observer":
+		case isAgentDeckDeferredSend(args) && args[9] == "observer":
 			return RunResult{ExitCode: 1, Stderr: "observer notify failed"}, nil
 		default:
 			t.Fatalf("unexpected command args: %v", args)
@@ -2976,6 +3053,41 @@ func TestNotifyGroupSubscribersPreservesFailureBeforeUnsupportedTarget(t *testin
 	}
 }
 
+func TestAggregateGroupNotificationsPreservesDefiniteNonDeliveries(t *testing.T) {
+	tests := []struct {
+		name       string
+		results    []groupSubscriberNotificationResult
+		wantStatus string
+	}{
+		{
+			name: "sent and unconfirmed",
+			results: []groupSubscriberNotificationResult{
+				{attempted: true, status: "sent", delivered: true},
+				{attempted: true, status: "unconfirmed", detail: "submission not confirmed"},
+			},
+			wantStatus: "unconfirmed",
+		},
+		{
+			name: "sent unconfirmed and unsupported",
+			results: []groupSubscriberNotificationResult{
+				{attempted: true, status: "sent", delivered: true},
+				{attempted: true, status: "unconfirmed", detail: "submission not confirmed"},
+				{attempted: true, status: "unsupported"},
+			},
+			wantStatus: "partial_failed",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			outcome := aggregateGroupSubscriberNotifications(test.results)
+			if outcome.Status != test.wantStatus {
+				t.Fatalf("status = %q, want %q", outcome.Status, test.wantStatus)
+			}
+		})
+	}
+}
+
 func TestNotifyGroupSubscribersAggregatesMixedUnavailableOutcomes(t *testing.T) {
 	commandRunner := &fakeRunner{t: t, handler: func(args []string, input string) (RunResult, error) {
 		if strings.Join(args, "\x00") != strings.Join([]string{"agent-deck", "session", "show", "missing", "--json"}, "\x00") {
@@ -3012,7 +3124,7 @@ func TestNotifyGroupSubscribersAggregatesAllFailuresWithoutSuccess(t *testing.T)
 			target := args[3]
 			return RunResult{ExitCode: 0, Stdout: fmt.Sprintf(`{"id":%q,"title":%q,"status":"waiting"}`, target, target)}, nil
 		case isAgentDeckDeferredSend(args):
-			return RunResult{ExitCode: 1, Stderr: args[8] + " notify failed"}, nil
+			return RunResult{ExitCode: 1, Stderr: args[9] + " notify failed"}, nil
 		default:
 			t.Fatalf("unexpected command args: %v", args)
 			return RunResult{}, nil
@@ -3343,11 +3455,11 @@ func TestWaypostSendUsesFixedWakeTextWhenDisableFlagUnset(t *testing.T) {
 		case strings.Join(args, "\x00") == strings.Join([]string{"agent-deck", "session", "show", "target", "--json"}, "\x00"):
 			return RunResult{ExitCode: 0, Stdout: `{"id":"target","title":"coder-123","status":"waiting"}`}, nil
 		case isAgentDeckDeferredSend(args):
-			if args[8] != "target" {
-				t.Fatalf("notify target = %q, want target", args[8])
+			if args[9] != "target" {
+				t.Fatalf("notify target = %q, want target", args[9])
 			}
-			if args[9] != defaultNotifyMessage {
-				t.Fatalf("notify message = %q, want fixed default", args[9])
+			if args[10] != defaultNotifyMessage {
+				t.Fatalf("notify message = %q, want fixed default", args[10])
 			}
 			return RunResult{ExitCode: 0}, nil
 		default:
@@ -3772,8 +3884,8 @@ func TestProcessWakeSchedulerUsesLocalHintThenAgentDeckWake(t *testing.T) {
 		case strings.Join(args, "\x00") == strings.Join([]string{"agent-deck", "session", "show", "worker", "--json"}, "\x00"):
 			return RunResult{ExitCode: 0, Stdout: `{"id":"worker","title":"coder-123","status":"waiting"}`}, nil
 		case isAgentDeckDeferredSend(args):
-			if args[8] != "worker" {
-				t.Fatalf("notify target = %q, want worker", args[8])
+			if args[9] != "worker" {
+				t.Fatalf("notify target = %q, want worker", args[9])
 			}
 			return RunResult{ExitCode: 0}, nil
 		default:
@@ -4249,13 +4361,96 @@ func TestProcessWakeSchedulerExhaustsWakeableAgentDeckTargets(t *testing.T) {
 	if got := calls[2].Args[3]; got != "worker-b" {
 		t.Fatalf("third command target = %q, want worker-b probe", got)
 	}
-	if got := calls[3].Args[8]; got != "worker-b" {
+	if got := calls[3].Args[9]; got != "worker-b" {
 		t.Fatalf("fourth command target = %q, want worker-b send", got)
 	}
 
 	runtime := service.wakeSchedulerState.runtimeForScope("local/agent-deck/worker-a", current.Add(-4*time.Minute).Format(time.RFC3339Nano))
 	if runtime.LastWakeByChannel[WakeChannelAgentDeck] == "" {
 		t.Fatal("agent_deck wake was not recorded after second target succeeded")
+	}
+}
+
+func TestWakeSchedulerDoesNotFallThroughOrImmediatelyRetryUnconfirmedNudge(t *testing.T) {
+	current := time.Date(2026, 4, 3, 6, 0, 0, 0, time.UTC)
+	commandRunner := &fakeRunner{t: t, handler: func(args []string, input string) (RunResult, error) {
+		switch strings.Join(args, "\x00") {
+		case strings.Join([]string{"agent-deck", "session", "show", "worker-a", "--json"}, "\x00"):
+			return RunResult{ExitCode: 0, Stdout: `{"id":"worker-a","status":"waiting"}`}, nil
+		case strings.Join(agentDeckDeferredSendArgs("worker-a", defaultNotifyMessage), "\x00"):
+			return RunResult{ExitCode: 1, Stdout: `{"success":false,"delivery":"typed","submitted":false,"code":"DELIVERY_FAILED"}`}, nil
+		default:
+			t.Fatalf("unexpected command args: %v", args)
+			return RunResult{}, nil
+		}
+	}}
+	service := newService(Options{
+		WaypostServiceFactory: fakeWaypostServiceFactory{service: &fakeWaypostService{t: t}},
+		CommandRunner:         commandRunner,
+		DisableWakeScheduler:  true,
+	})
+	snapshot := wakeSnapshot{
+		ScopeID:      "local/agent-deck/worker-a",
+		PendingSince: current.Add(-4 * time.Minute).Format(time.RFC3339Nano),
+		WakeTargets: []WakeTarget{
+			{Channel: WakeChannelAgentDeck, Target: "worker-a"},
+			{Channel: WakeChannelAgentDeck, Target: "worker-b"},
+		},
+	}
+	runtime := service.wakeSchedulerState.runtimeForScope(snapshot.ScopeID, snapshot.PendingSince)
+	if attempted := service.tryWakeChannel(context.Background(), snapshot, runtime, current, WakeChannelAgentDeck); !attempted {
+		t.Fatal("unconfirmed nudge should count as an attempted wake")
+	}
+	if calls := commandRunner.Calls(); len(calls) != 2 {
+		t.Fatalf("command calls = %v, want one probe and one nudge with no second-target fallback", calls)
+	}
+
+	runtime = service.wakeSchedulerState.runtimeForScope(snapshot.ScopeID, snapshot.PendingSince)
+	if attempted := service.tryWakeChannel(context.Background(), snapshot, runtime, current.Add(time.Minute), WakeChannelAgentDeck); attempted {
+		t.Fatal("unconfirmed nudge should enter the ordinary channel cooldown")
+	}
+	if calls := commandRunner.Calls(); len(calls) != 2 {
+		t.Fatalf("command calls during cooldown = %v, want no immediate retry", calls)
+	}
+
+	runtime = service.wakeSchedulerState.runtimeForScope(snapshot.ScopeID, snapshot.PendingSince)
+	if attempted := service.tryWakeChannel(context.Background(), snapshot, runtime, current.Add(6*time.Minute), WakeChannelAgentDeck); !attempted {
+		t.Fatal("a later scheduler reminder should remain governed by the existing cooldown policy")
+	}
+	if calls := commandRunner.Calls(); len(calls) != 4 {
+		t.Fatalf("command calls after cooldown = %v, want one later probe and nudge", calls)
+	}
+}
+
+func TestWakeSchedulerDoesNotInvokeNudgeAfterProbeExhaustsContext(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	commandRunner := &fakeRunner{t: t, ctxHandler: func(_ context.Context, args []string, input string) (RunResult, error) {
+		if !reflect.DeepEqual(args, []string{"agent-deck", "session", "show", "worker", "--json"}) {
+			t.Fatalf("unexpected command after probe cancellation: %v", args)
+		}
+		cancel()
+		return RunResult{ExitCode: 0, Stdout: `{"id":"worker","status":"waiting"}`}, nil
+	}}
+	service := newService(Options{
+		WaypostServiceFactory: fakeWaypostServiceFactory{service: &fakeWaypostService{t: t}},
+		CommandRunner:         commandRunner,
+		DisableWakeScheduler:  true,
+	})
+	snapshot := wakeSnapshot{
+		ScopeID:      "local/agent-deck/worker",
+		PendingSince: time.Date(2026, 4, 3, 5, 56, 0, 0, time.UTC).Format(time.RFC3339Nano),
+		WakeTargets:  []WakeTarget{{Channel: WakeChannelAgentDeck, Target: "worker"}},
+	}
+	runtime := service.wakeSchedulerState.runtimeForScope(snapshot.ScopeID, snapshot.PendingSince)
+	if attempted := service.tryWakeChannel(ctx, snapshot, runtime, time.Date(2026, 4, 3, 6, 0, 0, 0, time.UTC), WakeChannelAgentDeck); attempted {
+		t.Fatal("scheduler reported an attempt after the probe exhausted its context")
+	}
+	if calls := commandRunner.Calls(); len(calls) != 1 {
+		t.Fatalf("command calls = %v, want probe only", calls)
+	}
+	runtime = service.wakeSchedulerState.runtimeForScope(snapshot.ScopeID, snapshot.PendingSince)
+	if runtime.LastWakeByChannel[WakeChannelAgentDeck] != "" {
+		t.Fatal("pre-attempt cancellation must not record an agent-deck wake")
 	}
 }
 

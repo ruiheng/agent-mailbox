@@ -116,10 +116,13 @@ func (a *App) writeSendResultFullText(result SendResultFull) error {
 	return err
 }
 
-func formatSendNotificationText(status string, scheme, notifyError *string) string {
+func formatSendNotificationText(status string, scheme, notifyDetail, notifyError *string) string {
 	text := fmt.Sprintf("notify_status=%s", status)
 	if scheme != nil {
 		text += fmt.Sprintf(" notify_scheme=%s", *scheme)
+	}
+	if notifyDetail != nil {
+		text += fmt.Sprintf(" notify_detail=%q", *notifyDetail)
 	}
 	if notifyError != nil {
 		text += fmt.Sprintf(" notify_error=%q", *notifyError)
@@ -138,7 +141,7 @@ func (a *App) writeSendResultTextWithNotification(result SendResultCompactWithNo
 	} else {
 		line = fmt.Sprintf("delivery_id=%s", result.DeliveryID)
 	}
-	_, err := fmt.Fprintf(a.stdout, "%s %s\n", line, formatSendNotificationText(result.NotifyStatus, result.NotifyScheme, result.NotifyError))
+	_, err := fmt.Fprintf(a.stdout, "%s %s\n", line, formatSendNotificationText(result.NotifyStatus, result.NotifyScheme, result.NotifyDetail, result.NotifyError))
 	return err
 }
 
@@ -153,7 +156,7 @@ func (a *App) writeSendResultFullTextWithNotification(result SendResultFullWithN
 	} else {
 		line = fmt.Sprintf("message_id=%s delivery_id=%s blob_id=%s", result.MessageID, result.DeliveryID, result.BlobID)
 	}
-	_, err := fmt.Fprintf(a.stdout, "%s %s\n", line, formatSendNotificationText(result.NotifyStatus, result.NotifyScheme, result.NotifyError))
+	_, err := fmt.Fprintf(a.stdout, "%s %s\n", line, formatSendNotificationText(result.NotifyStatus, result.NotifyScheme, result.NotifyDetail, result.NotifyError))
 	return err
 }
 
@@ -179,7 +182,7 @@ func formatSendBatchItemText(item SendBatchItemOutput, full bool) string {
 	if item.Status == "failed" {
 		line := fmt.Sprintf("%s error=%q", prefix, item.Error)
 		if item.NotifyStatus != nil {
-			line += " " + formatSendNotificationText(*item.NotifyStatus, item.NotifyScheme, item.NotifyError)
+			line += " " + formatSendNotificationText(*item.NotifyStatus, item.NotifyScheme, item.NotifyDetail, item.NotifyError)
 		}
 		return line
 	}
@@ -197,7 +200,7 @@ func formatSendBatchItemText(item SendBatchItemOutput, full bool) string {
 		line += fmt.Sprintf(" delivery_id=%s", item.DeliveryID)
 	}
 	if item.NotifyStatus != nil {
-		line += " " + formatSendNotificationText(*item.NotifyStatus, item.NotifyScheme, item.NotifyError)
+		line += " " + formatSendNotificationText(*item.NotifyStatus, item.NotifyScheme, item.NotifyDetail, item.NotifyError)
 	}
 	return line
 }

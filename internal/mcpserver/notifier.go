@@ -2,6 +2,7 @@ package mcpserver
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -25,6 +26,7 @@ type notificationEvent struct {
 type notificationOutcome struct {
 	Status string
 	Scheme string
+	Detail string
 	Err    error
 }
 
@@ -142,6 +144,7 @@ type groupSubscriberNotificationResult struct {
 	schemes   []string
 	status    string
 	delivered bool
+	detail    string
 	err       error
 }
 
@@ -177,6 +180,7 @@ func (m *notificationManager) notifyGroupSubscriber(ctx context.Context, input w
 	}
 	result.status = strings.TrimSpace(candidate.Status)
 	result.delivered = notificationOutcomeDelivered(candidate)
+	result.detail = candidate.Detail
 	if !result.delivered {
 		result.err = candidate.Err
 	}
@@ -186,9 +190,11 @@ func (m *notificationManager) notifyGroupSubscriber(ctx context.Context, input w
 func aggregateGroupSubscriberNotifications(results []groupSubscriberNotificationResult) notificationOutcome {
 	attemptedCount := 0
 	sentCount := 0
+	unconfirmedCount := 0
 	schemes := map[string]bool{}
 	statuses := map[string]bool{}
 	var failures []error
+	var details []string
 	for _, result := range results {
 		if !result.attempted {
 			continue
@@ -202,25 +208,40 @@ func aggregateGroupSubscriberNotifications(results []groupSubscriberNotification
 		if result.status != "" {
 			statuses[result.status] = true
 		}
+		if result.status == "unconfirmed" {
+			unconfirmedCount++
+		}
 		if result.delivered {
 			sentCount++
 		} else if result.err != nil {
 			failures = append(failures, result.err)
 		}
+		if detail := strings.TrimSpace(result.detail); detail != "" {
+			details = append(details, detail)
+		}
 	}
 	aggregateScheme := notificationSchemeFromSet(schemes)
+	aggregateDetail := strings.Join(dedupe(details), "; ")
 	if attemptedCount > 0 && sentCount == attemptedCount {
 		return notificationOutcome{Status: "sent", Scheme: aggregateScheme}
 	}
 	if sentCount > 0 {
-		return notificationOutcome{Status: "partial_failed", Scheme: aggregateScheme, Err: errors.Join(failures...)}
+		if sentCount+unconfirmedCount == attemptedCount {
+			return notificationOutcome{
+				Status: "unconfirmed",
+				Scheme: aggregateScheme,
+				Detail: aggregateDetail,
+			}
+		}
+		return notificationOutcome{Status: "partial_failed", Scheme: aggregateScheme, Detail: aggregateDetail, Err: errors.Join(failures...)}
 	}
 	if len(failures) > 0 {
-		return notificationOutcome{Status: "failed", Scheme: aggregateScheme, Err: errors.Join(failures...)}
+		return notificationOutcome{Status: "failed", Scheme: aggregateScheme, Detail: aggregateDetail, Err: errors.Join(failures...)}
 	}
 	return notificationOutcome{
 		Status: notificationStatusFromSet(statuses),
 		Scheme: aggregateScheme,
+		Detail: aggregateDetail,
 	}
 }
 
@@ -286,7 +307,7 @@ func (m *notificationManager) notifyDirectWakeScope(ctx context.Context, scope w
 			Body:                 input.Body,
 			DisableNotifyMessage: input.DisableNotifyMessage,
 		})
-		if notificationOutcomeDelivered(outcome) {
+		if notificationOutcomeAttempted(outcome) {
 			return outcome
 		}
 	}
@@ -500,25 +521,152 @@ func (n agentDeckNotifier) Notify(ctx context.Context, event notificationEvent) 
 		}
 	}
 
-	_, err := runCommand(ctx, n.runner, []string{
+	return n.runNudge(ctx, []string{
 		"agent-deck", "session", "send",
+		"--json",
 		"-defer-if-busy",
 		"-defer-timeout", agentDeckNotifyDeferTimeout.String(),
 		"-timeout", agentDeckNotifyReadyTimeout.String(),
 		event.Route.Target, notifyMessage,
-	}, runOptions{timeout: syncCmdTimeout})
-	if err != nil {
+	})
+}
+
+type agentDeckNudgeResult struct {
+	Success   *bool  `json:"success"`
+	Delivery  string `json:"delivery"`
+	Submitted *bool  `json:"submitted"`
+	Error     string `json:"error"`
+	Code      string `json:"code"`
+}
+
+func (n agentDeckNotifier) runNudge(ctx context.Context, args []string) notificationOutcome {
+	runCtx, cancel := context.WithTimeout(ctx, syncCmdTimeout)
+	defer cancel()
+	if err := runCtx.Err(); err != nil {
 		return notificationOutcome{
 			Status: "failed",
 			Scheme: n.Name(),
-			Err:    err,
+			Err:    fmt.Errorf("agent-deck nudge was not attempted: %w", err),
 		}
 	}
 
-	return notificationOutcome{
-		Status: "sent",
-		Scheme: n.Name(),
+	result, runErr := n.runner.Run(runCtx, args, "")
+	payload, structured := parseAgentDeckNudgeResult(result.Stdout)
+	if structured {
+		return classifyAgentDeckNudgeResult(n.Name(), result, payload)
 	}
+
+	if errors.Is(runErr, context.DeadlineExceeded) || errors.Is(runCtx.Err(), context.DeadlineExceeded) {
+		return notificationOutcome{
+			Status: "unconfirmed",
+			Scheme: n.Name(),
+			Detail: "nudge command timed out after delivery may already have been attempted",
+		}
+	}
+	if errors.Is(runErr, context.Canceled) || errors.Is(runCtx.Err(), context.Canceled) {
+		return notificationOutcome{
+			Status: "unconfirmed",
+			Scheme: n.Name(),
+			Detail: "nudge command was canceled after delivery may already have been attempted",
+		}
+	}
+	if runErr != nil {
+		return notificationOutcome{
+			Status: "failed",
+			Scheme: n.Name(),
+			Err:    fmt.Errorf("agent-deck nudge could not start or complete: %w", runErr),
+		}
+	}
+	if result.ExitCode == 0 {
+		return notificationOutcome{Status: "sent", Scheme: n.Name()}
+	}
+	return notificationOutcome{
+		Status: "failed",
+		Scheme: n.Name(),
+		Err:    agentDeckNudgeError(result, payload),
+	}
+}
+
+func parseAgentDeckNudgeResult(stdout string) (agentDeckNudgeResult, bool) {
+	trimmed := strings.TrimSpace(stdout)
+	var payload agentDeckNudgeResult
+	if err := json.Unmarshal([]byte(trimmed), &payload); err != nil {
+		return agentDeckNudgeResult{}, false
+	}
+	structured := payload.Success != nil || payload.Submitted != nil || strings.TrimSpace(payload.Delivery) != "" || strings.TrimSpace(payload.Error) != "" || strings.TrimSpace(payload.Code) != ""
+	return payload, structured
+}
+
+func classifyAgentDeckNudgeResult(scheme string, result RunResult, payload agentDeckNudgeResult) notificationOutcome {
+	delivery := strings.ToLower(strings.TrimSpace(payload.Delivery))
+	if payload.Submitted != nil && *payload.Submitted || delivery == "submitted" {
+		return notificationOutcome{Status: "sent", Scheme: scheme}
+	}
+
+	switch delivery {
+	case "typed":
+		return notificationOutcome{
+			Status: "unconfirmed",
+			Scheme: scheme,
+			Detail: "nudge reached the target pane but turn submission was not confirmed",
+		}
+	case "unverified":
+		return notificationOutcome{
+			Status: "unconfirmed",
+			Scheme: scheme,
+			Detail: "nudge was sent but agent-deck could not verify whether the target accepted it",
+		}
+	case "no_evidence":
+		return notificationOutcome{
+			Status: "unconfirmed",
+			Scheme: scheme,
+			Detail: "nudge was attempted but no delivery evidence was observed",
+		}
+	case "typed_not_submitted", "line_too_long", "send_failed":
+		return notificationOutcome{
+			Status: "failed",
+			Scheme: scheme,
+			Err:    agentDeckNudgeError(result, payload),
+		}
+	case "":
+		if payload.Success != nil && *payload.Success && result.ExitCode == 0 {
+			return notificationOutcome{Status: "sent", Scheme: scheme}
+		}
+		if payload.Success != nil && !*payload.Success {
+			return notificationOutcome{Status: "failed", Scheme: scheme, Err: agentDeckNudgeError(result, payload)}
+		}
+		if result.ExitCode == 0 {
+			return notificationOutcome{
+				Status: "unconfirmed",
+				Scheme: scheme,
+				Detail: "agent-deck returned structured output without a delivery verdict",
+			}
+		}
+		return notificationOutcome{Status: "failed", Scheme: scheme, Err: agentDeckNudgeError(result, payload)}
+	default:
+		return notificationOutcome{
+			Status: "unconfirmed",
+			Scheme: scheme,
+			Detail: fmt.Sprintf("agent-deck returned an unknown delivery verdict %q", delivery),
+		}
+	}
+}
+
+func agentDeckNudgeError(result RunResult, payload agentDeckNudgeResult) error {
+	detail := strings.TrimSpace(payload.Error)
+	if detail == "" {
+		detail = strings.TrimSpace(result.Stderr)
+	}
+	if detail == "" && strings.TrimSpace(payload.Delivery) != "" {
+		detail = "agent-deck delivery result: " + strings.TrimSpace(payload.Delivery)
+	}
+	if detail == "" && strings.TrimSpace(payload.Code) != "" {
+		detail = "agent-deck error code: " + strings.TrimSpace(payload.Code)
+	}
+	if detail == "" {
+		detail = fmt.Sprintf("agent-deck exited with code %d", result.ExitCode)
+	}
+	return errors.New(detail)
 }
 
 func (n thurboxNotifier) Name() string {
@@ -579,6 +727,15 @@ func (n thurboxNotifier) Notify(ctx context.Context, event notificationEvent) no
 
 func notificationOutcomeDelivered(outcome notificationOutcome) bool {
 	return strings.TrimSpace(outcome.Status) == "sent"
+}
+
+func notificationOutcomeAttempted(outcome notificationOutcome) bool {
+	switch strings.TrimSpace(outcome.Status) {
+	case "sent", "unconfirmed":
+		return true
+	default:
+		return false
+	}
 }
 
 func wakeNotifyDisabled(disableNotifyMessage *bool) bool {

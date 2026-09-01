@@ -742,6 +742,36 @@ func TestAppSendNotifyReportsFailureWithoutRollingBackDelivery(t *testing.T) {
 	}
 }
 
+func TestNotificationOutputProjectsUnconfirmedDetailWithoutError(t *testing.T) {
+	t.Parallel()
+
+	outcome := SendNotificationOutcome{
+		Status: "unconfirmed",
+		Scheme: "agent-deck",
+		Detail: "nudge reached the target pane but turn submission was not confirmed",
+	}
+	projected := CompactSendResultWithNotification(SendResult{DeliveryID: "dlv_1"}, outcome)
+	if projected.NotifyStatus != "unconfirmed" || projected.NotifyDetail == nil || *projected.NotifyDetail != outcome.Detail {
+		t.Fatalf("compact notification output = %+v, want unconfirmed detail", projected)
+	}
+	if projected.NotifyError != nil {
+		t.Fatalf("notify_error = %v, want nil", *projected.NotifyError)
+	}
+
+	batch := SendBatchCLIOutput(SendBatchResult{
+		ToAddresses: []string{"agent-deck/target"},
+		SentCount:   1,
+		Items: []SendBatchItem{{
+			ToAddress:    "agent-deck/target",
+			Result:       SendResult{DeliveryID: "dlv_1"},
+			Notification: &outcome,
+		}},
+	}, false, true)
+	if len(batch.Results) != 1 || batch.Results[0].NotifyDetail == nil || *batch.Results[0].NotifyDetail != outcome.Detail {
+		t.Fatalf("batch notification output = %+v, want unconfirmed detail", batch)
+	}
+}
+
 func TestAppStaleReturnsStructuredResults(t *testing.T) {
 	t.Parallel()
 

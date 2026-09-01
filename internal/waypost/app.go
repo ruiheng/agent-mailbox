@@ -29,6 +29,7 @@ type SendNotificationRequest struct {
 type SendNotificationOutcome struct {
 	Status string
 	Scheme string
+	Detail string
 	Err    error
 }
 

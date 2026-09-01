@@ -438,6 +438,9 @@ func waypostSendResultMap(input waypostSendInput, fromAddress string, sendResult
 	if notify.Scheme != "" {
 		out["notify_scheme"] = notify.Scheme
 	}
+	if notify.Detail != "" {
+		out["notify_detail"] = notify.Detail
+	}
 	if notify.Err != nil {
 		out["notify_error"] = notify.Err.Error()
 	}
@@ -563,6 +566,7 @@ func (s *Service) sendWaypostBatchMessage(ctx context.Context, input waypostSend
 			return waypost.SendNotificationOutcome{
 				Status: outcome.Status,
 				Scheme: outcome.Scheme,
+				Detail: outcome.Detail,
 				Err:    outcome.Err,
 			}
 		}
@@ -596,6 +600,7 @@ func waypostSendBatchResult(input waypostSendInput, batch waypost.SendBatchResul
 			notify = notificationOutcome{
 				Status: item.Notification.Status,
 				Scheme: item.Notification.Scheme,
+				Detail: item.Notification.Detail,
 				Err:    item.Notification.Err,
 			}
 		}
@@ -716,6 +721,9 @@ func compactWaypostSendResult(out map[string]any, includeDetails bool) map[strin
 	}
 	if notifyError := out["notify_error"]; notifyError != nil {
 		compact["notify_error"] = notifyError
+	}
+	if notifyDetail := out["notify_detail"]; notifyDetail != nil {
+		compact["notify_detail"] = notifyDetail
 	}
 	return compact
 }

@@ -513,9 +513,13 @@ because retrying the full batch can create duplicate messages for earlier
 successes.
 
 When `--notify` is set, structured output additionally includes
-`notify_status`, `notify_scheme`, and `notify_error`. A notification failure is
-reported in those fields but does not undo the durable delivery or make the
-command fail. Plain-text output appends the same status fields. Supported
+`notify_status`, `notify_scheme`, optional `notify_detail`, and `notify_error`.
+`unconfirmed` means the wake was attempted without enough evidence to confirm
+turn submission; that command is not retried or followed by another target in
+the same wake attempt. Later unread-delivery reminders retain the scheduler's
+normal cooldown policy. A notification failure is reported in those fields but
+does not undo the durable delivery or make the command fail. Plain-text output
+appends the same status fields. Supported
 remote targets include `agent-deck/<session-id>` and `thurbox/<session-id>`;
 unsupported or local targets are reported without a notification side effect.
 

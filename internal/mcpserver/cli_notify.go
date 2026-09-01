@@ -37,6 +37,7 @@ func notifyWaypostSendWithOptions(ctx context.Context, service any, request wayp
 	return waypost.SendNotificationOutcome{
 		Status: outcome.Status,
 		Scheme: outcome.Scheme,
+		Detail: outcome.Detail,
 		Err:    outcome.Err,
 	}
 }
