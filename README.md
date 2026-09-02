@@ -410,6 +410,8 @@ optional `notify_detail`, and `notify_error`. `notify_status=unconfirmed` means
 the wake request may have reached the target but turn submission was not
 verified; it is not reported as a wake failure, and the same command is not
 immediately retried.
+`notify_status=target_not_found` means the addressed target session does not
+exist.
 The scheduler may issue a later reminder after its normal cooldown if the
 delivery remains unread. Notification failure is informational and never rolls
 back the durable delivery.

@@ -1963,9 +1963,9 @@ func TestAgentDeckNotifyStopsAfterExhaustingNewTargetProbeRetries(t *testing.T) 
 		wantStatus string
 	}{
 		{
-			name:       "not found",
+			name:       "target session not found",
 			exitCode:   2,
-			wantStatus: "not_found",
+			wantStatus: "target_not_found",
 		},
 		{
 			name:       "queued",

@@ -390,7 +390,7 @@ func notificationSendProbeRetryable(probe notificationProbe) bool {
 		return false
 	}
 	switch probe.Status {
-	case "not_found", "target_queued", "target_not_ready":
+	case "target_not_found", "target_queued", "target_not_ready":
 		// Fresh Agent Deck sessions can spend a short time absent from the
 		// session list, queued, or reporting an unready status before they
 		// become wakeable. Neither outcome has attempted the non-idempotent
@@ -460,7 +460,7 @@ func (n agentDeckNotifier) Probe(ctx context.Context, route notificationRoute) n
 		}
 	case sessionShowProbeNotFound:
 		return notificationProbe{
-			Status: "not_found",
+			Status: "target_not_found",
 			Scheme: n.Name(),
 		}
 	}
@@ -676,7 +676,7 @@ func (n thurboxNotifier) Name() string {
 func (n thurboxNotifier) Probe(_ context.Context, route notificationRoute) notificationProbe {
 	if strings.TrimSpace(route.Target) == "" {
 		return notificationProbe{
-			Status: "not_found",
+			Status: "target_not_found",
 			Scheme: n.Name(),
 		}
 	}

@@ -517,8 +517,9 @@ When `--notify` is set, structured output additionally includes
 `unconfirmed` means the wake was attempted without enough evidence to confirm
 turn submission; that command is not retried or followed by another target in
 the same wake attempt. Later unread-delivery reminders retain the scheduler's
-normal cooldown policy. A notification failure is reported in those fields but
-does not undo the durable delivery or make the command fail. Plain-text output
+normal cooldown policy. `target_not_found` means the addressed target session
+does not exist. A notification failure is reported in those fields but does
+not undo the durable delivery or make the command fail. Plain-text output
 appends the same status fields. Supported
 remote targets include `agent-deck/<session-id>` and `thurbox/<session-id>`;
 unsupported or local targets are reported without a notification side effect.
