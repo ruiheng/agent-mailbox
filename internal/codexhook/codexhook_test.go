@@ -459,6 +459,47 @@ func TestRunPreToolUseDeniesMCPPreferredWaypostCLICommands(t *testing.T) {
 	}
 }
 
+func TestRunPreToolUseAlwaysDeniesWaypostMCPCommand(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name  string
+		probe waypostMCPProbe
+	}{
+		{
+			name:  "MCP available",
+			probe: func(context.Context) (bool, error) { return true, nil },
+		},
+		{
+			name:  "MCP unavailable",
+			probe: func(context.Context) (bool, error) { return false, nil },
+		},
+		{
+			name:  "MCP probe failed",
+			probe: func(context.Context) (bool, error) { return false, errors.New("codex unavailable") },
+		},
+		{
+			name:  "without probe",
+			probe: nil,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			output, emitted := runPreToolHook(t, "waypost mcp", tc.probe)
+			if !emitted {
+				t.Fatal("PreToolUse output is empty, want deny")
+			}
+			specific := output.HookSpecificOutput
+			if specific.HookEventName != "PreToolUse" || specific.PermissionDecision != "deny" {
+				t.Fatalf("hookSpecificOutput = %+v, want PreToolUse deny", specific)
+			}
+			if specific.PermissionDecisionReason != MCPServerCommandDenialReason {
+				t.Fatalf("permissionDecisionReason = %q, want %q", specific.PermissionDecisionReason, MCPServerCommandDenialReason)
+			}
+		})
+	}
+}
+
 func TestRunPreToolUseAllowsMCPPreferredWaypostCLIWhenMCPIsNotKnownAvailable(t *testing.T) {
 	t.Parallel()
 
@@ -581,6 +622,9 @@ func TestWaypostMCPDenialReason(t *testing.T) {
 		if !guarded || !strings.Contains(reason, tc.wantTool) {
 			t.Errorf("waypostMCPDenialReason(%q) = %q, %v; want tool %q", tc.command, reason, guarded, tc.wantTool)
 		}
+	}
+	if reason, guarded := waypostMCPDenialReason("waypost mcp --include-debug-tool"); !guarded || reason != MCPServerCommandDenialReason {
+		t.Errorf("waypostMCPDenialReason(%q) = %q, %v; want unconditional MCP server denial", "waypost mcp --include-debug-tool", reason, guarded)
 	}
 
 	for _, command := range []string{

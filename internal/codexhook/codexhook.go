@@ -49,11 +49,14 @@ const MCPProbeFailedNudgeContext = `Look for the waypost_recv MCP tool. If it is
 const WaitPollingContext = `Do not poll Waypost. Continue other available work; if none remains, stop completely.`
 
 const MCPStatusDenialReason = `The Waypost MCP tool waypost_status is available. Use it instead of running waypost status.`
+const MCPServerCommandDenialReason = `The Waypost MCP server is managed by Codex. Never run the Waypost CLI command ` + "`waypost mcp`" + `.`
 
 var waypostMCPCommandBlacklist = map[string]string{
 	"recv":    "waypost_recv",
 	"receive": "waypost_recv",
 	"send":    "waypost_send",
+	// The empty replacement marks a command that must always be denied.
+	"mcp": "",
 }
 
 type hookInput struct {
@@ -174,6 +177,9 @@ func runWithDependencies(
 		denialReason, guarded := waypostMCPDenialReason(command)
 		if !guarded {
 			return nil
+		}
+		if waypostMCPCommandAlwaysDenied(command) {
+			return writeDenyOutput(w, denialReason)
 		}
 		availability, probeErr := detectWaypostMCP(ctx, probe)
 		if availability == waypostMCPUnknown {
@@ -566,7 +572,19 @@ func waypostMCPDenialReason(command string) (string, bool) {
 	if !blocked {
 		return "", false
 	}
+	if tool == "" {
+		return MCPServerCommandDenialReason, true
+	}
 	return fmt.Sprintf("The Waypost MCP tool %s is available. Use it instead of the Waypost CLI.", tool), true
+}
+
+func waypostMCPCommandAlwaysDenied(command string) bool {
+	subcommand, ok := directWaypostCommand(command)
+	if !ok {
+		return false
+	}
+	tool, blocked := waypostMCPCommandBlacklist[subcommand]
+	return blocked && tool == ""
 }
 
 func directWaypostCommand(command string) (string, bool) {

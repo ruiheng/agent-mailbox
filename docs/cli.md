@@ -70,7 +70,9 @@ The installer merges five idempotent handlers into `$CODEX_HOME/hooks.json` (or
   favor of `waypost_status`, while the maintained `recv`, `receive`, and `send`
   blacklist is denied in favor of `waypost_recv` or `waypost_send`. An
   unavailable MCP probe leaves those CLI commands untouched; a failed probe
-  also leaves them untouched and surfaces the error as a warning.
+  also leaves them untouched and surfaces the error as a warning. The
+  `waypost mcp` command is always denied because the MCP server is managed by
+  Codex, regardless of probe availability.
 - a `PostToolUse` handler observes successful MCP or direct CLI receives and
   changes a pending nudge to consumed; `received` and `no_message` are terminal
   receive results, while active-lease and recovery-required results stay pending.
