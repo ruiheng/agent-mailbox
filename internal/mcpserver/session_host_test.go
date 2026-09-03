@@ -1448,6 +1448,7 @@ func TestWaypostGroupSubscribersReportHostNeutralNotificationScheme(t *testing.T
 				DisableWakeScheduler:  true,
 				DisableLeaseRenewLoop: true,
 			})
+			setBoundTestSender(service, "agent-deck/expert")
 			output := callServiceTool(t, service, "waypost_send", map[string]any{
 				"to":           "group/review",
 				"from_address": "agent-deck/expert",

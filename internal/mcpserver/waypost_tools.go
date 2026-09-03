@@ -85,6 +85,11 @@ func waypostSendInputSchema() *jsonschema.Schema {
 		MaxItems:    jsonschema.Ptr(waypost.MaxSendRecipients),
 		Description: "One recipient address, or an array of 1-10 recipient addresses for a batch send.",
 	}
+	fromAddress, ok := schema.Properties["from_address"]
+	if !ok {
+		panic("build waypost_send input schema: missing from_address")
+	}
+	fromAddress.Description = "Optional sender address. When supplied, it must be one of this MCP server's currently bound personal addresses."
 	diagnostics, ok := schema.Properties["diagnostics"]
 	if !ok {
 		panic("build waypost_send input schema: missing diagnostics")
@@ -244,7 +249,7 @@ func (s *Service) registerWaypostTools(server *mcp.Server) {
 	}
 	addToolRequiringWaypostStatus(server, s, &mcp.Tool{
 		Name:        "waypost_send",
-		Description: "Send a Waypost message. Set `to` to one recipient address for a single send, or an array of 1-10 recipient addresses for a batch. Supply the content with exactly one of `body` or `body_file`; the latter is read by the MCP server only from the bound default_workdir. Push-notify a non-local target when supported. Set disable_notify_message=true to skip notification.",
+		Description: "Send a Waypost message. Set `to` to one recipient address for a single send, or an array of 1-10 recipient addresses for a batch. `from_address`, when supplied, must be one of this MCP server's currently bound personal addresses. Supply the content with exactly one of `body` or `body_file`; the latter is read by the MCP server only from the bound default_workdir. Push-notify a non-local target when supported. Set disable_notify_message=true to skip notification.",
 		InputSchema: waypostSendInputSchema(),
 	}, s.waypostSend)
 	addToolRequiringWaypostStatus(server, s, &mcp.Tool{
