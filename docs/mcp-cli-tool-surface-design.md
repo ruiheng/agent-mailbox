@@ -302,6 +302,11 @@ No message:
 }
 ```
 
+After a `no_message` result, the same MCP connection must wait at least 15
+seconds before calling `waypost_recv` again. If the next result is also
+`no_message` within three minutes, the response includes a warning to avoid
+meaningless polling.
+
 Active leases:
 
 ```json

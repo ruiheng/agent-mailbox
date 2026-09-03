@@ -254,7 +254,7 @@ func (s *Service) registerWaypostTools(server *mcp.Server) {
 	}, s.waypostSend)
 	addToolRequiringWaypostStatus(server, s, &mcp.Tool{
 		Name:        "waypost_recv",
-		Description: "Immediately claim an available delivery; never blocks. This process's unacknowledged leases return a bounded ID hint; use known_delivery_ids to suppress known leases. On receive_recovery_required, release every returned claim before receiving again. Defaults to all bound addresses; addresses overrides that set for this call.",
+		Description: "Immediately claim an available delivery; never blocks. After a no_message result, wait at least 15 seconds before calling again. Repeated no_message results within 3 minutes warn against meaningless polling. This process's unacknowledged leases return a bounded ID hint; use known_delivery_ids to suppress known leases. On receive_recovery_required, release every returned claim before receiving again. Defaults to all bound addresses; addresses overrides that set for this call.",
 		InputSchema: waypostRecvInputSchema(),
 	}, s.waypostRecv)
 	addToolRequiringWaypostStatus(server, s, &mcp.Tool{
@@ -854,7 +854,7 @@ func (s *Service) waypostWaitGroup(ctx context.Context, addresses []string, pers
 	})
 }
 
-func (s *Service) waypostRecv(ctx context.Context, _ *mcp.CallToolRequest, input waypostRecvInput) (*mcp.CallToolResult, map[string]any, error) {
+func (s *Service) waypostRecv(ctx context.Context, req *mcp.CallToolRequest, input waypostRecvInput) (*mcp.CallToolResult, map[string]any, error) {
 	if err := validateMCPItems("addresses", len(input.Addresses)); err != nil {
 		return nil, nil, err
 	}
@@ -866,8 +866,23 @@ func (s *Service) waypostRecv(ctx context.Context, _ *mcp.CallToolRequest, input
 		return nil, nil, err
 	}
 	if person := strings.TrimSpace(input.AsPerson); person != "" {
-		return s.waypostRecvGroup(ctx, addresses, person, input.Diagnostics)
+		return s.waypostRecvGroup(ctx, req, addresses, person, input.Diagnostics)
 	}
+	recvGuard, err := s.waypostRecvGuard.begin(req, s.now, s.waypostRecvActiveSessions())
+	if err != nil {
+		return nil, nil, err
+	}
+	recvFinished := false
+	finishRecv := func(status string) bool {
+		if recvFinished {
+			return false
+		}
+		recvFinished = true
+		return recvGuard.finish(status, s.now())
+	}
+	defer func() {
+		finishRecv("")
+	}()
 	if err := s.reconcileTrackedLeases(ctx); err != nil {
 		return nil, nil, err
 	}
@@ -901,6 +916,7 @@ func (s *Service) waypostRecv(ctx context.Context, _ *mcp.CallToolRequest, input
 		if input.Diagnostics && len(remainingByState) > 0 {
 			out["remaining_by_state"] = remainingByState
 		}
+		finishRecv("active_leases")
 		return s.waypostToolResult(ctx, out)
 	}
 
@@ -908,6 +924,9 @@ func (s *Service) waypostRecv(ctx context.Context, _ *mcp.CallToolRequest, input
 	if errors.Is(err, waypost.ErrNoMessage) {
 		out := map[string]any{
 			"status": "no_message",
+		}
+		if finishRecv("no_message") {
+			warnings = append(warnings, waypostRecvPollingWarning)
 		}
 		if len(warnings) > 0 {
 			out["warnings"] = warnings
@@ -945,6 +964,7 @@ func (s *Service) waypostRecv(ctx context.Context, _ *mcp.CallToolRequest, input
 			out["addresses"] = addresses
 			out["remaining_by_state_status"] = "unavailable"
 		}
+		finishRecv("receive_recovery_required")
 		return s.waypostMutationToolResult(ctx, out)
 	}
 	if err != nil {
@@ -955,6 +975,7 @@ func (s *Service) waypostRecv(ctx context.Context, _ *mcp.CallToolRequest, input
 	if len(delivery.Messages) != 1 {
 		return nil, nil, errors.New("receive returned an unexpected delivery count")
 	}
+	finishRecv("received")
 	out := map[string]any{
 		"status":   "received",
 		"delivery": waypost.CompactReceivedMessage(delivery.Messages[0]),
@@ -1134,15 +1155,33 @@ func compactWaypostClaimHistoryItem(lease activeLease, diagnostics bool) map[str
 	return item
 }
 
-func (s *Service) waypostRecvGroup(ctx context.Context, addresses []string, person string, includeDetails bool) (*mcp.CallToolResult, map[string]any, error) {
+func (s *Service) waypostRecvGroup(ctx context.Context, req *mcp.CallToolRequest, addresses []string, person string, includeDetails bool) (*mcp.CallToolResult, map[string]any, error) {
 	address, err := singleGroupAddress(addresses, "waypost_recv")
 	if err != nil {
 		return nil, nil, err
 	}
+	recvGuard, err := s.waypostRecvGuard.begin(req, s.now, s.waypostRecvActiveSessions())
+	if err != nil {
+		return nil, nil, err
+	}
+	recvFinished := false
+	finishRecv := func(status string) bool {
+		if recvFinished {
+			return false
+		}
+		recvFinished = true
+		return recvGuard.finish(status, s.now())
+	}
+	defer func() {
+		finishRecv("")
+	}()
 	message, err := s.receiveGroupNow(ctx, address, person)
 	if errors.Is(err, waypost.ErrNoMessage) {
 		out := map[string]any{
 			"status": "no_message",
+		}
+		if finishRecv("no_message") {
+			out["warnings"] = []string{waypostRecvPollingWarning}
 		}
 		if includeDetails {
 			out["addresses"] = []string{address}
@@ -1153,6 +1192,7 @@ func (s *Service) waypostRecvGroup(ctx context.Context, addresses []string, pers
 	if err != nil {
 		return nil, nil, err
 	}
+	finishRecv("received")
 	out := map[string]any{
 		"status":  "received",
 		"message": compactWaypostGroupReceivedMessage(message, includeDetails),

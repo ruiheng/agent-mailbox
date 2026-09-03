@@ -329,7 +329,10 @@ as `subject` are not part of the singular compact contract.
 
 `waypost_recv` defaults to the status-specific result only: `delivery` for a
 new claim, a bounded `claimed_delivery_ids` hint for active leases, or just
-`status = no_message`. Actionable warnings remain sparse. Set
+`status = no_message`. After `no_message`, the same MCP connection must wait
+at least 15 seconds before calling `waypost_recv` again. A second
+`no_message` within three minutes includes a warning to avoid meaningless
+polling. Actionable warnings remain sparse. Set
 `diagnostics: true` for resolved addresses and `remaining_by_state`.
 Repeated instructional fields, echoed known IDs, and counts derivable from the
 returned ID list are intentionally omitted.
