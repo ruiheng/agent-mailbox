@@ -350,9 +350,16 @@ func (m *notificationManager) notifyRouteWithRetry(ctx context.Context, event no
 		// message. Only retry failures that happen before Notify is called.
 		return m.notifyRoute(ctx, event)
 	}
+	detail := ""
+	if probe.Status == "target_not_found" && event.Route.Manager == "agent-deck" {
+		// Probe retries are useful for newly-created sessions. Only perform the
+		// potentially expensive candidate lookup once, after retries settle.
+		detail = m.sessions.agentDeckSessionNotFoundDetail(ctx, event.Route.Target)
+	}
 	return notificationOutcome{
 		Status: probe.Status,
 		Scheme: probe.Scheme,
+		Detail: detail,
 		Err:    probe.Err,
 	}
 }

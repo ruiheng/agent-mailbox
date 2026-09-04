@@ -2045,6 +2045,48 @@ func TestAgentDeckNotifyStopsAfterExhaustingNewTargetProbeRetries(t *testing.T) 
 	}
 }
 
+func TestAgentDeckSessionNotFoundDetailSuggestsNearbyBoundAddress(t *testing.T) {
+	manager := newSessionManager(&fakeRunner{t: t}, &serverState{
+		boundAddresses: []string{"agent-deck/reviewer", "codex/self"},
+	})
+
+	detail := manager.agentDeckSessionNotFoundDetail(context.Background(), "reveiwer")
+	if !strings.Contains(detail, "agent-deck session \"reveiwer\" not found") {
+		t.Fatalf("detail = %q, want missing-session warning", detail)
+	}
+	if !strings.Contains(detail, "Did you mean agent-deck/reviewer?") {
+		t.Fatalf("detail = %q, want nearby-session suggestion", detail)
+	}
+}
+
+func TestAgentDeckSessionNotFoundDetailReadsXDGStateDB(t *testing.T) {
+	home := t.TempDir()
+	setTestHome(t, home)
+	xdgDataHome := filepath.Join(home, "xdg-data")
+	t.Setenv("XDG_DATA_HOME", xdgDataHome)
+	isolateAutoBindEnv(t)
+	writeAgentDeckStateDBRowsAt(t, filepath.Join(xdgDataHome, "agent-deck", "profiles", "default", "state.db"), []agentDeckStateDBRow{{
+		ID: "reviewer-session", ProjectPath: "/tmp", CodexSessionID: "codex-reviewer", CreatedAt: 1, LastAccessed: 2,
+	}})
+
+	manager := newSessionManager(&fakeRunner{t: t}, &serverState{})
+	detail := manager.agentDeckSessionNotFoundDetail(context.Background(), "reviewer-sessin")
+	if !strings.Contains(detail, "Did you mean agent-deck/reviewer-session?") {
+		t.Fatalf("detail = %q, want XDG session suggestion", detail)
+	}
+}
+
+func TestAgentDeckStateDBPathsDefaultToXDGDataHome(t *testing.T) {
+	home := t.TempDir()
+	setTestHome(t, home)
+	t.Setenv("XDG_DATA_HOME", "")
+
+	want := filepath.Join(home, ".local", "share", "agent-deck", "profiles", "default", "state.db")
+	if !slices.Contains(agentDeckStateDBPaths(), want) {
+		t.Fatalf("state DB paths = %v, want default XDG path %q", agentDeckStateDBPaths(), want)
+	}
+}
+
 func TestAgentDeckNotifyRetriesStoppedAndErrorTargets(t *testing.T) {
 	for _, status := range []string{"stopped", "error"} {
 		t.Run(status+" recovers", func(t *testing.T) {
@@ -9502,7 +9544,11 @@ func writeAgentDeckStateDB(t *testing.T, home, profile, id, projectPath, codexSe
 
 func writeAgentDeckStateDBRows(t *testing.T, home, profile string, rows []agentDeckStateDBRow) {
 	t.Helper()
-	dbPath := filepath.Join(home, ".agent-deck", "profiles", profile, "state.db")
+	writeAgentDeckStateDBRowsAt(t, filepath.Join(home, ".agent-deck", "profiles", profile, "state.db"), rows)
+}
+
+func writeAgentDeckStateDBRowsAt(t *testing.T, dbPath string, rows []agentDeckStateDBRow) {
+	t.Helper()
 	if err := os.MkdirAll(filepath.Dir(dbPath), 0700); err != nil {
 		t.Fatalf("mkdir state db dir: %v", err)
 	}

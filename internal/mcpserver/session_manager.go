@@ -841,6 +841,93 @@ func (m *sessionManager) probeSessionShowBestEffort(ctx context.Context, identif
 	return sessionShowProbeResult{Status: sessionShowProbeFound, Data: data}, nil
 }
 
+// agentDeckSessionNotFoundDetail explains a missing agent-deck target and,
+// when possible, suggests a nearby currently-known session address. The
+// durable Waypost send remains successful; this text is informational.
+func (m *sessionManager) agentDeckSessionNotFoundDetail(ctx context.Context, identifier string) string {
+	identifier = strings.TrimSpace(identifier)
+	if identifier == "" {
+		return "warning: agent-deck session not found"
+	}
+
+	// Bound addresses cover sessions known by this server instance. The state
+	// database adds recorded sessions that have not been explicitly bound as
+	// Waypost endpoints; it is intentionally only a source of suggestions.
+	snapshot := m.snapshotState()
+	candidates := make([]string, 0)
+	for _, address := range snapshot.BoundAddresses {
+		parsed, err := waypost.ParseAddress(address)
+		if err == nil && parsed.Scheme == "agent-deck" {
+			candidates = append(candidates, parsed.Address)
+		}
+	}
+	if databaseIDs := listAgentDeckSessionIDs(ctx); len(databaseIDs) > 0 {
+		for _, id := range databaseIDs {
+			candidates = append(candidates, agentDeckAddress(id))
+		}
+	}
+	candidates = dedupe(candidates)
+
+	detail := fmt.Sprintf("warning: agent-deck session %q not found (does not exist)", identifier)
+	if suggestion := closestAgentDeckAddress(identifier, candidates); suggestion != "" {
+		detail += ". Did you mean " + suggestion + "?"
+	}
+	return detail
+}
+
+func closestAgentDeckAddress(target string, candidates []string) string {
+	target = strings.TrimSpace(target)
+	if target == "" {
+		return ""
+	}
+	targetLower := strings.ToLower(target)
+	// A distance of two catches common transpositions and one/two-character
+	// copy errors without suggesting an unrelated session.
+	const maxDistance = 2
+	best := ""
+	bestDistance := maxDistance + 1
+	for _, address := range candidates {
+		parsed, err := waypost.ParseAddress(address)
+		if err != nil || parsed.Scheme != "agent-deck" || strings.EqualFold(parsed.ID, target) {
+			continue
+		}
+		distance := levenshteinDistance(targetLower, strings.ToLower(parsed.ID))
+		if distance > maxDistance || distance > bestDistance {
+			continue
+		}
+		if distance == bestDistance && (best == "" || parsed.Address >= best) {
+			continue
+		}
+		bestDistance = distance
+		best = parsed.Address
+	}
+	return best
+}
+
+func levenshteinDistance(left, right string) int {
+	a, b := []rune(left), []rune(right)
+	if len(a) < len(b) {
+		a, b = b, a
+	}
+	previous := make([]int, len(b)+1)
+	for index := range previous {
+		previous[index] = index
+	}
+	for i, leftRune := range a {
+		current := make([]int, len(b)+1)
+		current[0] = i + 1
+		for j, rightRune := range b {
+			cost := 0
+			if leftRune != rightRune {
+				cost = 1
+			}
+			current[j+1] = min(current[j]+1, previous[j+1]+1, previous[j]+cost)
+		}
+		previous = current
+	}
+	return previous[len(b)]
+}
+
 func classifyAgentDeckSessionShowExit(result *RunResult) sessionShowProbeStatus {
 	if result == nil {
 		return sessionShowProbeUnknown

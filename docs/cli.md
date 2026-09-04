@@ -550,8 +550,10 @@ turn submission; that command is not retried or followed by another target in
 the same wake attempt. Later unread-delivery reminders retain the scheduler's
 normal cooldown policy. `target_not_found` means the addressed target session
 does not exist. A notification failure is reported in those fields but does
-not undo the durable delivery or make the command fail. Plain-text output
-appends the same status fields. Supported
+not undo the durable delivery or make the command fail. For an
+`agent-deck/<session-id>` target, `notify_detail` includes a warning and may
+suggest a nearby known session with `Did you mean agent-deck/<other-id>?`.
+Plain-text output appends the same status fields. Supported
 remote targets include `agent-deck/<session-id>` and `thurbox/<session-id>`;
 unsupported or local targets are reported without a notification side effect.
 

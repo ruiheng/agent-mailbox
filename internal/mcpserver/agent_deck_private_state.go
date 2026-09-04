@@ -20,6 +20,68 @@ type agentDeckDBMatch struct {
 	CodexSessionID string
 }
 
+// listAgentDeckSessionIDs returns session ids recorded by agent-deck. Missing
+// or unreadable state databases are ignored because this lookup is only used
+// to improve a send-time warning.
+func listAgentDeckSessionIDs(ctx context.Context) []string {
+	var ids []string
+	for _, dbPath := range agentDeckStateDBPaths() {
+		rows, err := listAgentDeckSessionIDsInDB(ctx, dbPath)
+		if err != nil {
+			continue
+		}
+		ids = append(ids, rows...)
+	}
+	return dedupe(ids)
+}
+
+func listAgentDeckSessionIDsInDB(ctx context.Context, dbPath string) ([]string, error) {
+	if strings.TrimSpace(dbPath) == "" {
+		return nil, nil
+	}
+	info, err := os.Stat(dbPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("stat: %w", err)
+	}
+	if info.IsDir() {
+		return nil, nil
+	}
+
+	db, err := sql.Open("sqlite3", "file:"+dbPath+"?mode=ro&_busy_timeout=5000")
+	if err != nil {
+		return nil, fmt.Errorf("open: %w", err)
+	}
+	defer db.Close()
+
+	rows, err := db.QueryContext(ctx, `
+		SELECT id
+		FROM instances
+		ORDER BY last_accessed DESC, created_at DESC
+	`)
+	if err != nil {
+		return nil, fmt.Errorf("query private instances table: %w", err)
+	}
+	defer rows.Close()
+
+	ids := []string{}
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, fmt.Errorf("scan private instances row: %w", err)
+		}
+		if id = strings.TrimSpace(id); id != "" {
+			ids = append(ids, id)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("read private instances rows: %w", err)
+	}
+	return ids, nil
+}
+
 func lookupAgentDeckSessionByCodexID(ctx context.Context, codexSessionID string) (*agentDeckDBMatch, []string) {
 	codexSessionID = strings.TrimSpace(codexSessionID)
 	if codexSessionID == "" {
@@ -209,9 +271,34 @@ func agentDeckStateDBPaths() []string {
 	if err != nil || strings.TrimSpace(homeDir) == "" {
 		return nil
 	}
-	baseDir := filepath.Join(homeDir, ".agent-deck")
-	profilesDir := filepath.Join(baseDir, "profiles")
 
+	// Agent Deck migrated its data from ~/.agent-deck to the XDG data
+	// directory. Keep both roots so existing installations continue to work.
+	xdgDataHome := strings.TrimSpace(os.Getenv("XDG_DATA_HOME"))
+	if xdgDataHome == "" || !filepath.IsAbs(xdgDataHome) {
+		xdgDataHome = filepath.Join(homeDir, ".local", "share")
+	}
+	baseDirs := []string{
+		filepath.Join(xdgDataHome, "agent-deck"),
+		filepath.Join(homeDir, ".agent-deck"),
+	}
+
+	paths := make([]string, 0, 4)
+	seen := map[string]bool{}
+	for _, baseDir := range baseDirs {
+		for _, path := range agentDeckProfileDBPaths(baseDir) {
+			if seen[path] {
+				continue
+			}
+			seen[path] = true
+			paths = append(paths, path)
+		}
+	}
+	return paths
+}
+
+func agentDeckProfileDBPaths(baseDir string) []string {
+	profilesDir := filepath.Join(baseDir, "profiles")
 	profiles := []string{}
 	if envProfile := strings.TrimSpace(os.Getenv("AGENTDECK_PROFILE")); envProfile != "" {
 		profiles = append(profiles, filepath.Base(envProfile))
@@ -229,17 +316,11 @@ func agentDeckStateDBPaths() []string {
 	}
 
 	paths := make([]string, 0, len(profiles))
-	seen := map[string]bool{}
 	for _, profile := range profiles {
 		if profile == "" || profile == "." || profile == ".." {
 			continue
 		}
-		path := filepath.Join(profilesDir, profile, "state.db")
-		if seen[path] {
-			continue
-		}
-		seen[path] = true
-		paths = append(paths, path)
+		paths = append(paths, filepath.Join(profilesDir, profile, "state.db"))
 	}
 	return paths
 }
