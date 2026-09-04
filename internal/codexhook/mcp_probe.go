@@ -44,7 +44,8 @@ func detectWaypostMCP(ctx context.Context, probe waypostMCPProbe) (waypostMCPAva
 func CurrentDirectoryWaypostMCPAvailable(ctx context.Context) (bool, error) {
 	probeCtx, cancel := context.WithTimeout(ctx, mcpProbeTimeout)
 	defer cancel()
-	output, err := exec.CommandContext(probeCtx, "codex", "mcp", "get", waypostMCPServerName, "--json").Output()
+	commandName, commandArgs := mcpProbeInvocation("mcp", "get", waypostMCPServerName, "--json")
+	output, err := exec.CommandContext(probeCtx, commandName, commandArgs...).Output()
 	if err != nil {
 		if probeErr := probeCtx.Err(); probeErr != nil {
 			return false, fmt.Errorf("run `codex mcp get waypost --json`: %w", probeErr)

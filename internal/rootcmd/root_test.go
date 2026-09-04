@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/ruiheng/waypost/internal/mcpinstall"
 	"github.com/ruiheng/waypost/internal/mcpserver"
 	"github.com/ruiheng/waypost/internal/version"
 	"github.com/ruiheng/waypost/internal/waypost"
@@ -124,6 +125,51 @@ func TestRunInstallAndDoctorCodexHook(t *testing.T) {
 	}
 	if !strings.Contains(doctorOutput.String(), "trust: not checked; verify with `/hooks`") {
 		t.Fatalf("doctor output = %q, want explicit unverified trust status", doctorOutput.String())
+	}
+}
+
+func TestRunInstallMCPServer(t *testing.T) {
+	t.Parallel()
+
+	var stdout bytes.Buffer
+	called := false
+	app := New(strings.NewReader(""), &stdout, &bytes.Buffer{})
+	app.installMCPServer = func(ctx context.Context) (mcpinstall.Result, error) {
+		called = true
+		if ctx == nil {
+			t.Fatal("MCP install context = nil")
+		}
+		return mcpinstall.Result{
+			Path:    "/tmp/codex/config.toml",
+			Command: "/opt/waypost mcp",
+			Changed: true,
+		}, nil
+	}
+
+	if err := app.Run(context.Background(), []string{"install", "mcp-server"}); err != nil {
+		t.Fatalf("Run(install mcp-server) error = %v", err)
+	}
+	if !called {
+		t.Fatal("MCP installer was not called")
+	}
+	if got := stdout.String(); !strings.Contains(got, "Waypost MCP server installed") || !strings.Contains(got, "/tmp/codex/config.toml") || !strings.Contains(got, "/opt/waypost mcp") {
+		t.Fatalf("install output = %q, want MCP installation summary", got)
+	}
+}
+
+func TestRunInstallMCPServerHelp(t *testing.T) {
+	t.Parallel()
+
+	var stdout bytes.Buffer
+	app := New(strings.NewReader(""), &stdout, &bytes.Buffer{})
+	err := app.Run(context.Background(), []string{"install", "mcp-server", "--help"})
+	if !errors.Is(err, waypost.ErrHelpRequested) {
+		t.Fatalf("Run(install mcp-server --help) error = %v, want ErrHelpRequested", err)
+	}
+	for _, expected := range []string{"waypost install mcp-server", "Codex's global config", "660-second tool timeout"} {
+		if !strings.Contains(stdout.String(), expected) {
+			t.Fatalf("MCP install help = %q, want %q", stdout.String(), expected)
+		}
 	}
 }
 

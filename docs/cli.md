@@ -43,6 +43,35 @@ The CLI version is the same value advertised by the built-in MCP server during
 initialization. For the optional diagnostic `server_version` status field, call
 `waypost_status` with `include_diagnostics: true`.
 
+## MCP Server Integrations
+
+Install or refresh the built-in Waypost MCP server in Codex's global
+configuration and, when present, Claude Code and agy configuration:
+
+```bash
+waypost install mcp-server
+```
+
+The installer uses the stable Waypost executable and preserves unrelated Codex
+settings. It invokes `codex mcp add` only when the global entry is missing;
+existing entries are updated in place so per-tool settings remain intact. Codex
+is configured with `required = true`, the session environment passthrough
+(`TMUX`, `AGENTDECK_INSTANCE_ID`, `CODEX_THREAD_ID`, `CODEX_SESSION_ID`,
+`WAYPOST_STATE_DIR`, and `XDG_STATE_HOME`), and the 660-second tool timeout
+needed by long Waypost waits.
+
+If Claude Code is installed (or its `~/.claude.json` exists), the same command
+also ensures its user-scoped stdio server and 660-second timeout, honoring
+`$CLAUDE_CONFIG_DIR` and preserving an existing server `env` map. Claude Code
+does not expose a required/enabled MCP-server switch, so no unsupported field
+is written. If agy is installed (or its global MCP config exists), the command
+ensures the server is enabled; agy's `disabled` flag is removed, matching
+`agy mcp enable waypost`.
+
+The target is `$CODEX_HOME/config.toml` (or `~/.codex/config.toml` when
+`CODEX_HOME` is unset). Codex must be installed and available as `codex`;
+Claude Code and agy are optional.
+
 ## Codex Hooks
 
 Install a Codex `SessionStart` hook that runs after compaction:

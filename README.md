@@ -193,6 +193,13 @@ Run the MCP server directly:
 ./bin/waypost mcp
 ```
 
+Register the built-in server in Codex's global MCP configuration (and in
+Claude Code or agy when those agents are installed):
+
+```bash
+waypost install mcp-server
+```
+
 Windows:
 
 ```powershell
@@ -211,6 +218,9 @@ Example MCP config:
 [mcp_servers.waypost]
 command = "/absolute/path/to/waypost/bin/waypost"
 args = ["mcp"]
+required = true
+env_vars = ["TMUX", "AGENTDECK_INSTANCE_ID", "CODEX_THREAD_ID", "CODEX_SESSION_ID", "WAYPOST_STATE_DIR", "XDG_STATE_HOME"]
+tool_timeout_sec = 660
 ```
 
 Windows example:
@@ -219,6 +229,9 @@ Windows example:
 [mcp_servers.waypost]
 command = "C:\\absolute\\path\\to\\waypost\\bin\\waypost.exe"
 args = ["mcp"]
+required = true
+env_vars = ["TMUX", "AGENTDECK_INSTANCE_ID", "CODEX_THREAD_ID", "CODEX_SESSION_ID", "WAYPOST_STATE_DIR", "XDG_STATE_HOME"]
+tool_timeout_sec = 660
 ```
 
 The default Go MCP entrypoint exposes these Waypost tools:

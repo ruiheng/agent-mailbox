@@ -10,6 +10,7 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/ruiheng/waypost/internal/codexhook"
+	"github.com/ruiheng/waypost/internal/mcpinstall"
 	"github.com/ruiheng/waypost/internal/mcpserver"
 	"github.com/ruiheng/waypost/internal/version"
 	"github.com/ruiheng/waypost/internal/waypost"
@@ -23,6 +24,7 @@ type App struct {
 	runMCP                              func(context.Context, mcpserver.Options) error
 	runWeb                              func(context.Context, webui.Options) error
 	currentDirectoryWaypostMCPAvailable func(context.Context) (bool, error)
+	installMCPServer                    func(context.Context) (mcpinstall.Result, error)
 	notifyWaypostSend                   waypost.SendNotifier
 }
 
@@ -38,6 +40,7 @@ func New(stdin io.Reader, stdout, stderr io.Writer) *App {
 		},
 		runWeb:                              webui.Run,
 		currentDirectoryWaypostMCPAvailable: codexhook.CurrentDirectoryWaypostMCPAvailable,
+		installMCPServer:                    mcpinstall.Install,
 		notifyWaypostSend:                   mcpserver.NotifyWaypostSend,
 	}
 }
@@ -62,7 +65,7 @@ func (a *App) Run(ctx context.Context, args []string) error {
 		return a.runCodexHookCommand(ctx, rest[1:])
 	}
 	if rest[0] == "install" {
-		return a.runInstallCommand(rest[1:])
+		return a.runInstallCommand(ctx, rest[1:])
 	}
 	if rest[0] == "doctor" {
 		return a.runDoctorCommand(ctx, rest[1:])
@@ -94,40 +97,65 @@ func (a *App) runCodexHookCommand(ctx context.Context, args []string) error {
 	return codexhook.Run(ctx, a.stdin, a.stdout)
 }
 
-func (a *App) runInstallCommand(args []string) error {
+func (a *App) runInstallCommand(ctx context.Context, args []string) error {
 	if len(args) == 0 || isHelpArg(args[0]) {
 		a.writeInstallHelp()
 		return waypost.ErrHelpRequested
 	}
-	if args[0] != "codex-hook" {
-		return fmt.Errorf("unknown install target %q; expected codex-hook", args[0])
-	}
-	if len(args) == 2 && isHelpArg(args[1]) {
-		a.writeInstallCodexHookHelp()
-		return waypost.ErrHelpRequested
-	}
-	if len(args) != 1 {
-		return fmt.Errorf("install codex-hook does not accept arguments")
-	}
+	switch args[0] {
+	case "codex-hook":
+		if len(args) == 2 && isHelpArg(args[1]) {
+			a.writeInstallCodexHookHelp()
+			return waypost.ErrHelpRequested
+		}
+		if len(args) != 1 {
+			return fmt.Errorf("install codex-hook does not accept arguments")
+		}
 
-	home, err := codexhook.DefaultHome()
-	if err != nil {
+		home, err := codexhook.DefaultHome()
+		if err != nil {
+			return err
+		}
+		command, err := codexhook.CurrentCommand()
+		if err != nil {
+			return err
+		}
+		result, err := codexhook.Install(home, command)
+		if err != nil {
+			return err
+		}
+		status := "installed"
+		if !result.Changed {
+			status = "already installed"
+		}
+		_, err = fmt.Fprintf(a.stdout, "Codex hooks %s: %s\nCodex hook trust: review the Waypost hooks with `/hooks` in Codex before use\n", status, result.Path)
 		return err
+	case "mcp-server", "mcp-sever":
+		if len(args) == 2 && isHelpArg(args[1]) {
+			a.writeInstallMCPServerHelp()
+			return waypost.ErrHelpRequested
+		}
+		if len(args) != 1 {
+			return fmt.Errorf("install mcp-server does not accept arguments")
+		}
+		if a.installMCPServer == nil {
+			return errors.New("Waypost MCP server installer is unavailable")
+		}
+		result, err := a.installMCPServer(ctx)
+		if err != nil {
+			return err
+		}
+		status := "installed"
+		if !result.Changed {
+			status = "already installed"
+		}
+		if _, err = fmt.Fprintf(a.stdout, "Waypost MCP server %s: %s\nCommand: %s\n", status, result.Path, result.Command); err != nil {
+			return err
+		}
+		return nil
+	default:
+		return fmt.Errorf("unknown install target %q; expected codex-hook or mcp-server", args[0])
 	}
-	command, err := codexhook.CurrentCommand()
-	if err != nil {
-		return err
-	}
-	result, err := codexhook.Install(home, command)
-	if err != nil {
-		return err
-	}
-	status := "installed"
-	if !result.Changed {
-		status = "already installed"
-	}
-	_, err = fmt.Fprintf(a.stdout, "Codex hooks %s: %s\nCodex hook trust: review the Waypost hooks with `/hooks` in Codex before use\n", status, result.Path)
-	return err
 }
 
 func (a *App) runDoctorCommand(ctx context.Context, args []string) error {
@@ -345,15 +373,18 @@ func (a *App) writeCodexHookHelp() {
 		"After a successful receive, SessionStart compact emits an anti-repeat guard.",
 		"For PreToolUse Bash calls, warn before waypost wait; when MCP is available,",
 		"deny waypost status, recv, receive, and send in favor of Waypost MCP tools.",
+		"The waypost mcp CLI command is always denied; install it with waypost install mcp-server.",
 	})
 }
 
 func (a *App) writeInstallHelp() {
 	writeHelp(a.stdout, []string{
 		"Usage:",
-		"  waypost install codex-hook",
+		"  waypost install <target>",
 		"",
-		"Install optional Waypost integrations.",
+		"Install optional Waypost integrations:",
+		"  codex-hook              Install Codex lifecycle hooks",
+		"  mcp-server              Install Waypost MCP in Codex and detected agent configs",
 	})
 }
 
@@ -366,6 +397,20 @@ func (a *App) writeInstallCodexHookHelp() {
 		"into $CODEX_HOME/hooks.json.",
 		"The command is idempotent and preserves unrelated hooks.",
 		"Review new or changed non-managed hooks with `/hooks` in Codex before use.",
+	})
+}
+
+func (a *App) writeInstallMCPServerHelp() {
+	writeHelp(a.stdout, []string{
+		"Usage:",
+		"  waypost install mcp-server",
+		"",
+		"Install the built-in Waypost MCP server in Codex's global config and",
+		"configure Claude Code and agy when those agents are installed.",
+		"The command is idempotent, preserves unrelated Codex settings, and ensures",
+		"Waypost session environment passthrough, required startup, and the",
+		"660-second tool timeout. Claude Code has no equivalent required switch;",
+		"agy is enabled when configured (its disabled flag is removed).",
 	})
 }
 
