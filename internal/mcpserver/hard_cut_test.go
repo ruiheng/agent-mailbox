@@ -214,7 +214,7 @@ func TestWaypostStatusCLIReplacementForward(t *testing.T) {
 		DisableLeaseRenewLoop: true,
 	})
 	defer service.Close()
-	service.state.autoBindAttempted = true
+	setBoundTestSender(service, "agent/sender")
 
 	status := callServiceTool(t, service, "waypost_status", map[string]any{"include_cli_context": true})
 	executable, ok := status["executable"].(string)

@@ -261,6 +261,12 @@ This adds no command catalog to the MCP instructions. `waypost doc` owns the
 complete workflow prompt, while MCP instructions only identify that entry
 point and the authoritative binary and state directory.
 
+MCP sender identity is session-scoped: an explicit `from_address` for
+`waypost_send` must be one of the personal addresses currently bound to that
+MCP server, and an explicit `default_sender` in `waypost_bind` must be in the
+same bound set. This differs from the standalone CLI, where `--from` may create
+an address on first use.
+
 ## Receive Contract
 
 `recv.has_more` is deleted from MCP and CLI results. No legacy serializer,
@@ -295,6 +301,11 @@ No message:
   "status": "no_message"
 }
 ```
+
+After a `no_message` result, the same MCP connection must wait at least 15
+seconds before calling `waypost_recv` again. If the next result is also
+`no_message` within three minutes, the response includes a warning to avoid
+meaningless polling.
 
 Active leases:
 

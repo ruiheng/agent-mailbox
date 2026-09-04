@@ -189,6 +189,7 @@ func TestWaypostSendReadsBodyFile(t *testing.T) {
 	})
 	defer service.Close()
 	service.state.defaultWorkdir = workdir
+	setBoundTestSender(service, "agent/sender")
 
 	output := callServiceTool(t, service, "waypost_send", map[string]any{
 		"to":                     "workflow/reviewer",
@@ -230,6 +231,7 @@ func TestWaypostSendBodyFileBatchUsesOneSnapshot(t *testing.T) {
 	})
 	defer service.Close()
 	service.state.defaultWorkdir = workdir
+	setBoundTestSender(service, "agent/sender")
 
 	output := callServiceTool(t, service, "waypost_send", map[string]any{
 		"to":                     []string{"workflow/one", "workflow/two"},
@@ -317,6 +319,7 @@ func TestWaypostSendBatchReturnsOrderedPartialResults(t *testing.T) {
 		DisableLeaseRenewLoop: true,
 	})
 	defer service.Close()
+	setBoundTestSender(service, "agent/sender")
 
 	output := callServiceTool(t, service, "waypost_send", map[string]any{
 		"to":                     []string{" workflow/one ", "workflow/two", "workflow/one", "workflow/three"},
@@ -383,6 +386,7 @@ func TestWaypostSendBatchPluralOneUsesEnvelope(t *testing.T) {
 		DisableLeaseRenewLoop: true,
 	})
 	defer service.Close()
+	setBoundTestSender(service, "agent/sender")
 
 	output := callServiceTool(t, service, "waypost_send", map[string]any{
 		"to":           []string{"group/review"},
@@ -494,6 +498,7 @@ func TestWaypostSendBatchAllFailedReturnsEnvelope(t *testing.T) {
 		DisableLeaseRenewLoop: true,
 	})
 	defer service.Close()
+	setBoundTestSender(service, "agent/sender")
 
 	output := callServiceTool(t, service, "waypost_send", map[string]any{
 		"to":                     []string{"workflow/one", "workflow/two"},
@@ -709,6 +714,7 @@ func TestWaypostSendBatchCancellationStopsBeforeNextRecipient(t *testing.T) {
 		DisableLeaseRenewLoop: true,
 	})
 	defer service.Close()
+	setBoundTestSender(service, "agent/sender")
 
 	output, err := service.sendWaypostBatchMessage(ctx, waypostSendInput{
 		ToAddresses: []string{"group/one", "group/two"},
@@ -797,6 +803,7 @@ func TestWaypostSendBatchGroupUsesSharedGroupMetadata(t *testing.T) {
 		DisableLeaseRenewLoop: true,
 	})
 	defer service.Close()
+	setBoundTestSender(service, "agent/sender")
 
 	output := callServiceTool(t, service, "waypost_send", map[string]any{
 		"to":           []string{"group/one", "group/two"},
@@ -833,6 +840,12 @@ func makeMCPRecipientAddresses(count int) []string {
 		addresses[index] = fmt.Sprintf("workflow/recipient-%d", index)
 	}
 	return addresses
+}
+
+func setBoundTestSender(service *Service, address string) {
+	service.state.boundAddresses = []string{address}
+	service.state.defaultSender = address
+	service.state.autoBindAttempted = true
 }
 
 func TestCompactWaypostSendResultKeepsOnlyActionableFields(t *testing.T) {
@@ -2654,13 +2667,11 @@ func TestWaypostSendAllowsAgentDeckNotifyDisable(t *testing.T) {
 	}
 }
 
-func TestWaypostSendUsesExplicitFromAddressWithoutBoundState(t *testing.T) {
+func TestWaypostSendRejectsExplicitFromAddressWithoutBoundState(t *testing.T) {
 	waypostService := &fakeWaypostService{t: t}
 	waypostService.sendFunc = func(_ context.Context, params waypost.SendParams) (waypost.SendResult, error) {
-		if params.FromAddress != "agent/sender" || params.ToAddress != "workflow/target" {
-			t.Fatalf("send params = %+v", params)
-		}
-		return waypost.SendResult{DeliveryID: "dlv_explicit"}, nil
+		t.Fatalf("unexpected send params = %+v", params)
+		return waypost.SendResult{}, nil
 	}
 
 	service := newService(Options{
@@ -2670,19 +2681,73 @@ func TestWaypostSendUsesExplicitFromAddressWithoutBoundState(t *testing.T) {
 		}},
 		DisableWakeScheduler: true,
 	})
+	service.state.autoBindAttempted = true
 
-	output := callServiceTool(t, service, "waypost_send", map[string]any{
+	err := callServiceToolExpectError(t, service, "waypost_send", map[string]any{
 		"to":           "workflow/target",
 		"from_address": "agent/sender",
 		"subject":      "delegate",
 		"body":         "body",
 		"diagnostics":  true,
 	})
-	if got := output["delivery_id"]; got != "dlv_explicit" {
-		t.Fatalf("delivery_id = %v, want dlv_explicit", got)
+	if err == nil || !strings.Contains(err.Error(), "not bound to this MCP server") {
+		t.Fatalf("waypost_send error = %v, want unbound sender rejection", err)
 	}
-	if got := output["from_address"]; got != "agent/sender" {
-		t.Fatalf("from_address = %v, want agent/sender", got)
+}
+
+func TestWaypostSendRejectsExplicitFromAddressOutsideBoundState(t *testing.T) {
+	waypostService := &fakeWaypostService{t: t}
+	waypostService.sendFunc = func(_ context.Context, params waypost.SendParams) (waypost.SendResult, error) {
+		t.Fatalf("unexpected send params = %+v", params)
+		return waypost.SendResult{}, nil
+	}
+
+	service := newService(Options{
+		WaypostServiceFactory: fakeWaypostServiceFactory{service: waypostService},
+		CommandRunner: &fakeRunner{t: t, handler: func(args []string, input string) (RunResult, error) {
+			t.Fatalf("unexpected command call: %v", args)
+			return RunResult{}, nil
+		}},
+		DisableWakeScheduler: true,
+	})
+	setBoundTestSender(service, "agent/allowed")
+
+	err := callServiceToolExpectError(t, service, "waypost_send", map[string]any{
+		"to":           "workflow/target",
+		"from_address": "agent/other",
+		"subject":      "delegate",
+		"body":         "body",
+	})
+	if err == nil || !strings.Contains(err.Error(), "not bound to this MCP server") {
+		t.Fatalf("waypost_send error = %v, want sender outside bound state rejection", err)
+	}
+}
+
+func TestWaypostSendBatchRejectsExplicitFromAddressOutsideBoundState(t *testing.T) {
+	waypostService := &fakeWaypostService{t: t}
+	waypostService.sendFunc = func(_ context.Context, params waypost.SendParams) (waypost.SendResult, error) {
+		t.Fatalf("unexpected send params = %+v", params)
+		return waypost.SendResult{}, nil
+	}
+
+	service := newService(Options{
+		WaypostServiceFactory: fakeWaypostServiceFactory{service: waypostService},
+		CommandRunner: &fakeRunner{t: t, handler: func(args []string, input string) (RunResult, error) {
+			t.Fatalf("unexpected command call: %v", args)
+			return RunResult{}, nil
+		}},
+		DisableWakeScheduler: true,
+	})
+	setBoundTestSender(service, "agent/allowed")
+
+	err := callServiceToolExpectError(t, service, "waypost_send", map[string]any{
+		"to":           []string{"workflow/one", "workflow/two"},
+		"from_address": "agent/other",
+		"subject":      "delegate",
+		"body":         "body",
+	})
+	if err == nil || !strings.Contains(err.Error(), "not bound to this MCP server") {
+		t.Fatalf("waypost_send batch error = %v, want sender outside bound state rejection", err)
 	}
 }
 
@@ -2712,6 +2777,7 @@ func TestWaypostSendGroupModeUsesGroupSendParams(t *testing.T) {
 		}},
 		DisableWakeScheduler: true,
 	})
+	setBoundTestSender(service, "agent/sender")
 
 	output := callServiceTool(t, service, "waypost_send", map[string]any{
 		"to":           "group/review",
@@ -2789,6 +2855,7 @@ func TestWaypostSendGroupModeNotifiesSubscriber(t *testing.T) {
 		CommandRunner:         commandRunner,
 		DisableWakeScheduler:  true,
 	})
+	setBoundTestSender(service, "agent-deck/expert")
 
 	output := callServiceTool(t, service, "waypost_send", map[string]any{
 		"to":           "group/review",
@@ -2847,6 +2914,7 @@ func TestWaypostSendGroupModeReportsNoSubscribersWhenSendQueuesNoNotifications(t
 		}},
 		DisableWakeScheduler: true,
 	})
+	setBoundTestSender(service, "agent-deck/moderator")
 
 	output := callServiceTool(t, service, "waypost_send", map[string]any{
 		"to":           "group/review",
@@ -2944,6 +3012,7 @@ func TestWaypostSendGroupModeKeepsReceiptWhenSubscriberNotifyFails(t *testing.T)
 		CommandRunner:         commandRunner,
 		DisableWakeScheduler:  true,
 	})
+	setBoundTestSender(service, "agent-deck/expert")
 	service.notifications.retryWait = func(context.Context, time.Duration) error { return nil }
 
 	output := callServiceTool(t, service, "waypost_send", map[string]any{
@@ -3005,6 +3074,7 @@ func TestWaypostSendGroupModeReportsPartialNotifyFailureDetail(t *testing.T) {
 		CommandRunner:         commandRunner,
 		DisableWakeScheduler:  true,
 	})
+	setBoundTestSender(service, "agent-deck/expert")
 	service.notifications.retryWait = func(context.Context, time.Duration) error { return nil }
 
 	output := callServiceTool(t, service, "waypost_send", map[string]any{
@@ -3698,6 +3768,25 @@ func TestWaypostBindRejectsGroupDefaultSender(t *testing.T) {
 	})
 	if err == nil || !strings.Contains(err.Error(), "default_sender cannot be a group address") {
 		t.Fatalf("waypost_bind error = %v, want group default sender rejection", err)
+	}
+}
+
+func TestWaypostBindRejectsDefaultSenderOutsideBoundState(t *testing.T) {
+	service := newService(Options{
+		WaypostServiceFactory: fakeWaypostServiceFactory{service: &fakeWaypostService{t: t}},
+		CommandRunner: &fakeRunner{t: t, handler: func(args []string, input string) (RunResult, error) {
+			t.Fatalf("unexpected command call: %v", args)
+			return RunResult{}, nil
+		}},
+	})
+	service.state.autoBindAttempted = true
+
+	err := callServiceToolExpectError(t, service, "waypost_bind", map[string]any{
+		"addresses":      []string{"agent/allowed"},
+		"default_sender": "agent/other",
+	})
+	if err == nil || !strings.Contains(err.Error(), "default_sender") || !strings.Contains(err.Error(), "bound addresses") {
+		t.Fatalf("waypost_bind error = %v, want default sender outside bound state rejection", err)
 	}
 }
 

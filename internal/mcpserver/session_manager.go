@@ -166,6 +166,9 @@ func (m *sessionManager) bind(ctx context.Context, input waypostBindInput) (boun
 		if waypost.IsGroupAddress(defaultSender) {
 			return boundState{}, errors.New("default_sender cannot be a group address")
 		}
+		if !slices.Contains(boundAddresses, defaultSender) {
+			return boundState{}, fmt.Errorf("default_sender %q must be one of the bound addresses", defaultSender)
+		}
 	}
 
 	m.state.mu.Lock()
@@ -741,7 +744,21 @@ func (m *sessionManager) waypostAddresses(ctx context.Context, addresses []strin
 
 func (m *sessionManager) senderAddress(ctx context.Context, override string) (string, error) {
 	if strings.TrimSpace(override) != "" {
-		return waypost.NormalizeAddress(override)
+		address, err := waypost.NormalizeAddress(override)
+		if err != nil {
+			return "", err
+		}
+		if waypost.IsGroupAddress(address) {
+			return "", fmt.Errorf("sender address %q uses reserved group/ prefix", address)
+		}
+		bound, err := m.boundState(ctx)
+		if err != nil {
+			return "", err
+		}
+		if !slices.Contains(bound.BoundAddresses, address) {
+			return "", fmt.Errorf("from_address %q is not bound to this MCP server", address)
+		}
+		return address, nil
 	}
 	bound, err := m.boundState(ctx)
 	if err != nil {

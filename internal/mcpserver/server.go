@@ -212,6 +212,7 @@ type Service struct {
 	sessions               *sessionManager
 	notifications          *notificationManager
 	activeLeases           *activeLeaseManager
+	waypostRecvGuard       *waypostRecvGuard
 	state                  *serverState
 	now                    func() time.Time
 	mcpLeaseTTL            time.Duration
@@ -334,6 +335,7 @@ func newService(opts Options) *Service {
 	}
 	service.notifications = newNotificationManager(service.commandRunner, service.sessions)
 	service.activeLeases = newActiveLeaseManager()
+	service.waypostRecvGuard = newWaypostRecvGuard()
 	service.wakeSchedulerState = newWakeSchedulerState()
 	service.overviewSubscriptions = newResourceSubscriptionState()
 	service.waypostOverviewEmitter = service.emitWaypostOverviewUpdated

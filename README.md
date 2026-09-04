@@ -309,6 +309,12 @@ Ordinary per-recipient durable failures appear as `failed` result items without
 stopping later recipients; retry only those failed addresses to avoid duplicate
 messages. The string form returns the existing single-send output.
 
+`from_address` is optional, but when supplied it must be one of the currently
+bound personal addresses in this MCP server instance. `waypost_bind` likewise
+requires an explicit `default_sender` to be one of its bound addresses. Unlike
+the CLI's standalone `--from`, MCP never creates a sender identity from an
+arbitrary unbound address.
+
 Supply the message content with exactly one of `body` or `body_file`.
 `body` keeps the existing inline-string behavior. `body_file` is a filesystem
 path read by the MCP server before sending. It requires a bound
@@ -336,7 +342,10 @@ as `subject` are not part of the singular compact contract.
 
 `waypost_recv` defaults to the status-specific result only: `delivery` for a
 new claim, a bounded `claimed_delivery_ids` hint for active leases, or just
-`status = no_message`. Actionable warnings remain sparse. Set
+`status = no_message`. After `no_message`, the same MCP connection must wait
+at least 15 seconds before calling `waypost_recv` again. A second
+`no_message` within three minutes includes a warning to avoid meaningless
+polling. Actionable warnings remain sparse. Set
 `diagnostics: true` for resolved addresses and `remaining_by_state`.
 Repeated instructional fields, echoed known IDs, and counts derivable from the
 returned ID list are intentionally omitted.
