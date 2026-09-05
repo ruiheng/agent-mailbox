@@ -881,18 +881,31 @@ func closestAgentDeckAddress(target string, candidates []string) string {
 		return ""
 	}
 	targetLower := strings.ToLower(target)
-	// A distance of two catches common transpositions and one/two-character
-	// copy errors without suggesting an unrelated session.
-	const maxDistance = 2
 	best := ""
-	bestDistance := maxDistance + 1
+	bestDistance := int(^uint(0) >> 1)
 	for _, address := range candidates {
 		parsed, err := waypost.ParseAddress(address)
 		if err != nil || parsed.Scheme != "agent-deck" || strings.EqualFold(parsed.ID, target) {
 			continue
 		}
-		distance := levenshteinDistance(targetLower, strings.ToLower(parsed.ID))
-		if distance > maxDistance || distance > bestDistance {
+		candidateID := strings.ToLower(parsed.ID)
+		distance := levenshteinDistance(targetLower, candidateID)
+		// Session IDs are commonly made of hyphen-separated chunks. Agents
+		// often copy one chunk incorrectly while preserving another; an exact
+		// chunk is a strong signal even when the total edit distance is large.
+		chunkMatch := false
+		targetChunks, candidateChunks := strings.Split(targetLower, "-"), strings.Split(candidateID, "-")
+		for _, left := range targetChunks {
+			for _, right := range candidateChunks {
+				if left != "" && left == right {
+					chunkMatch = true
+				}
+			}
+		}
+		// Allow several edits for longer identifiers, while retaining a
+		// bounded threshold for short names.
+		maxDistance := maxInt(4, len([]rune(targetLower))/3)
+		if !chunkMatch && (distance > maxDistance || distance > bestDistance) {
 			continue
 		}
 		if distance == bestDistance && (best == "" || parsed.Address >= best) {
@@ -902,6 +915,13 @@ func closestAgentDeckAddress(target string, candidates []string) string {
 		best = parsed.Address
 	}
 	return best
+}
+
+func maxInt(left, right int) int {
+	if left > right {
+		return left
+	}
+	return right
 }
 
 func levenshteinDistance(left, right string) int {
